@@ -172,6 +172,23 @@ static void test_origin_must_match_host(void)
     CHECK(!web_security_origin_allowed("http://192.168.4.1", NULL));
 }
 
+static void test_invalidate_all_clears_sessions_and_writer(void)
+{
+    web_security_state_t state = valid_state();
+    uint8_t counter = 1;
+
+    CHECK(web_security_login(&state, "correct horse battery staple", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
+    char token[WEB_SECURITY_TOKEN_BUF_LEN];
+    strcpy(token, state.session_token);
+    CHECK(web_security_acquire_writer(&state, token, 1000));
+
+    web_security_invalidate_all(&state);
+
+    CHECK(!web_security_session_valid(&state, token, 1000));
+    CHECK(!web_security_can_write(&state, token, 1000));
+    CHECK(state.writer_token[0] == '\0');
+}
+
 int main(void)
 {
     test_password_is_not_stored_in_plaintext();
@@ -183,5 +200,6 @@ int main(void)
     test_expired_writer_lock_does_not_block_new_writer();
     test_evicted_writer_lock_does_not_block_new_writer();
     test_origin_must_match_host();
+    test_invalidate_all_clears_sessions_and_writer();
     return 0;
 }

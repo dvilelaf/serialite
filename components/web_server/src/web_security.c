@@ -218,6 +218,20 @@ void web_security_logout(web_security_state_t *state, const char *token)
     }
 }
 
+void web_security_invalidate_all(web_security_state_t *state)
+{
+    if (state == NULL) {
+        return;
+    }
+
+    memset(state->session_token, 0, sizeof(state->session_token));
+    memset(state->csrf_token, 0, sizeof(state->csrf_token));
+    memset(state->writer_token, 0, sizeof(state->writer_token));
+    memset(state->sessions, 0, sizeof(state->sessions));
+    state->session_expires_ms = 0;
+    state->session_active = false;
+}
+
 bool web_security_acquire_writer(web_security_state_t *state, const char *token, uint64_t now_ms)
 {
     if (state == NULL || find_session(state, token, now_ms) == NULL) {

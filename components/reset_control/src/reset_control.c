@@ -1,6 +1,7 @@
 #include "reset_control.h"
 
 #include "board_waveshare_amoled.h"
+#include "emergency_lock_gesture.h"
 #include "event_log.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -10,6 +11,7 @@
 #include "freertos/task.h"
 #include "reset_gesture.h"
 #include "storage.h"
+#include "web_server.h"
 
 static const char *TAG = "reset_control";
 
@@ -27,20 +29,35 @@ static uint64_t now_ms(void)
 static void reset_control_task(void *arg)
 {
     (void)arg;
-    reset_gesture_t gesture;
-    reset_gesture_init(&gesture);
+    emergency_lock_gesture_t lock_gesture;
+    reset_gesture_t reset_gesture;
+    emergency_lock_gesture_init(&lock_gesture);
+    reset_gesture_init(&reset_gesture);
 
     while (true) {
-        if (reset_gesture_update(&gesture, board_waveshare_amoled_wake_button_active(), now_ms())) {
+        const bool button_active = board_waveshare_amoled_wake_button_active();
+        const uint64_t timestamp_ms = now_ms();
+
+        if (emergency_lock_gesture_update(&lock_gesture, button_active, timestamp_ms)) {
+            ESP_LOGW(TAG, "emergency lock gesture accepted; invalidating web sessions");
+            event_log_append(EVENT_LOG_SECURITY, timestamp_ms, "emergency lock gesture accepted");
+            const esp_err_t err = web_server_emergency_lock();
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "emergency lock failed: %s", esp_err_to_name(err));
+                event_log_append(EVENT_LOG_ERROR, timestamp_ms, "emergency lock failed");
+            }
+        }
+
+        if (reset_gesture_update(&reset_gesture, button_active, timestamp_ms)) {
             ESP_LOGW(TAG, "factory reset gesture accepted; erasing stored configuration");
-            event_log_append(EVENT_LOG_SECURITY, now_ms(), "factory reset gesture accepted");
+            event_log_append(EVENT_LOG_SECURITY, timestamp_ms, "factory reset gesture accepted");
             const esp_err_t err = storage_factory_reset();
             if (err == ESP_OK) {
                 vTaskDelay(pdMS_TO_TICKS(200));
                 esp_restart();
             }
             ESP_LOGE(TAG, "factory reset failed: %s", esp_err_to_name(err));
-            event_log_append(EVENT_LOG_ERROR, now_ms(), "factory reset failed");
+            event_log_append(EVENT_LOG_ERROR, timestamp_ms, "factory reset failed");
         }
 
         vTaskDelay(RESET_CONTROL_POLL_TICKS);

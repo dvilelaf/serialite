@@ -434,7 +434,7 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     s_ctx.client_status_label = add_label(card, "AP starting  WiFi 0  Web 0", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
     s_ctx.error_status_label = add_label(card, "No bridge drops", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
 
-    s_ctx.secret_hint_label = add_label(card, "BOOT: reveal. Hold 10s: factory reset.", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
+    s_ctx.secret_hint_label = add_label(card, "BOOT: reveal. Hold 3s: lock web. Hold 10s: reset.", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
     strlcpy(s_ctx.wifi_password, password, sizeof(s_ctx.wifi_password));
     strlcpy(s_ctx.web_password, web_password, sizeof(s_ctx.web_password));
     set_secret_labels(false);

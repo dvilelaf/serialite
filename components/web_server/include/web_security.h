@@ -55,6 +55,7 @@ bool web_security_session_valid(const web_security_state_t *state, const char *t
 bool web_security_csrf_valid(const web_security_state_t *state, const char *session_token, const char *csrf_token, uint64_t now_ms);
 const char *web_security_csrf_for_session(const web_security_state_t *state, const char *session_token, uint64_t now_ms);
 void web_security_logout(web_security_state_t *state, const char *token);
+void web_security_invalidate_all(web_security_state_t *state);
 bool web_security_acquire_writer(web_security_state_t *state, const char *token, uint64_t now_ms);
 void web_security_release_writer(web_security_state_t *state, const char *token);
 bool web_security_can_write(const web_security_state_t *state, const char *token, uint64_t now_ms);

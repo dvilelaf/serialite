@@ -13,6 +13,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - UI local apaisada, oscura y solo informativa con batería, estado AP, SSID, passwords ocultas por defecto y URL.
 - La pantalla local muestra estado USB, clientes WiFi/web y drops del bridge sin renderizar logs.
 - La pantalla se apaga tras 3 minutos y se reactiva con el botón BOOT/GPIO0.
+- Mantener `BOOT` durante 3 segundos invalida sesiones web, libera escritura activa y cierra WebSockets.
 - Mantener `BOOT` durante 10 segundos borra la configuración NVS del proyecto y reinicia con credenciales efímeras nuevas.
 - Servidor HTTP con página de estado y terminal web en `/terminal`.
 - Endpoint autenticado `/about` con versión, límites del producto y resumen de seguridad local.
@@ -80,7 +81,8 @@ idf.py -p /dev/ttyACM0 monitor
 6. Autentica con la password web.
 7. Usa `/terminal`; por defecto es solo lectura hasta pulsar `Request write control`.
 8. Usa `/diagnostics` para estado técnico y eventos recientes sin secretos.
-9. Mantén `BOOT` durante 10 segundos para factory reset si necesitas regenerar credenciales.
+9. Mantén `BOOT` durante 3 segundos para cortar sesiones web si pierdes control operacional.
+10. Mantén `BOOT` durante 10 segundos para factory reset si necesitas regenerar credenciales.
 
 ## Nota USB
 

@@ -111,7 +111,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: el pegado grande se limita, trocea o confirma antes de enviarse a consola.
 - [ ] Timeout o activación física del AP.
   Criterio: puede limitar ventana de exposición WiFi o requerir botón para activar AP.
-- [ ] Emergency lock físico.
+- [x] Emergency lock físico.
   Criterio: un botón o gesto local invalida sesiones, cierra WebSockets y opcionalmente apaga/bloquea el AP.
 - [ ] Rotación/generación controlada de credenciales.
   Criterio: permite renovar passwords y mostrar la nueva en pantalla local.

@@ -333,6 +333,41 @@ static esp_err_t add_ws_fd(int fd)
     return ESP_ERR_NO_MEM;
 }
 
+static void snapshot_ws_fds(int fds[WEB_MAX_WS_CLIENTS])
+{
+    if (s_ws_fds_lock != NULL) {
+        xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
+    }
+    memcpy(fds, s_ws_fds, sizeof(s_ws_fds));
+    if (s_ws_fds_lock != NULL) {
+        xSemaphoreGive(s_ws_fds_lock);
+    }
+}
+
+static void close_all_ws_clients(void)
+{
+    if (s_server == NULL) {
+        return;
+    }
+
+    int fds[WEB_MAX_WS_CLIENTS];
+    snapshot_ws_fds(fds);
+    for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
+        if (fds[i] >= 0) {
+            httpd_sess_trigger_close(s_server, fds[i]);
+            remove_ws_fd(fds[i]);
+        }
+    }
+}
+
+static void emergency_lock_work(void *arg)
+{
+    (void)arg;
+    web_security_invalidate_all(&s_security);
+    close_all_ws_clients();
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock engaged");
+}
+
 static void web_tx_task(void *arg)
 {
     (void)arg;
@@ -351,13 +386,7 @@ static void web_tx_task(void *arg)
         };
 
         int fds[WEB_MAX_WS_CLIENTS];
-        if (s_ws_fds_lock != NULL) {
-            xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
-        }
-        memcpy(fds, s_ws_fds, sizeof(fds));
-        if (s_ws_fds_lock != NULL) {
-            xSemaphoreGive(s_ws_fds_lock);
-        }
+        snapshot_ws_fds(fds);
 
         for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
             if (fds[i] >= 0) {
@@ -525,6 +554,7 @@ static esp_err_t about_handler(httpd_req_t *req)
         "<dt>IDF</dt><dd>%s</dd><dt>Security model</dt><dd>Local AP, web auth, CSRF, Origin checks, single writer, RAM diagnostics.</dd>"
         "<dt>Production build</dt><dd>Requires Secure Boot, Flash Encryption, encrypted NVS for persisted secrets, and closed debug/JTAG. Treat unsigned debug builds as lab-only.</dd>"
         "<dt>Scrollback</dt><dd>%u/%u bytes retained, %llu old bytes dropped.</dd>"
+        "<dt>Emergency lock</dt><dd>Hold BOOT for 3 seconds to invalidate web sessions, release write control, and close WebSockets.</dd>"
         "<dt>Factory reset</dt><dd>Hold BOOT for 10 seconds. This clears project NVS config and reboots.</dd></dl>"
         "</main></body></html>",
         app != NULL ? app->version : "unknown",
@@ -572,6 +602,7 @@ static esp_err_t runbook_handler(httpd_req_t *req)
         "</ol><h2>Si algo falla</h2><ol>"
         "<li>Si USB aparece desconectado, revisa cable, puerto y que el servidor exponga consola CDC ACM.</li>"
         "<li>Si hay rate limit, espera unos segundos y reduce recargas/conexiones.</li>"
+        "<li>Si pierdes control operacional de la terminal web, manten BOOT 3s para invalidar sesiones y cerrar WebSockets.</li>"
         "<li>Si las credenciales son desconocidas, pulsa BOOT para revelar temporales o manten BOOT 10s para factory reset.</li>"
         "<li>Usa Diagnostics para copiar contadores y eventos sin exponer passwords.</li>"
         "</ol><h2>Limites</h2><p>Esto es consola serie local. No hay HDMI, HID, virtual media, power cycle ni acceso cloud.</p>"
@@ -1145,4 +1176,19 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
 fail:
     cleanup_failed_start(server);
     return ret;
+}
+
+esp_err_t web_server_emergency_lock(void)
+{
+    if (s_server == NULL) {
+        web_security_invalidate_all(&s_security);
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock engaged before http start");
+        return ESP_OK;
+    }
+
+    const esp_err_t err = httpd_queue_work(s_server, emergency_lock_work, NULL);
+    if (err != ESP_OK) {
+        emergency_lock_work(NULL);
+    }
+    return err;
 }

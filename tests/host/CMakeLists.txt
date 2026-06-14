@@ -147,6 +147,17 @@ target_include_directories(test_reset_gesture PRIVATE
 
 add_test(NAME reset_gesture COMMAND test_reset_gesture)
 
+add_executable(test_emergency_lock_gesture
+    test_emergency_lock_gesture.c
+    ../../components/reset_control/src/emergency_lock_gesture.c
+)
+
+target_include_directories(test_emergency_lock_gesture PRIVATE
+    ../../components/reset_control/include
+)
+
+add_test(NAME emergency_lock_gesture COMMAND test_emergency_lock_gesture)
+
 add_executable(test_startup_policy
     test_startup_policy.c
     ../../components/startup_policy/src/startup_policy.c
