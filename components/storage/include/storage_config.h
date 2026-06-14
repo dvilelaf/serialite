@@ -22,5 +22,12 @@ typedef struct {
     uint8_t font_size;
 } storage_config_t;
 
+typedef enum {
+    STORAGE_CONFIG_STATUS_MISSING = 0,
+    STORAGE_CONFIG_STATUS_VALID,
+    STORAGE_CONFIG_STATUS_CORRUPT,
+} storage_config_status_t;
+
 bool storage_wifi_config_is_valid(const storage_wifi_config_t *config);
 void storage_wifi_config_apply_safe_ranges(storage_wifi_config_t *config);
+storage_config_status_t storage_wifi_config_classify(const storage_wifi_config_t *config);

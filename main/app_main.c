@@ -136,7 +136,10 @@ void app_main(void)
     storage_config_t config;
     log_init_result("storage", storage_init());
     log_init_result("terminal_bridge", terminal_bridge_start());
-    ESP_ERROR_CHECK(storage_load_config(&config));
+    const esp_err_t config_err = storage_load_config(&config);
+    if (config_err != ESP_OK && config_err != ESP_ERR_STORAGE_CONFIG_CORRUPT) {
+        ESP_ERROR_CHECK(config_err);
+    }
 
     kvm_wifi_ap_config_t mapped_wifi_config = {
         .channel = config.wifi.channel,
@@ -146,7 +149,11 @@ void app_main(void)
     strlcpy(mapped_wifi_config.password, config.wifi.password, sizeof(mapped_wifi_config.password));
 
     bool ephemeral_credentials = false;
-    if (nvs_recovered || !storage_wifi_config_is_valid(&config.wifi)) {
+    const storage_config_status_t config_status = storage_wifi_config_classify(&config.wifi);
+    if (nvs_recovered || config_err == ESP_ERR_STORAGE_CONFIG_CORRUPT || config_status != STORAGE_CONFIG_STATUS_VALID) {
+        if (config_err == ESP_ERR_STORAGE_CONFIG_CORRUPT) {
+            ESP_LOGE(TAG, "stored AP config is corrupt; entering physical setup flow with regenerated credentials");
+        }
         ESP_ERROR_CHECK(generate_ephemeral_wifi_config(&mapped_wifi_config));
         ephemeral_credentials = true;
     }

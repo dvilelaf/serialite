@@ -54,6 +54,7 @@ Un build que no cumpla estos puntos debe considerarse build de laboratorio aunqu
 - Las passwords efimeras solo se muestran en pantalla local tras presencia fisica.
 - La password web debe validarse mediante KDF con sal; no debe almacenarse reversible.
 - Credenciales persistentes solo son aceptables con NVS Encryption activo.
+- Configuracion persistente corrupta o incompleta no debe reutilizarse ni degradar a AP abierto; debe entrar en setup fisico con credenciales nuevas.
 - Los logs de RAM deben redactar eventos sensibles antes de exponerse por web.
 
 ## Superficie USB

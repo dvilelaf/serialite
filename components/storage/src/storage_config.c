@@ -51,6 +51,26 @@ bool storage_wifi_config_is_valid(const storage_wifi_config_t *config)
     return true;
 }
 
+storage_config_status_t storage_wifi_config_classify(const storage_wifi_config_t *config)
+{
+    if (config == NULL) {
+        return STORAGE_CONFIG_STATUS_CORRUPT;
+    }
+
+    size_t ssid_len = 0;
+    size_t password_len = 0;
+    if (!bounded_strlen(config->ssid, STORAGE_SSID_MAX_BYTES, &ssid_len) ||
+        !bounded_strlen(config->password, STORAGE_PASSWORD_MAX_BYTES, &password_len)) {
+        return STORAGE_CONFIG_STATUS_CORRUPT;
+    }
+
+    if (ssid_len == 0 && password_len == 0) {
+        return STORAGE_CONFIG_STATUS_MISSING;
+    }
+
+    return storage_wifi_config_is_valid(config) ? STORAGE_CONFIG_STATUS_VALID : STORAGE_CONFIG_STATUS_CORRUPT;
+}
+
 void storage_wifi_config_apply_safe_ranges(storage_wifi_config_t *config)
 {
     if (config == NULL) {

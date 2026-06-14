@@ -47,15 +47,32 @@ esp_err_t storage_load_config(storage_config_t *config)
 
 #if CONFIG_NVS_ENCRYPTION
     size_t len = sizeof(config->wifi.ssid);
-    (void)nvs_get_str(handle, "ssid", config->wifi.ssid, &len);
+    const esp_err_t ssid_err = nvs_get_str(handle, "ssid", config->wifi.ssid, &len);
     len = sizeof(config->wifi.password);
-    (void)nvs_get_str(handle, "password", config->wifi.password, &len);
+    const esp_err_t password_err = nvs_get_str(handle, "password", config->wifi.password, &len);
+    if ((ssid_err == ESP_OK && password_err != ESP_OK) ||
+        (ssid_err != ESP_OK && password_err == ESP_OK) ||
+        (ssid_err != ESP_OK && ssid_err != ESP_ERR_NVS_NOT_FOUND) ||
+        (password_err != ESP_OK && password_err != ESP_ERR_NVS_NOT_FOUND)) {
+        nvs_close(handle);
+        storage_set_defaults(config);
+        return ESP_ERR_STORAGE_CONFIG_CORRUPT;
+    }
 #endif
     (void)nvs_get_u8(handle, "channel", &config->wifi.channel);
     (void)nvs_get_u8(handle, "max_clients", &config->wifi.max_clients);
     (void)nvs_get_u8(handle, "brightness", &config->brightness);
     (void)nvs_get_u8(handle, "font_size", &config->font_size);
-    storage_wifi_config_apply_safe_ranges(&config->wifi);
+
+    const storage_config_status_t status = storage_wifi_config_classify(&config->wifi);
+    if (status == STORAGE_CONFIG_STATUS_CORRUPT) {
+        nvs_close(handle);
+        storage_set_defaults(config);
+        return ESP_ERR_STORAGE_CONFIG_CORRUPT;
+    }
+    if (status == STORAGE_CONFIG_STATUS_MISSING) {
+        storage_wifi_config_apply_safe_ranges(&config->wifi);
+    }
 
     nvs_close(handle);
     return ESP_OK;

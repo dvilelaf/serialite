@@ -82,7 +82,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: límites de payload, validación de rutas, cierre limpio de sesiones y endpoints mínimos.
 - [ ] Fallo cerrado en seguridad.
   Criterio: fallo de auth, sesión, config corrupta o storage no concede acceso ni arranca AP abierto.
-- [ ] Configuración corrupta recuperable sin modo inseguro.
+- [x] Configuración corrupta recuperable sin modo inseguro.
   Criterio: config inválida entra en setup seguro o requiere reset físico, nunca bypass de auth.
 - [x] Factory reset seguro.
   Criterio: borra passwords, sesiones, logs sensibles y claves; credenciales antiguas dejan de funcionar.
