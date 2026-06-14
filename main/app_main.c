@@ -158,6 +158,7 @@ void app_main(void)
         ESP_ERROR_CHECK(generate_ephemeral_wifi_config(&mapped_wifi_config));
         ephemeral_credentials = true;
     }
+    storage_secure_zero(config.wifi.password, sizeof(config.wifi.password));
 
     char web_password[WIFI_AP_PASSWORD_MAX_LEN];
     ESP_ERROR_CHECK(generate_human_password(web_password, sizeof(web_password)));
@@ -176,24 +177,29 @@ void app_main(void)
     }
     if (startup_policy_after_ui(ui_err == ESP_OK, ephemeral_credentials) == STARTUP_POLICY_SKIP_AP) {
         ESP_LOGE(TAG, "AP skipped: ephemeral password cannot be safely exposed without local display");
+        storage_secure_zero(mapped_wifi_config.password, sizeof(mapped_wifi_config.password));
+        storage_secure_zero(web_password, sizeof(web_password));
         log_init_result("usb_console", usb_console_start());
         return;
     }
 
     esp_err_t wifi_err = wifi_ap_start(&mapped_wifi_config);
     log_init_result("wifi_ap", wifi_err);
+    storage_secure_zero(mapped_wifi_config.password, sizeof(mapped_wifi_config.password));
     log_init_result("usb_console", usb_console_start());
     if (wifi_err == ESP_OK) {
         const web_server_config_t web_config = {
             .web_password = web_password,
         };
         const esp_err_t web_err = web_server_start(&web_config);
+        storage_secure_zero(web_password, sizeof(web_password));
         log_init_result("web_server", web_err);
         if (startup_policy_after_web(true, web_err == ESP_OK) == STARTUP_POLICY_STOP_AP) {
             ESP_LOGE(TAG, "AP stopped: web/auth service failed after WiFi startup");
             log_init_result("wifi_ap_stop", wifi_ap_stop());
         }
     } else {
+        storage_secure_zero(web_password, sizeof(web_password));
         ESP_LOGE(TAG, "web_server skipped because AP did not start");
     }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #define STORAGE_SSID_MAX_BYTES 32
@@ -31,3 +32,5 @@ typedef enum {
 bool storage_wifi_config_is_valid(const storage_wifi_config_t *config);
 void storage_wifi_config_apply_safe_ranges(storage_wifi_config_t *config);
 storage_config_status_t storage_wifi_config_classify(const storage_wifi_config_t *config);
+bool storage_config_secret_persistence_allowed(bool nvs_encryption_enabled);
+void storage_secure_zero(void *ptr, size_t len);

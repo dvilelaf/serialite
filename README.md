@@ -44,6 +44,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - Las passwords se muestran solo en pantalla local tras presencia física y durante una ventana temporal.
 - Si la password es efímera y la pantalla no inicializa, el AP no arranca.
 - `storage_save_config()` rechaza guardar credenciales WiFi si `CONFIG_NVS_ENCRYPTION` no está activo.
+- Los buffers temporales de credenciales se borran explícitamente tras ser copiados por WiFi, UI o autenticación web.
 - Si la configuración persistente está corrupta o incompleta, el firmware no la usa: regenera credenciales efímeras y exige exposición por pantalla local para continuar.
 
 Para despliegues reales, ver [`docs/production-hardening.md`](docs/production-hardening.md). Un firmware sin Secure Boot, Flash Encryption, NVS Encryption para secretos persistentes y JTAG/debug cerrado debe considerarse build de laboratorio, no producción.

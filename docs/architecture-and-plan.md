@@ -258,6 +258,8 @@ No se deben introducir credenciales compartidas de fabrica.
 
 Mientras NVS encryption no este activa, el firmware genera credenciales WiFi efimeras con SSID `KVM` y una password temporal legible de cuatro palabras inglesas. No debe persistir secretos en NVS. La persistencia de SSID/password solo queda permitida con almacenamiento cifrado configurado.
 
+Los buffers temporales de password se limpian explicitamente despues de que WiFi, UI o autenticacion web hayan copiado el material necesario. La UI conserva una copia temporal porque es el canal local de presencia fisica para revelar credenciales.
+
 ## Fases propuestas
 
 ### Fase 1

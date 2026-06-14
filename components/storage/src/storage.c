@@ -87,9 +87,14 @@ esp_err_t storage_save_config(const storage_config_t *config)
         return ESP_ERR_INVALID_ARG;
     }
 
-#if !CONFIG_NVS_ENCRYPTION
-    return ESP_ERR_INVALID_STATE;
+#if CONFIG_NVS_ENCRYPTION
+    const bool nvs_encryption_enabled = true;
+#else
+    const bool nvs_encryption_enabled = false;
 #endif
+    if (!storage_config_secret_persistence_allowed(nvs_encryption_enabled)) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);

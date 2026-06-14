@@ -104,6 +104,24 @@ static void test_classifies_missing_valid_and_corrupt_configs(void)
     CHECK(storage_wifi_config_classify(&config) == STORAGE_CONFIG_STATUS_CORRUPT);
 }
 
+static void test_secret_persistence_requires_encrypted_nvs(void)
+{
+    CHECK(!storage_config_secret_persistence_allowed(false));
+    CHECK(storage_config_secret_persistence_allowed(true));
+}
+
+static void test_secure_zero_clears_secret_buffers(void)
+{
+    char secret[32];
+    memset(secret, 'x', sizeof(secret));
+
+    storage_secure_zero(secret, sizeof(secret));
+
+    for (size_t i = 0; i < sizeof(secret); ++i) {
+        CHECK(secret[i] == '\0');
+    }
+}
+
 int main(void)
 {
     test_accepts_valid_wpa2_ap_config();
@@ -111,5 +129,7 @@ int main(void)
     test_rejects_out_of_range_network_values();
     test_safe_ranges_clamp_numeric_values();
     test_classifies_missing_valid_and_corrupt_configs();
+    test_secret_persistence_requires_encrypted_nvs();
+    test_secure_zero_clears_secret_buffers();
     return 0;
 }

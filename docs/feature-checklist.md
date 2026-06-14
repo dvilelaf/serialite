@@ -159,7 +159,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
 - [x] No exponer el ESP32 directamente a Internet.
 - [x] No permitir escritura multiusuario simultánea.
 - [x] No convertir la UI local AMOLED en una terminal completa.
-- [ ] No guardar secretos en claro.
+- [x] No guardar secretos en claro.
 - [x] No depender de servicios cloud.
 - [x] No ejecutar comandos automáticos o funciones tipo AI ops.
 - [x] No escribir logs intensivos en flash.

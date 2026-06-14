@@ -71,6 +71,23 @@ storage_config_status_t storage_wifi_config_classify(const storage_wifi_config_t
     return storage_wifi_config_is_valid(config) ? STORAGE_CONFIG_STATUS_VALID : STORAGE_CONFIG_STATUS_CORRUPT;
 }
 
+bool storage_config_secret_persistence_allowed(bool nvs_encryption_enabled)
+{
+    return nvs_encryption_enabled;
+}
+
+void storage_secure_zero(void *ptr, size_t len)
+{
+    if (ptr == NULL) {
+        return;
+    }
+
+    volatile unsigned char *p = (volatile unsigned char *)ptr;
+    while (len-- > 0) {
+        *p++ = 0;
+    }
+}
+
 void storage_wifi_config_apply_safe_ranges(storage_wifi_config_t *config)
 {
     if (config == NULL) {
