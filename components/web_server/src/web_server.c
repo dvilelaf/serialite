@@ -524,9 +524,9 @@ static void web_tx_task(void *arg)
 static void ap_guard_task(void *arg)
 {
     (void)arg;
-    app_watchdog_register_current_task("ap_guard");
+    // This guard intentionally sleeps longer than the task watchdog timeout.
+    // Registering it would create a false-positive reboot loop while the AP is healthy.
     while (true) {
-        app_watchdog_reset_current_task();
         const wifi_ap_status_t wifi = wifi_ap_get_status();
         const terminal_bridge_status_t bridge = terminal_bridge_get_status();
         const ap_exposure_policy_result_t result = ap_exposure_policy_evaluate(
