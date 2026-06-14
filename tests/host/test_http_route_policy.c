@@ -27,6 +27,7 @@ static void test_allows_known_routes_and_methods(void)
     CHECK(http_route_policy_allowed("/credentials", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/config", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/config.json", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
+    CHECK(http_route_policy_allowed("/macros", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/api/write/acquire", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/api/write/release", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/api/ota", HTTP_ROUTE_METHOD_POST, OTA_UPDATE_MAX_IMAGE_BYTES) == HTTP_ROUTE_POLICY_ALLOW);
@@ -35,6 +36,7 @@ static void test_allows_known_routes_and_methods(void)
     CHECK(http_route_policy_allowed("/api/config/import", HTTP_ROUTE_METHOD_POST, HTTP_ROUTE_CONFIG_IMPORT_BODY_MAX) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/api/demo/start", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/api/demo/stop", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_ALLOW);
+    CHECK(http_route_policy_allowed("/api/macros/run", HTTP_ROUTE_METHOD_POST, HTTP_ROUTE_MACRO_RUN_BODY_MAX) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/ws", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
 }
 
@@ -44,6 +46,8 @@ static void test_rejects_unknown_routes_and_wrong_methods(void)
     CHECK(http_route_policy_allowed("/terminal", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_REJECT_METHOD);
     CHECK(http_route_policy_allowed("/terminal-status.json", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_REJECT_METHOD);
     CHECK(http_route_policy_allowed("/logout", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_REJECT_METHOD);
+    CHECK(http_route_policy_allowed("/macros", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_REJECT_METHOD);
+    CHECK(http_route_policy_allowed("/api/macros/run", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_REJECT_METHOD);
     CHECK(http_route_policy_allowed(NULL, HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_REJECT_NOT_FOUND);
 }
 
@@ -58,6 +62,7 @@ static void test_rejects_oversized_bodies(void)
     CHECK(http_route_policy_allowed("/api/config/import", HTTP_ROUTE_METHOD_POST, HTTP_ROUTE_CONFIG_IMPORT_BODY_MAX + 1) == HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE);
     CHECK(http_route_policy_allowed("/api/demo/start", HTTP_ROUTE_METHOD_POST, 1) == HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE);
     CHECK(http_route_policy_allowed("/api/demo/stop", HTTP_ROUTE_METHOD_POST, 1) == HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE);
+    CHECK(http_route_policy_allowed("/api/macros/run", HTTP_ROUTE_METHOD_POST, HTTP_ROUTE_MACRO_RUN_BODY_MAX + 1) == HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE);
 }
 
 static void test_security_classifies_public_and_authenticated_routes(void)
@@ -76,6 +81,7 @@ static void test_security_classifies_public_and_authenticated_routes(void)
     CHECK(http_route_policy_security("/credentials", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
     CHECK(http_route_policy_security("/config", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
     CHECK(http_route_policy_security("/config.json", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
+    CHECK(http_route_policy_security("/macros", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
 }
 
 static void test_security_classifies_mutating_and_websocket_routes(void)
@@ -89,6 +95,7 @@ static void test_security_classifies_mutating_and_websocket_routes(void)
     CHECK(http_route_policy_security("/api/config/import", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_MUTATING_AUTH_CSRF_ORIGIN);
     CHECK(http_route_policy_security("/api/demo/start", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_MUTATING_AUTH_CSRF_ORIGIN);
     CHECK(http_route_policy_security("/api/demo/stop", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_MUTATING_AUTH_CSRF_ORIGIN);
+    CHECK(http_route_policy_security("/api/macros/run", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_MUTATING_AUTH_CSRF_ORIGIN);
     CHECK(http_route_policy_security("/ws", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_WEBSOCKET_AUTH_ORIGIN);
 }
 

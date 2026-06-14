@@ -146,8 +146,8 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: desactivado por defecto y documentado como aumento de superficie de ataque.
 - [ ] BLE provisioning.
   Criterio: opcional; no reemplaza el flujo offline básico.
-- [ ] Macros seguras.
-  Criterio: desactivadas por defecto, visibles y nunca ejecutadas automáticamente.
+- [x] Macros seguras.
+  Criterio: desactivadas por defecto, visibles, nunca ejecutadas automáticamente y bloqueadas salvo estado seguro.
 - [ ] Carcasa/etiqueta operacional.
   Criterio: indica propósito, URL, botón de reset/setup y advertencias básicas.
 

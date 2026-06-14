@@ -112,6 +112,17 @@ target_include_directories(test_web_demo_policy PRIVATE
 
 add_test(NAME web_demo_policy COMMAND test_web_demo_policy)
 
+add_executable(test_web_macro_policy
+    test_web_macro_policy.c
+    ../../components/web_server/src/web_macro_policy.c
+)
+
+target_include_directories(test_web_macro_policy PRIVATE
+    ../../components/web_server/include
+)
+
+add_test(NAME web_macro_policy COMMAND test_web_macro_policy)
+
 add_executable(test_web_input_policy
     test_web_input_policy.c
     ../../components/web_server/src/web_input_policy.c

@@ -29,6 +29,7 @@
 #include "usb_console.h"
 #include "web_input_policy.h"
 #include "web_demo_policy.h"
+#include "web_macro_policy.h"
 #include "web_security.h"
 #include "web_terminal_ansi.h"
 #include "web_terminal_contract.h"
@@ -83,6 +84,7 @@ static web_server_export_config_fn_t s_export_config;
 static web_server_import_config_fn_t s_import_config;
 static void *s_config_ctx;
 static bool s_credential_reboot_pending;
+static bool s_macros_enabled;
 static local_pairing_state_t s_pairing;
 
 static uint64_t now_ms(void)
@@ -652,7 +654,7 @@ static esp_err_t index_handler(httpd_req_t *req)
         "<p>Bridge USB TX: %llu</p>"
         "<p>Scrollback: %u/%u bytes, dropped old=%llu</p>"
         "<p><a href=\"/terminal\">Abrir terminal</a></p>"
-        "<p><a href=\"/diagnostics\">Diagnostico</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/credentials\">Credentials</a> | <a href=\"/config\">Config</a> | <a href=\"/ota\">Firmware</a> | <a href=\"/about\">About</a></p>"
+        "<p><a href=\"/diagnostics\">Diagnostico</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/macros\">Macros</a> | <a href=\"/credentials\">Credentials</a> | <a href=\"/config\">Config</a> | <a href=\"/ota\">Firmware</a> | <a href=\"/about\">About</a></p>"
         "<p><a href=\"/logout\" onclick=\"event.preventDefault();fetch('/logout',{method:'POST',headers:{'X-CSRF-Token':'%s'}}).then(()=>location='/login')\">Logout</a></p>"
         "</div>"
         "</body></html>",
@@ -699,7 +701,7 @@ static esp_err_t about_handler(httpd_req_t *req)
         "<title>ESP32-KVM About</title><style>body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px}"
         ".card{border:1px solid #174436;border-radius:16px;padding:14px;background:#030807;max-width:760px}"
         "dt{color:#7dffe1}dd{margin:0 0 8px 0}a{color:#7dffe1}</style></head><body><main class=\"card\">"
-        "<h1>About ESP32-KVM</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/credentials\">Credentials</a> | <a href=\"/ota\">Firmware</a></p>"
+        "<h1>About ESP32-KVM</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/macros\">Macros</a> | <a href=\"/credentials\">Credentials</a> | <a href=\"/ota\">Firmware</a></p>"
         "<p>Serial rescue console over local WiFi AP. It is not HDMI KVM, HID remote input, virtual media, power control, cloud access, or command automation.</p>"
         "<dl><dt>Firmware</dt><dd>%s</dd><dt>Project</dt><dd>%s</dd><dt>Build date</dt><dd>%s %s</dd>"
         "<dt>IDF</dt><dd>%s</dd><dt>Security model</dt><dd>Local AP, web auth, CSRF, Origin checks, single writer, RAM diagnostics.</dd>"
@@ -758,6 +760,83 @@ static esp_err_t runbook_handler(httpd_req_t *req)
         "<li>Usa Diagnostics para copiar contadores y eventos sin exponer passwords.</li>"
         "</ol><h2>Limites</h2><p>Esto es consola serie local. No hay HDMI, HID, virtual media, power cycle ni acceso cloud.</p>"
         "</main></body></html>";
+
+    send_no_store_headers(req);
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t macros_page_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
+    if (csrf == NULL) {
+        return redirect_to(req, "/login");
+    }
+
+    const web_macro_descriptor_t *macros = NULL;
+    const size_t macro_count = web_macro_policy_list(&macros);
+    const usb_console_status_t usb = usb_console_get_status();
+    const demo_serial_runtime_status_t demo = demo_serial_runtime_get_status();
+    const web_security_writer_state_t writer = web_security_writer_state(&s_security, session_token, now_ms());
+    const bool can_run_state = s_macros_enabled && writer == WEB_SECURITY_WRITER_ACTIVE && usb.connected && !demo.active;
+
+    char body[4200];
+    int written = snprintf(
+        body,
+        sizeof(body),
+        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>ESP32-KVM Macros</title><style>"
+        "body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px;line-height:1.45}"
+        "main{border:1px solid #174436;border-radius:16px;padding:16px;background:#030807;max-width:820px}"
+        "button{border:1px solid #1f5b4b;border-radius:12px;background:#102a23;color:#e9fff8;padding:10px 12px;font:inherit;font-weight:700}"
+        "button:disabled{opacity:.45}code{color:#bffff0}a{color:#7dffe1}.macro{border-top:1px solid #174436;padding:12px 0}</style></head><body><main>"
+        "<h1>Safe macros</h1><p><a href=\"/terminal\">Terminal</a> | <a href=\"/\">Status</a> | <a href=\"/runbook\">Runbook</a></p>"
+        "<p>Macros are visible for audit but disabled by default. They never run automatically and require explicit confirmation, USB connected, demo off, and active write control.</p>"
+        "<p>Status: macros=%s, USB=%s, demo=%s, writer=%s.</p>",
+        s_macros_enabled ? "enabled" : "disabled",
+        usb.connected ? "connected" : "disconnected",
+        demo.active ? "active" : "inactive",
+        writer_state_name(writer));
+    if (written < 0 || written >= (int)sizeof(body)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "macros overflow");
+    }
+
+    for (size_t i = 0; i < macro_count; ++i) {
+        const int remaining = (int)sizeof(body) - written;
+        if (remaining <= 1) {
+            break;
+        }
+        const int add = snprintf(
+            body + written,
+            (size_t)remaining,
+            "<section class=\"macro\"><h2>%s</h2><p><code>%s</code></p>"
+            "<button %s onclick=\"runMacro('%s')\">Run with confirmation</button></section>",
+            macros[i].label,
+            macros[i].command,
+            can_run_state ? "" : "disabled",
+            macros[i].id);
+        if (add < 0 || add >= remaining) {
+            break;
+        }
+        written += add;
+    }
+
+    const int remaining = (int)sizeof(body) - written;
+    const int tail = snprintf(
+        body + written,
+        (size_t)remaining,
+        "<script>const CSRF='%s';async function runMacro(id){if(!confirm('Send macro '+id+' to the physical console?'))return;"
+        "const body='id='+encodeURIComponent(id)+'&confirm=yes';const r=await fetch('/api/macros/run',{method:'POST',headers:{'X-CSRF-Token':CSRF,'Content-Type':'application/x-www-form-urlencoded'},body});alert(r.status+' '+await r.text())}</script>"
+        "</main></body></html>",
+        csrf);
+    if (tail < 0 || tail >= remaining) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "macros overflow");
+    }
 
     send_no_store_headers(req);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -1064,6 +1143,51 @@ static esp_err_t demo_stop_handler(httpd_req_t *req)
 
     demo_serial_runtime_disable();
     return httpd_resp_sendstr(req, "ok");
+}
+
+static esp_err_t macro_run_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(
+        require_mutating_auth_csrf_origin(req, "macro run rejected: origin", "macro run rejected: csrf", session_token),
+        TAG,
+        "macro run auth failed");
+
+    char body[HTTP_ROUTE_MACRO_RUN_BODY_MAX + 1];
+    ESP_RETURN_ON_ERROR(read_small_body(req, body, sizeof(body)), TAG, "macro body failed");
+
+    char macro_id[32];
+    char confirm[8];
+    const bool parsed = form_value(body, "id", macro_id, sizeof(macro_id)) &&
+                        form_value(body, "confirm", confirm, sizeof(confirm));
+    if (!parsed) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing macro confirmation");
+    }
+
+    const web_macro_descriptor_t *macro = web_macro_policy_find(macro_id);
+    const usb_console_status_t usb = usb_console_get_status();
+    const demo_serial_runtime_status_t demo = demo_serial_runtime_get_status();
+    const bool writer_active = web_security_can_write(&s_security, session_token, now_ms());
+    const bool user_confirmed = strcmp(confirm, "yes") == 0;
+    if (!web_macro_policy_can_run(macro_id, s_macros_enabled, writer_active, usb.connected, demo.active, user_confirmed)) {
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "macro rejected");
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_send(req, "macros disabled or unsafe state", HTTPD_RESP_USE_STRLEN);
+    }
+
+    const size_t command_len = strlen(macro->command);
+    const size_t written = terminal_bridge_submit_input(TERMINAL_BRIDGE_SOURCE_WEB, (const uint8_t *)macro->command, command_len);
+    if (written != command_len) {
+        event_log_append(EVENT_LOG_WARN, now_ms(), "macro partially queued");
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_send(req, "macro queue full", HTTPD_RESP_USE_STRLEN);
+    }
+
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), "macro queued");
+    return httpd_resp_sendstr(req, "queued");
 }
 
 static esp_err_t write_acquire_handler(httpd_req_t *req)
@@ -1765,6 +1889,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     s_export_config = server_config->export_config;
     s_import_config = server_config->import_config;
     s_config_ctx = server_config->config_ctx;
+    s_macros_enabled = web_macro_policy_default_enabled();
     ESP_RETURN_ON_FALSE(local_pairing_init(&s_pairing, server_config->pairing_code), ESP_ERR_INVALID_ARG, TAG, "invalid pairing config");
 
     if (!wifi_ap_get_status().started) {
@@ -1773,7 +1898,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
 
     httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
     http_config.lru_purge_enable = true;
-    http_config.max_uri_handlers = 23;
+    http_config.max_uri_handlers = 25;
 
     httpd_handle_t server = NULL;
     ESP_RETURN_ON_ERROR(httpd_start(&server, &http_config), TAG, "httpd_start failed");
@@ -1844,6 +1969,12 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         .handler = config_json_handler,
         .user_ctx = NULL,
     };
+    const httpd_uri_t macros_page_uri = {
+        .uri = "/macros",
+        .method = HTTP_GET,
+        .handler = macros_page_handler,
+        .user_ctx = NULL,
+    };
     const httpd_uri_t credentials_rotate_uri = {
         .uri = "/api/credentials/rotate",
         .method = HTTP_POST,
@@ -1854,6 +1985,12 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         .uri = "/api/config/import",
         .method = HTTP_POST,
         .handler = config_import_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t macro_run_uri = {
+        .uri = "/api/macros/run",
+        .method = HTTP_POST,
+        .handler = macro_run_handler,
         .user_ctx = NULL,
     };
     const httpd_uri_t ota_upload_uri = {
@@ -1942,6 +2079,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &credentials_page_uri), fail, TAG, "credentials page handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &config_page_uri), fail, TAG, "config page handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &config_json_uri), fail, TAG, "config json handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &macros_page_uri), fail, TAG, "macros page handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ota_page_uri), fail, TAG, "ota page handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_uri), fail, TAG, "diagnostics handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_json_uri), fail, TAG, "diagnostics json handler failed");
@@ -1953,6 +2091,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &reboot_uri), fail, TAG, "reboot handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &credentials_rotate_uri), fail, TAG, "credentials rotate handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &config_import_uri), fail, TAG, "config import handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &macro_run_uri), fail, TAG, "macro run handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ws_uri), fail, TAG, "websocket handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, http_error_handler), fail, TAG, "404 handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_err_handler(server, HTTPD_405_METHOD_NOT_ALLOWED, http_error_handler), fail, TAG, "405 handler failed");
