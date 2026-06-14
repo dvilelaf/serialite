@@ -1968,10 +1968,18 @@ static esp_err_t http_error_handler(httpd_req_t *req, httpd_err_code_t error)
     }
 
     http_route_policy_result_t result = HTTP_ROUTE_POLICY_REJECT_NOT_FOUND;
+    const char *status = "404 Not Found";
+    const char *message = "not found";
     if (error == HTTPD_405_METHOD_NOT_ALLOWED) {
         result = HTTP_ROUTE_POLICY_REJECT_METHOD;
+        status = "405 Method Not Allowed";
+        message = "method not allowed";
     }
-    return send_route_policy_error(req, result);
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), http_route_policy_result_name(result));
+    send_no_store_headers(req);
+    httpd_resp_set_status(req, status);
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    return httpd_resp_send(req, message, HTTPD_RESP_USE_STRLEN);
 }
 
 esp_err_t web_server_start(const web_server_config_t *server_config)

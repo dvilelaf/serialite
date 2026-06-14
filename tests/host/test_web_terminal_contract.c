@@ -66,6 +66,19 @@ static void check_pair_code_removed_from_normal_login(void)
     free(lvgl_ui);
 }
 
+static void check_error_handler_does_not_recurse_via_send_err(void)
+{
+    char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
+    const char *handler = strstr(web_server, "static esp_err_t http_error_handler");
+    CHECK(handler != NULL);
+    const char *next_function = strstr(handler + 1, "\nesp_err_t web_server_start");
+    CHECK(next_function != NULL);
+
+    const char *recursive_error_path = strstr(handler, "send_route_policy_error");
+    CHECK(recursive_error_path == NULL || recursive_error_path > next_function);
+    free(web_server);
+}
+
 int main(void)
 {
     CHECK(web_terminal_contract_has_required_statuses());
@@ -77,5 +90,6 @@ int main(void)
     CHECK(strcmp(WEB_TERMINAL_ACTION_UNLOCK, "Unlock input") == 0);
     CHECK(strcmp(WEB_TERMINAL_ACTION_LOCK, "Lock input") == 0);
     check_pair_code_removed_from_normal_login();
+    check_error_handler_does_not_recurse_via_send_err();
     return 0;
 }
