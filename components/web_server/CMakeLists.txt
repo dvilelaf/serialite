@@ -14,6 +14,7 @@ idf_component_register(
     REQUIRES
         app_watchdog
         credentials
+        local_pairing
         diagnostics_export
         event_log
         esp_app_format

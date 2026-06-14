@@ -25,6 +25,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - Diagnóstico local autenticado en `/diagnostics` y export JSON en `/diagnostics.json`.
 - Actualización firmware local en `/ota`: subida manual autenticada, protegida por CSRF/Origin, validada por ESP-IDF OTA y con reboot explícito.
 - Rotación local de credenciales en `/credentials`: genera nuevas passwords human-readable, no las devuelve por HTTP, las muestra en AMOLED y exige NVS Encryption para persistir WiFi.
+- Pairing local inicial: el primer login web tras arrancar exige la password web y un código de 6 dígitos mostrado en la AMOLED.
 - Log circular de eventos en RAM para auth, WebSocket, backpressure y estado operativo.
 - Task watchdog explícito para tareas críticas propias (`usb_rx`, `usb_tx`, `web_tx`, `lvgl_ui`).
 - `terminal_bridge` para fan-in/fan-out entre USB y terminal web.
@@ -43,6 +44,8 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - La password web se deriva con sal y PBKDF2-HMAC-SHA256 antes de validar login; no se guarda en claro en el estado de auth.
 - Si se rota, la password web persiste como hash+sal en NVS cifrado para sobrevivir al reboot que aplica la nueva WiFi.
 - La terminal WebSocket exige sesión autenticada y valida `Origin`.
+- El primer login web tras cada arranque exige un código de pairing local de un solo uso, además de la password web.
+- El pairing local se bloquea tras intentos incorrectos repetidos; se recupera reiniciando o mediante flujo físico de recuperación.
 - La escritura hacia la consola exige lock explícito de un único cliente.
 - La entrada WebSocket tiene límite por frame y presupuesto por ventana para evitar DoS básico.
 - Las rutas HTTP están limitadas a endpoints conocidos con métodos y tamaños de body esperados.
@@ -89,7 +92,7 @@ idf.py -p /dev/ttyACM0 monitor
 3. Pulsa `BOOT` con la pantalla encendida para revelar durante 30 segundos la password WiFi y la password web temporal.
 4. Conéctate al AP desde móvil o portátil.
 5. Abre `http://kvm.local` si tu sistema soporta mDNS, o `http://192.168.4.1`.
-6. Autentica con la password web.
+6. Autentica con la password web y el código `Pair code` mostrado en la AMOLED. El código es de un solo uso para confirmar presencia física local.
 7. Usa `/terminal`; por defecto es solo lectura hasta pulsar `Request write`. La barra superior muestra si puedes escribir, si otro cliente tiene el lock o si USB está desconectado.
 8. Usa `/diagnostics` para estado técnico y eventos recientes sin secretos.
 9. Usa `/credentials` para rotar WiFi/web passwords. La respuesta web no contiene secretos: pulsa `BOOT` y lee las nuevas passwords en la AMOLED.

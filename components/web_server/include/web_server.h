@@ -17,13 +17,23 @@ typedef esp_err_t (*web_server_rotate_credentials_fn_t)(
     const web_server_credential_rotation_t *rotation,
     void *ctx);
 
+typedef enum {
+    WEB_SERVER_PAIRING_CONSUMED = 0,
+    WEB_SERVER_PAIRING_LOCKED,
+} web_server_pairing_event_t;
+
+typedef void (*web_server_pairing_event_fn_t)(web_server_pairing_event_t event, void *ctx);
+
 typedef struct {
     const char *web_password;
+    const char *pairing_code;
     const uint8_t *web_password_salt;
     const uint8_t *web_password_hash;
     bool web_password_hash_configured;
     web_server_rotate_credentials_fn_t rotate_credentials;
     void *rotate_credentials_ctx;
+    web_server_pairing_event_fn_t pairing_event;
+    void *pairing_event_ctx;
 } web_server_config_t;
 
 typedef struct {

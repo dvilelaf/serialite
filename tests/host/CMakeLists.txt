@@ -42,6 +42,17 @@ target_include_directories(test_credentials PRIVATE
 
 add_test(NAME credentials COMMAND test_credentials)
 
+add_executable(test_local_pairing
+    test_local_pairing.c
+    ../../components/local_pairing/src/local_pairing.c
+)
+
+target_include_directories(test_local_pairing PRIVATE
+    ../../components/local_pairing/include
+)
+
+add_test(NAME local_pairing COMMAND test_local_pairing)
+
 add_executable(test_storage_config
     test_storage_config.c
     ../../components/storage/src/storage_config.c

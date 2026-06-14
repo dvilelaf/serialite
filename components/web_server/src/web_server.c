@@ -9,6 +9,7 @@
 #include "credentials.h"
 #include "http_rate_limit.h"
 #include "http_route_policy.h"
+#include "local_pairing.h"
 #include "ota_update.h"
 #include "ota_update_policy.h"
 #include "esp_app_desc.h"
@@ -72,7 +73,10 @@ static portMUX_TYPE s_runtime_status_lock = portMUX_INITIALIZER_UNLOCKED;
 static web_server_status_t s_runtime_status;
 static web_server_rotate_credentials_fn_t s_rotate_credentials;
 static void *s_rotate_credentials_ctx;
+static web_server_pairing_event_fn_t s_pairing_event;
+static void *s_pairing_event_ctx;
 static bool s_credential_reboot_pending;
+static local_pairing_state_t s_pairing;
 
 static uint64_t now_ms(void)
 {
@@ -119,6 +123,13 @@ static void secure_zero(void *ptr, size_t len)
     volatile uint8_t *p = (volatile uint8_t *)ptr;
     while (len-- > 0) {
         *p++ = 0;
+    }
+}
+
+static void notify_pairing_event(web_server_pairing_event_t event)
+{
+    if (s_pairing_event != NULL) {
+        s_pairing_event(event, s_pairing_event_ctx);
     }
 }
 
@@ -759,8 +770,9 @@ static esp_err_t login_get_handler(httpd_req_t *req)
         "input,button{width:100%;box-sizing:border-box;border-radius:12px;padding:13px;margin-top:12px;font:inherit}"
         "input{background:#000;color:#fff;border:1px solid #245c4c}button{background:#0c3429;color:#bffff0;border:1px solid #2ee6b8}"
         "p{color:#8bb5aa}</style></head><body><main><h1>KVM</h1>"
-        "<p>Serial rescue console. Not HDMI KVM.</p>"
-        "<form method=\"post\" action=\"/login\"><input name=\"password\" type=\"password\" autocomplete=\"current-password\" autofocus>"
+        "<p>Serial rescue console. Press BOOT on the device to reveal the first-login pair code.</p>"
+        "<form method=\"post\" action=\"/login\"><input name=\"password\" type=\"password\" autocomplete=\"current-password\" placeholder=\"Web password\" autofocus>"
+        "<input name=\"pair\" inputmode=\"numeric\" pattern=\"[0-9]{6}\" autocomplete=\"one-time-code\" placeholder=\"First-login pair code\">"
         "<button type=\"submit\">Unlock web console</button></form></main></body></html>";
 
     send_no_store_headers(req);
@@ -785,6 +797,14 @@ static esp_err_t login_post_handler(httpd_req_t *req)
         secure_zero(body, sizeof(body));
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing password");
     }
+    char pair_code[LOCAL_PAIRING_CODE_BUF_LEN] = {0};
+    const bool pairing_pending = local_pairing_required(&s_pairing);
+    if (pairing_pending && !form_value(body, "pair", pair_code, sizeof(pair_code))) {
+        secure_zero(body, sizeof(body));
+        secure_zero(password, sizeof(password));
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "login rejected: missing pair code");
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid credentials");
+    }
     secure_zero(body, sizeof(body));
 
     const web_security_login_result_t result = web_security_login(
@@ -797,12 +817,29 @@ static esp_err_t login_post_handler(httpd_req_t *req)
 
     if (result == WEB_SECURITY_LOGIN_LOCKED) {
         event_log_append(EVENT_LOG_SECURITY, now_ms(), "login locked after repeated failures");
+        secure_zero(pair_code, sizeof(pair_code));
         httpd_resp_set_status(req, "429 Too Many Requests");
         return httpd_resp_send(req, "login temporarily locked", HTTPD_RESP_USE_STRLEN);
     }
     if (result != WEB_SECURITY_LOGIN_OK) {
         event_log_append(EVENT_LOG_SECURITY, now_ms(), "login failed");
+        secure_zero(pair_code, sizeof(pair_code));
         return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid credentials");
+    }
+    if (pairing_pending && !local_pairing_verify_and_consume(&s_pairing, pair_code)) {
+        web_security_logout(&s_security, s_security.session_token);
+        secure_zero(pair_code, sizeof(pair_code));
+        if (local_pairing_locked(&s_pairing)) {
+            event_log_append(EVENT_LOG_SECURITY, now_ms(), "login rejected: pairing locked");
+            notify_pairing_event(WEB_SERVER_PAIRING_LOCKED);
+            return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid credentials");
+        }
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "login rejected: invalid pair code");
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid credentials");
+    }
+    secure_zero(pair_code, sizeof(pair_code));
+    if (pairing_pending) {
+        notify_pairing_event(WEB_SERVER_PAIRING_CONSUMED);
     }
 
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "login ok");
@@ -1540,6 +1577,9 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     event_log_append(EVENT_LOG_INFO, now_ms(), "web server starting");
     s_rotate_credentials = server_config->rotate_credentials;
     s_rotate_credentials_ctx = server_config->rotate_credentials_ctx;
+    s_pairing_event = server_config->pairing_event;
+    s_pairing_event_ctx = server_config->pairing_event_ctx;
+    ESP_RETURN_ON_FALSE(local_pairing_init(&s_pairing, server_config->pairing_code), ESP_ERR_INVALID_ARG, TAG, "invalid pairing config");
 
     if (!wifi_ap_get_status().started) {
         return ESP_ERR_INVALID_STATE;

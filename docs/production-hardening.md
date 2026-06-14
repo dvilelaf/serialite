@@ -75,6 +75,8 @@ La ruta de la clave debe estar fuera del checkout y gestionada por la infraestru
 - La password WiFi persistente debe tener al menos 8 palabras human-readable, 20 bytes o mas, y ser unica por dispositivo.
 - No debe existir password maestra, recovery password universal ni backdoor.
 - Las passwords efimeras solo se muestran en pantalla local tras presencia fisica.
+- El primer login web debe exigir pairing local de un solo uso mostrado en pantalla o equivalente de presencia fisica.
+- El pairing local debe tener bloqueo por intentos fallidos para impedir fuerza bruta si la password web ya fue comprometida.
 - La rotacion de credenciales debe mostrarse solo en pantalla local; la interfaz web puede iniciar la accion pero no devuelve passwords.
 - La password web debe validarse mediante KDF con sal; no debe almacenarse reversible.
 - La password web rotada debe persistir como hash+sal en NVS cifrado, nunca como plaintext.

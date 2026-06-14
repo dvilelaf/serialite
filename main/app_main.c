@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "credentials.h"
+#include "local_pairing.h"
 #include "lvgl_ui.h"
 #include "network_identity.h"
 #include "ota_update.h"
@@ -38,50 +39,6 @@ static bool credentials_random(uint8_t *buf, size_t len, void *ctx)
     esp_fill_random(buf, len);
     return true;
 }
-
-static const char *const PASSWORD_WORDS[] = {
-    "amber", "anchor", "apple", "artist", "atlas", "autumn", "badge", "baker",
-    "bamboo", "beacon", "beaver", "berry", "bison", "blossom", "border", "bottle",
-    "bridge", "bronze", "bucket", "butter", "cactus", "camera", "candle", "canyon",
-    "castle", "cedar", "celery", "cement", "cherry", "circle", "clover", "cobalt",
-    "coffee", "comet", "copper", "cotton", "cradle", "cricket", "crystal", "daisy",
-    "dakota", "delta", "desert", "diamond", "dolphin", "dragon", "drift", "eagle",
-    "earth", "echo", "ember", "engine", "falcon", "farm", "feather", "ferry",
-    "field", "forest", "fossil", "garden", "ginger", "glacier", "golden", "grape",
-    "harbor", "hazel", "helmet", "hollow", "honest", "horizon", "island", "ivory",
-    "jacket", "jaguar", "jasmine", "jigsaw", "juniper", "kernel", "kettle", "kiwi",
-    "ladder", "lagoon", "lantern", "laser", "lemon", "linen", "lizard", "magnet",
-    "maple", "marble", "market", "meadow", "melon", "meteor", "mirror", "misty",
-    "monkey", "museum", "nectar", "needle", "nickel", "oasis", "olive", "orange",
-    "orbit", "orchid", "otter", "oxygen", "paddle", "paper", "parrot", "pebble",
-    "pepper", "pickle", "planet", "pocket", "prairie", "quartz", "rabbit", "radar",
-    "raven", "record", "river", "rocket", "saddle", "saffron", "sailor", "salmon",
-    "saturn", "shadow", "silver", "signal", "sketch", "socket", "sparrow", "spider",
-    "spring", "square", "stable", "station", "stone", "summer", "sunset", "tackle",
-    "tango", "temple", "ticket", "timber", "tomato", "tunnel", "turkey", "turtle",
-    "velvet", "violet", "voyage", "walnut", "wander", "window", "winter", "wizard",
-    "yellow", "yonder", "zephyr", "zigzag", "acorn", "banana", "basket", "button",
-    "carbon", "carrot", "cobalt", "coral", "denim", "donkey", "fabric", "finger",
-    "flower", "galaxy", "garage", "garlic", "goblin", "granite", "hammer", "hazard",
-    "icicle", "insect", "jungle", "kitten", "koala", "legend", "little", "lobster",
-    "lunar", "memory", "mineral", "muffin", "napkin", "native", "noodle", "number",
-    "onion", "opal", "palace", "pencil", "pepper", "person", "pigeon", "pirate",
-    "plasma", "potato", "puzzle", "quiver", "ribbon", "robot", "salsa", "school",
-    "season", "shrimp", "simple", "singer", "smoke", "snow", "spirit", "sponge",
-    "staple", "studio", "sugar", "switch", "tablet", "thunder", "tiger", "toast",
-    "topaz", "travel", "triple", "trumpet", "velcro", "vendor", "vessel", "walrus",
-    "water", "whisper", "willow", "winner", "yogurt", "zebra", "zenith", "zipper",
-    "almond", "arcade", "arctic", "balance", "beetle", "breeze", "broker", "canvas",
-    "casino", "citron", "cookie", "cosmic", "cotton", "damage", "dinner", "doodle",
-    "effect", "fabric", "famous", "folder", "gentle", "glider", "guitar", "honor",
-    "ignite", "jumper", "kingdom", "letter", "marine", "motion", "nectar", "pepper",
-    "public", "random", "remote", "rescue", "sample", "secure", "server", "socket",
-    "system", "tandem", "urgent", "vector", "vision", "volume", "writer", "zodiac",
-};
-
-enum {
-    PASSWORD_WORD_COUNT = sizeof(PASSWORD_WORDS) / sizeof(PASSWORD_WORDS[0]),
-};
 
 static void log_init_result(const char *name, esp_err_t err)
 {
@@ -121,6 +78,15 @@ static esp_err_t generate_human_password(char *out, size_t out_size)
         return ESP_ERR_INVALID_SIZE;
     }
     return result == CREDENTIALS_ERR_RANDOM_FAILED ? ESP_FAIL : ESP_ERR_INVALID_ARG;
+}
+
+static esp_err_t generate_pairing_code(char out[LOCAL_PAIRING_CODE_BUF_LEN])
+{
+    const local_pairing_result_t result = local_pairing_generate_code(out, credentials_random, NULL);
+    if (result == LOCAL_PAIRING_OK) {
+        return ESP_OK;
+    }
+    return result == LOCAL_PAIRING_ERR_RANDOM_FAILED ? ESP_FAIL : ESP_ERR_INVALID_ARG;
 }
 
 static esp_err_t rotate_credentials_cb(const web_server_credential_rotation_t *rotation, void *ctx)
@@ -190,6 +156,20 @@ static esp_err_t rotate_credentials_cb(const web_server_credential_rotation_t *r
     return ESP_OK;
 }
 
+static void pairing_event_cb(web_server_pairing_event_t event, void *ctx)
+{
+    app_credentials_context_t *state = (app_credentials_context_t *)ctx;
+    if (state == NULL || !state->ui_ready) {
+        return;
+    }
+
+    const char *status = event == WEB_SERVER_PAIRING_LOCKED ? "Locked" : "Used";
+    const esp_err_t err = lvgl_ui_set_pairing_status(status);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "pairing status update failed: %s", esp_err_to_name(err));
+    }
+}
+
 static esp_err_t generate_ephemeral_wifi_config(kvm_wifi_ap_config_t *config)
 {
     if (config == NULL) {
@@ -249,10 +229,14 @@ void app_main(void)
         strlcpy(web_password, "stored - use rotated password", sizeof(web_password));
     }
 
+    char pairing_code[LOCAL_PAIRING_CODE_BUF_LEN] = {0};
+    ESP_ERROR_CHECK(generate_pairing_code(pairing_code));
+
     const lvgl_ui_boot_status_t ui_status = {
         .ssid = mapped_wifi_config.ssid,
         .password = mapped_wifi_config.password,
         .web_password = web_password,
+        .pairing_code = pairing_code,
         .ip_addr = "192.168.4.1",
         .usb_connected = false,
     };
@@ -271,6 +255,7 @@ void app_main(void)
         ESP_LOGE(TAG, "AP skipped: ephemeral password cannot be safely exposed without local display");
         storage_secure_zero(mapped_wifi_config.password, sizeof(mapped_wifi_config.password));
         storage_secure_zero(web_password, sizeof(web_password));
+        storage_secure_zero(pairing_code, sizeof(pairing_code));
         const esp_err_t usb_err = usb_console_start();
         log_init_result("usb_console", usb_err);
         return;
@@ -298,11 +283,15 @@ void app_main(void)
             .web_password_salt = persisted_web_auth ? config.web_password_salt : NULL,
             .web_password_hash = persisted_web_auth ? config.web_password_hash : NULL,
             .web_password_hash_configured = persisted_web_auth,
+            .pairing_code = pairing_code,
             .rotate_credentials = rotate_credentials_cb,
             .rotate_credentials_ctx = &s_credentials_ctx,
+            .pairing_event = pairing_event_cb,
+            .pairing_event_ctx = &s_credentials_ctx,
         };
         const esp_err_t web_err = web_server_start(&web_config);
         storage_secure_zero(web_password, sizeof(web_password));
+        storage_secure_zero(pairing_code, sizeof(pairing_code));
         log_init_result("web_server", web_err);
         if (bridge_err == ESP_OK && usb_err == ESP_OK && wifi_err == ESP_OK && web_err == ESP_OK) {
             log_init_result("ota_valid", ota_update_mark_running_app_valid());
@@ -315,6 +304,7 @@ void app_main(void)
         }
     } else {
         storage_secure_zero(web_password, sizeof(web_password));
+        storage_secure_zero(pairing_code, sizeof(pairing_code));
         ESP_LOGE(TAG, "web_server skipped because AP did not start");
     }
 }

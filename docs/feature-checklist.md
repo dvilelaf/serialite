@@ -121,7 +121,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: muestra versión firmware, hash corto, estado de seguridad de build y sin secretos.
 - [x] Auditoría visible en pantalla.
   Criterio: muestra cliente activo, terminal activa y estado lock/auth sin saturar la UI.
-- [ ] Pairing local inicial.
+- [x] Pairing local inicial.
   Criterio: primer login o cambio crítico requiere código mostrado en pantalla o pulsación física.
 - [ ] Export/import de configuración seguro.
   Criterio: export no incluye secretos en claro; import valida versión/checksum y falla cerrado.
