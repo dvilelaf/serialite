@@ -8,6 +8,8 @@
 #include "event_log.h"
 #include "http_rate_limit.h"
 #include "http_route_policy.h"
+#include "ota_update.h"
+#include "ota_update_policy.h"
 #include "esp_app_desc.h"
 #include "esp_check.h"
 #include "esp_http_server.h"
@@ -44,6 +46,7 @@ static const char *TAG = "web_server";
 #define WEB_AP_GUARD_TASK_STACK 3072
 #define WEB_AP_GUARD_TASK_PRIORITY 2
 #define WEB_AP_GUARD_INTERVAL_MS 30000
+#define WEB_OTA_RECV_CHUNK 2048
 
 typedef struct {
     size_t len;
@@ -319,6 +322,23 @@ static bool csrf_header_valid(httpd_req_t *req, const char *session_token)
         return false;
     }
     return web_security_csrf_valid(&s_security, session_token, csrf, now_ms());
+}
+
+static esp_err_t require_mutating_auth_csrf_origin(
+    httpd_req_t *req,
+    const char *origin_action,
+    const char *csrf_action,
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN])
+{
+    ESP_RETURN_ON_ERROR(validate_same_origin_header(req, origin_action), TAG, "origin rejected");
+    if (!request_authenticated(req, session_token)) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "auth required");
+    }
+    if (!csrf_header_valid(req, session_token)) {
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), csrf_action);
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid csrf");
+    }
+    return ESP_OK;
 }
 
 static const char *writer_state_name(web_security_writer_state_t state)
@@ -608,7 +628,7 @@ static esp_err_t index_handler(httpd_req_t *req)
         "<p>Bridge USB TX: %llu</p>"
         "<p>Scrollback: %u/%u bytes, dropped old=%llu</p>"
         "<p><a href=\"/terminal\">Abrir terminal</a></p>"
-        "<p><a href=\"/diagnostics\">Diagnostico</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/about\">About</a></p>"
+        "<p><a href=\"/diagnostics\">Diagnostico</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/ota\">Firmware</a> | <a href=\"/about\">About</a></p>"
         "<p><a href=\"/logout\" onclick=\"event.preventDefault();fetch('/logout',{method:'POST',headers:{'X-CSRF-Token':'%s'}}).then(()=>location='/login')\">Logout</a></p>"
         "</div>"
         "</body></html>",
@@ -653,7 +673,7 @@ static esp_err_t about_handler(httpd_req_t *req)
         "<title>ESP32-KVM About</title><style>body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px}"
         ".card{border:1px solid #174436;border-radius:16px;padding:14px;background:#030807;max-width:760px}"
         "dt{color:#7dffe1}dd{margin:0 0 8px 0}a{color:#7dffe1}</style></head><body><main class=\"card\">"
-        "<h1>About ESP32-KVM</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/runbook\">Runbook</a></p>"
+        "<h1>About ESP32-KVM</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/ota\">Firmware</a></p>"
         "<p>Serial rescue console over local WiFi AP. It is not HDMI KVM, HID remote input, virtual media, power control, cloud access, or command automation.</p>"
         "<dl><dt>Firmware</dt><dd>%s</dd><dt>Project</dt><dd>%s</dd><dt>Build date</dt><dd>%s %s</dd>"
         "<dt>IDF</dt><dd>%s</dd><dt>Security model</dt><dd>Local AP, web auth, CSRF, Origin checks, single writer, RAM diagnostics.</dd>"
@@ -694,7 +714,7 @@ static esp_err_t runbook_handler(httpd_req_t *req)
         "main{border:1px solid #174436;border-radius:16px;padding:16px;background:#030807;max-width:820px}"
         "h2{color:#7dffe1}a{color:#7dffe1}li{margin:8px 0}code{color:#bffff0}</style></head><body><main>"
         "<h1>Runbook de rescate</h1>"
-        "<p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/about\">About</a></p>"
+        "<p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/ota\">Firmware</a> | <a href=\"/about\">About</a></p>"
         "<h2>Antes de escribir</h2><ol>"
         "<li>Confirma que estas conectado al AP local correcto y fisicamente junto al servidor.</li>"
         "<li>Comprueba en Status que USB esta conectado y que no hay drops creciendo rapidamente.</li>"
@@ -946,16 +966,12 @@ static esp_err_t write_acquire_handler(httpd_req_t *req)
 {
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-    ESP_RETURN_ON_ERROR(validate_same_origin_header(req, "write acquire rejected: origin"), TAG, "origin rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!request_authenticated(req, session_token)) {
-        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "auth required");
-    }
-    if (!csrf_header_valid(req, session_token)) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "write acquire rejected: csrf");
-        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid csrf");
-    }
+    ESP_RETURN_ON_ERROR(
+        require_mutating_auth_csrf_origin(req, "write acquire rejected: origin", "write acquire rejected: csrf", session_token),
+        TAG,
+        "write acquire auth failed");
     if (!web_security_acquire_writer(&s_security, session_token, now_ms())) {
         event_log_append(EVENT_LOG_SECURITY, now_ms(), "write acquire rejected: busy");
         httpd_resp_set_status(req, "409 Conflict");
@@ -970,20 +986,187 @@ static esp_err_t write_release_handler(httpd_req_t *req)
 {
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-    ESP_RETURN_ON_ERROR(validate_same_origin_header(req, "write release rejected: origin"), TAG, "origin rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!request_authenticated(req, session_token)) {
-        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "auth required");
-    }
-    if (!csrf_header_valid(req, session_token)) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "write release rejected: csrf");
-        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid csrf");
-    }
+    ESP_RETURN_ON_ERROR(
+        require_mutating_auth_csrf_origin(req, "write release rejected: origin", "write release rejected: csrf", session_token),
+        TAG,
+        "write release auth failed");
     web_security_release_writer(&s_security, session_token);
     runtime_status_set_writer_active(false);
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "write control released");
     return httpd_resp_sendstr(req, "ok");
+}
+
+static void reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(250));
+    esp_restart();
+}
+
+static esp_err_t ota_page_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
+    if (csrf == NULL) {
+        return redirect_to(req, "/login");
+    }
+
+    const ota_update_status_t ota = ota_update_get_status();
+    char body[3600];
+    const int written = snprintf(
+        body,
+        sizeof(body),
+        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>ESP32-KVM OTA</title><style>"
+        "*{box-sizing:border-box}body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px;line-height:1.45}"
+        "main{border:1px solid #174436;border-radius:18px;padding:18px;background:#030807;max-width:760px;width:100%%}"
+        "button,input{font:inherit}button{border:1px solid #2ee6b8;border-radius:12px;background:#123d32;color:#bffff0;padding:11px 14px;margin:8px 8px 8px 0}"
+        "button:disabled{opacity:.45}button.danger{border-color:#ff875c;color:#ffd2c0;background:#24110c}input[type=file]{max-width:100%%}"
+        "code{color:#bffff0}a{color:#7dffe1}.warn{color:#ffcf7a}@media(max-width:480px){button{display:block;width:100%%}}</style></head><body><main>"
+        "<h1>Firmware update</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/about\">About</a></p>"
+        "<p class=\"warn\">Manual local OTA only. Upload a complete ESP-IDF app image built for this board. In production, Secure Boot rejects unsigned or wrongly signed images.</p>"
+        "<dl><dt>State</dt><dd id=\"otaState\">%s</dd><dt>Target slot</dt><dd>%s</dd><dt>Bytes</dt><dd>%u / %u</dd><dt>Last error</dt><dd>%s</dd></dl>"
+        "<input id=\"fw\" type=\"file\" accept=\".bin,application/octet-stream\">"
+        "<p><button id=\"upload\">Upload firmware</button><button class=\"danger\" id=\"reboot\" %s>Reboot to pending image</button></p>"
+        "<pre id=\"out\"></pre><script>"
+        "const CSRF='%s',out=document.getElementById('out'),otaState=document.getElementById('otaState'),reboot=document.getElementById('reboot');let pending=%s;"
+        "function say(s){out.textContent+=s+'\\n'}"
+        "async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'X-CSRF-Token':CSRF,'Content-Type':'application/octet-stream'},body:b});const t=await r.text();say(r.status+' '+t);return r.ok}"
+        "document.getElementById('upload').onclick=async()=>{const f=document.getElementById('fw').files[0];if(!f){say('choose firmware first');return}"
+        "if(f.size===0||f.size>%u){say('invalid size; max %u bytes');return}"
+        "if(!confirm('Install '+f.name+' ('+f.size+' bytes) on the inactive OTA slot?'))return;"
+        "const ok=await post('/api/ota',f);if(ok){pending=true;otaState.textContent='pending reboot';reboot.disabled=false;say('upload accepted; reboot explicitly when ready')}};"
+        "reboot.onclick=async()=>{if(!pending){say('no pending image');return}if(confirm('Reboot ESP32-KVM now? Serial bridge will disconnect briefly.'))await post('/api/reboot',null)};"
+        "</script></main></body></html>",
+        ota.in_progress ? "uploading" : (ota.pending_reboot ? "pending reboot" : "idle"),
+        ota.target_label[0] != '\0' ? ota.target_label : "next OTA slot",
+        (unsigned)ota.written_bytes,
+        (unsigned)ota.expected_bytes,
+        esp_err_to_name(ota.last_error),
+        ota_update_policy_reboot_allowed(ota.pending_reboot, ota.in_progress) ? "" : "disabled",
+        csrf,
+        ota_update_policy_reboot_allowed(ota.pending_reboot, ota.in_progress) ? "true" : "false",
+        (unsigned)OTA_UPDATE_MAX_IMAGE_BYTES,
+        (unsigned)OTA_UPDATE_MAX_IMAGE_BYTES);
+    if (written < 0 || written >= (int)sizeof(body)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota page overflow");
+    }
+
+    send_no_store_headers(req);
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t ota_upload_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(
+        require_mutating_auth_csrf_origin(req, "ota upload rejected: origin", "ota upload rejected: csrf", session_token),
+        TAG,
+        "ota upload auth failed");
+
+    const ota_update_status_t status = ota_update_get_status();
+    const ota_update_policy_result_t policy = ota_update_policy_evaluate(req->content_len, status.in_progress);
+    if (policy != OTA_UPDATE_POLICY_ACCEPT) {
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), ota_update_policy_result_name(policy));
+        if (policy == OTA_UPDATE_POLICY_REJECT_BUSY) {
+            httpd_resp_set_status(req, "409 Conflict");
+            return httpd_resp_send(req, "ota busy", HTTPD_RESP_USE_STRLEN);
+        }
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, ota_update_policy_result_name(policy));
+    }
+
+    ota_update_session_t session = {0};
+    esp_err_t err = ota_update_begin(req->content_len, &session);
+    if (err != ESP_OK) {
+        event_log_append(EVENT_LOG_ERROR, now_ms(), "ota begin failed");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, esp_err_to_name(err));
+    }
+
+    uint8_t buf[WEB_OTA_RECV_CHUNK];
+    size_t received = 0;
+    unsigned consecutive_timeouts = 0;
+    const uint64_t upload_start_ms = now_ms();
+    while (received < req->content_len) {
+        if (ota_update_policy_deadline_exceeded(upload_start_ms, now_ms())) {
+            ota_update_abort(&session);
+            event_log_append(EVENT_LOG_ERROR, now_ms(), "ota upload deadline exceeded");
+            httpd_resp_set_status(req, "408 Request Timeout");
+            return httpd_resp_send(req, "upload deadline exceeded", HTTPD_RESP_USE_STRLEN);
+        }
+        const size_t remaining = req->content_len - received;
+        const size_t want = remaining > sizeof(buf) ? sizeof(buf) : remaining;
+        const int got = httpd_req_recv(req, (char *)buf, want);
+        if (got == HTTPD_SOCK_ERR_TIMEOUT) {
+            consecutive_timeouts++;
+            if (ota_update_policy_timeout_exhausted(consecutive_timeouts)) {
+                ota_update_abort(&session);
+                event_log_append(EVENT_LOG_ERROR, now_ms(), "ota upload timed out");
+                httpd_resp_set_status(req, "408 Request Timeout");
+                return httpd_resp_send(req, "upload timed out", HTTPD_RESP_USE_STRLEN);
+            }
+            continue;
+        }
+        if (got <= 0) {
+            ota_update_abort(&session);
+            event_log_append(EVENT_LOG_ERROR, now_ms(), "ota upload read failed");
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload read failed");
+        }
+        consecutive_timeouts = 0;
+        err = ota_update_write(&session, buf, (size_t)got);
+        if (err != ESP_OK) {
+            ota_update_abort(&session);
+            event_log_append(EVENT_LOG_ERROR, now_ms(), "ota write failed");
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, esp_err_to_name(err));
+        }
+        received += (size_t)got;
+    }
+    memset(buf, 0, sizeof(buf));
+
+    err = ota_update_finish(&session);
+    if (err != ESP_OK) {
+        event_log_append(EVENT_LOG_ERROR, now_ms(), "ota validation failed");
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, esp_err_to_name(err));
+    }
+
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), "ota image accepted; reboot pending");
+    send_no_store_headers(req);
+    return httpd_resp_sendstr(req, "ota accepted; reboot required");
+}
+
+static esp_err_t reboot_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(
+        require_mutating_auth_csrf_origin(req, "reboot rejected: origin", "reboot rejected: csrf", session_token),
+        TAG,
+        "reboot auth failed");
+
+    const ota_update_status_t ota = ota_update_get_status();
+    if (!ota_update_policy_reboot_allowed(ota.pending_reboot, ota.in_progress)) {
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "reboot rejected: no pending ota");
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_send(req, "no pending ota image", HTTPD_RESP_USE_STRLEN);
+    }
+    if (xTaskCreate(reboot_task, "web_reboot", 2048, NULL, 5, NULL) != pdPASS) {
+        event_log_append(EVENT_LOG_ERROR, now_ms(), "reboot task creation failed");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "reboot task failed");
+    }
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), "manual reboot requested");
+    send_no_store_headers(req);
+    return httpd_resp_sendstr(req, "rebooting");
 }
 
 static esp_err_t diagnostics_handler(httpd_req_t *req)
@@ -1248,7 +1431,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
 
     httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
     http_config.lru_purge_enable = true;
-    http_config.max_uri_handlers = 13;
+    http_config.max_uri_handlers = 16;
 
     httpd_handle_t server = NULL;
     ESP_RETURN_ON_ERROR(httpd_start(&server, &http_config), TAG, "httpd_start failed");
@@ -1293,6 +1476,24 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         .uri = "/runbook",
         .method = HTTP_GET,
         .handler = runbook_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t ota_page_uri = {
+        .uri = "/ota",
+        .method = HTTP_GET,
+        .handler = ota_page_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t ota_upload_uri = {
+        .uri = "/api/ota",
+        .method = HTTP_POST,
+        .handler = ota_upload_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t reboot_uri = {
+        .uri = "/api/reboot",
+        .method = HTTP_POST,
+        .handler = reboot_handler,
         .user_ctx = NULL,
     };
     const httpd_uri_t diagnostics_uri = {
@@ -1354,10 +1555,13 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &terminal_status_uri), fail, TAG, "terminal status handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &about_uri), fail, TAG, "about handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &runbook_uri), fail, TAG, "runbook handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ota_page_uri), fail, TAG, "ota page handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_uri), fail, TAG, "diagnostics handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_json_uri), fail, TAG, "diagnostics json handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &write_acquire_uri), fail, TAG, "write acquire handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &write_release_uri), fail, TAG, "write release handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ota_upload_uri), fail, TAG, "ota upload handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &reboot_uri), fail, TAG, "reboot handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ws_uri), fail, TAG, "websocket handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, http_error_handler), fail, TAG, "404 handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_err_handler(server, HTTPD_405_METHOD_NOT_ALLOWED, http_error_handler), fail, TAG, "405 handler failed");

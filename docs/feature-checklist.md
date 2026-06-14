@@ -115,7 +115,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: un botón o gesto local invalida sesiones, cierra WebSockets y opcionalmente apaga/bloquea el AP.
 - [ ] Rotación/generación controlada de credenciales.
   Criterio: permite renovar passwords y mostrar la nueva en pantalla local.
-- [ ] OTA local protegida.
+- [x] OTA local protegida.
   Criterio: actualización firmware local, manual, autenticada, firmada y con rollback si está disponible.
 - [x] Endpoint `/about`.
   Criterio: muestra versión firmware, hash corto, estado de seguridad de build y sin secretos.

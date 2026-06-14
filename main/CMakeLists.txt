@@ -11,6 +11,7 @@ idf_component_register(
         usb_console
         lvgl_ui
         network_identity
+        ota_update
         terminal_bridge
         startup_policy
 )

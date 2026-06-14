@@ -118,9 +118,21 @@ add_executable(test_http_route_policy
 
 target_include_directories(test_http_route_policy PRIVATE
     ../../components/web_server/include
+    ../../components/ota_update/include
 )
 
 add_test(NAME http_route_policy COMMAND test_http_route_policy)
+
+add_executable(test_ota_update_policy
+    test_ota_update_policy.c
+    ../../components/ota_update/src/ota_update_policy.c
+)
+
+target_include_directories(test_ota_update_policy PRIVATE
+    ../../components/ota_update/include
+)
+
+add_test(NAME ota_update_policy COMMAND test_ota_update_policy)
 
 add_executable(test_http_rate_limit
     test_http_rate_limit.c

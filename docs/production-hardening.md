@@ -52,6 +52,8 @@ Un build que no cumpla estos puntos debe considerarse build de laboratorio aunqu
 
 El firmware usa dos slots OTA en `partitions.csv`. Esto permite instalar una imagen nueva sin destruir la imagen anterior y habilita rollback del bootloader cuando `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`.
 
+La interfaz `/ota` acepta una imagen de aplicación completa mediante POST local autenticado. El upload exige sesión web, CSRF, `Origin` válido, tamaño no superior al slot OTA y una sola actualización en curso. Tras `esp_ota_end()` y `esp_ota_set_boot_partition()` correctos, el dispositivo queda en estado `pending reboot`; el reinicio se hace con `/api/reboot` de forma explícita. En builds de producción, la validación de firma la aplica ESP-IDF/Secure Boot durante `esp_ota_end()` y el arranque posterior.
+
 El perfil de laboratorio no activa Secure Boot ni Flash Encryption para evitar quemar eFuses durante desarrollo. El perfil de produccion esta separado en `sdkconfig.prod.defaults` y exige:
 
 - `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`;

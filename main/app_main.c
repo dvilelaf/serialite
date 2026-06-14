@@ -9,6 +9,7 @@
 
 #include "lvgl_ui.h"
 #include "network_identity.h"
+#include "ota_update.h"
 #include "reset_control.h"
 #include "storage.h"
 #include "startup_policy.h"
@@ -139,7 +140,8 @@ void app_main(void)
     const esp_err_t storage_err = storage_init();
     log_init_result("storage", storage_err);
     ESP_ERROR_CHECK(storage_err);
-    log_init_result("terminal_bridge", terminal_bridge_start());
+    const esp_err_t bridge_err = terminal_bridge_start();
+    log_init_result("terminal_bridge", bridge_err);
     const esp_err_t config_err = storage_load_config(&config);
     if (config_err != ESP_OK && config_err != ESP_ERR_STORAGE_CONFIG_CORRUPT) {
         ESP_ERROR_CHECK(config_err);
@@ -182,14 +184,16 @@ void app_main(void)
         ESP_LOGE(TAG, "AP skipped: ephemeral password cannot be safely exposed without local display");
         storage_secure_zero(mapped_wifi_config.password, sizeof(mapped_wifi_config.password));
         storage_secure_zero(web_password, sizeof(web_password));
-        log_init_result("usb_console", usb_console_start());
+        const esp_err_t usb_err = usb_console_start();
+        log_init_result("usb_console", usb_err);
         return;
     }
 
     esp_err_t wifi_err = wifi_ap_start(&mapped_wifi_config);
     log_init_result("wifi_ap", wifi_err);
     storage_secure_zero(mapped_wifi_config.password, sizeof(mapped_wifi_config.password));
-    log_init_result("usb_console", usb_console_start());
+    const esp_err_t usb_err = usb_console_start();
+    log_init_result("usb_console", usb_err);
     if (wifi_err == ESP_OK) {
         const network_identity_config_t network_identity_config = {
             .hostname = NETWORK_IDENTITY_HOSTNAME,
@@ -208,6 +212,11 @@ void app_main(void)
         const esp_err_t web_err = web_server_start(&web_config);
         storage_secure_zero(web_password, sizeof(web_password));
         log_init_result("web_server", web_err);
+        if (bridge_err == ESP_OK && usb_err == ESP_OK && wifi_err == ESP_OK && web_err == ESP_OK) {
+            log_init_result("ota_valid", ota_update_mark_running_app_valid());
+        } else {
+            ESP_LOGW(TAG, "running app not marked valid for OTA rollback because critical services are not all ready");
+        }
         if (startup_policy_after_web(true, web_err == ESP_OK) == STARTUP_POLICY_STOP_AP) {
             ESP_LOGE(TAG, "AP stopped: web/auth service failed after WiFi startup");
             log_init_result("wifi_ap_stop", wifi_ap_stop());

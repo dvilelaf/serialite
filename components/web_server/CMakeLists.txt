@@ -19,6 +19,7 @@ idf_component_register(
         esp_http_server
         esp_timer
         mbedtls
+        ota_update
         wifi_ap
         usb_console
         terminal_bridge

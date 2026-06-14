@@ -23,6 +23,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - Endpoint autenticado `/about` con versión, límites del producto y resumen de seguridad local.
 - WebSocket en `/ws`.
 - Diagnóstico local autenticado en `/diagnostics` y export JSON en `/diagnostics.json`.
+- Actualización firmware local en `/ota`: subida manual autenticada, protegida por CSRF/Origin, validada por ESP-IDF OTA y con reboot explícito.
 - Log circular de eventos en RAM para auth, WebSocket, backpressure y estado operativo.
 - Task watchdog explícito para tareas críticas propias (`usb_rx`, `usb_tx`, `web_tx`, `lvgl_ui`).
 - `terminal_bridge` para fan-in/fan-out entre USB y terminal web.
@@ -43,6 +44,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - La escritura hacia la consola exige lock explícito de un único cliente.
 - La entrada WebSocket tiene límite por frame y presupuesto por ventana para evitar DoS básico.
 - Las rutas HTTP están limitadas a endpoints conocidos con métodos y tamaños de body esperados.
+- La OTA local requiere sesión web, CSRF, `Origin` válido, tamaño compatible con slot OTA y no reinicia automáticamente tras la subida.
 - Si el servicio web/auth falla tras arrancar WiFi, el AP se apaga para no dejar una red expuesta sin consola segura.
 - El paste web grande o multilínea requiere confirmación y se trocea antes de enviarse.
 - Los logs internos no almacenan passwords ni transcripción serial completa.
@@ -87,8 +89,10 @@ idf.py -p /dev/ttyACM0 monitor
 6. Autentica con la password web.
 7. Usa `/terminal`; por defecto es solo lectura hasta pulsar `Request write`. La barra superior muestra si puedes escribir, si otro cliente tiene el lock o si USB está desconectado.
 8. Usa `/diagnostics` para estado técnico y eventos recientes sin secretos.
-9. Mantén `BOOT` durante 3 segundos para cortar sesiones web si pierdes control operacional.
-10. Mantén `BOOT` durante 10 segundos para factory reset si necesitas regenerar credenciales.
+9. Usa `/ota` solo para cargar una imagen completa `.bin` generada por ESP-IDF para esta placa. En producción debe estar firmada con la clave configurada en `sdkconfig.prod.defaults`.
+10. Tras una OTA aceptada, pulsa `Reboot to pending image` cuando estés listo para reiniciar el bridge.
+11. Mantén `BOOT` durante 3 segundos para cortar sesiones web si pierdes control operacional.
+12. Mantén `BOOT` durante 10 segundos para factory reset si necesitas regenerar credenciales.
 
 ## Nota USB
 
