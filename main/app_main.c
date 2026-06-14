@@ -82,7 +82,8 @@ static bool runtime_wifi_config_is_valid(const kvm_wifi_ap_config_t *config)
     const size_t ssid_len = strnlen(config->ssid, sizeof(config->ssid));
     const size_t password_len = strnlen(config->password, sizeof(config->password));
     return ssid_len > 0 && ssid_len < sizeof(config->ssid) &&
-           password_len >= 8 && password_len < sizeof(config->password);
+           password_len >= 8 && password_len < sizeof(config->password) &&
+           credentials_human_phrase_matches_policy(config->password, CREDENTIALS_WIFI_PASSWORD_WORD_COUNT);
 }
 
 static bool ephemeral_cache_valid(void)
@@ -382,7 +383,10 @@ void app_main(void)
 
     bool ephemeral_credentials = false;
     const storage_config_status_t config_status = storage_wifi_config_classify(&config.wifi);
-    if (nvs_recovered || config_err == ESP_ERR_STORAGE_CONFIG_CORRUPT || config_status != STORAGE_CONFIG_STATUS_VALID) {
+    if (nvs_recovered ||
+        config_err == ESP_ERR_STORAGE_CONFIG_CORRUPT ||
+        config_status != STORAGE_CONFIG_STATUS_VALID ||
+        !runtime_wifi_config_is_valid(&mapped_wifi_config)) {
         if (config_err == ESP_ERR_STORAGE_CONFIG_CORRUPT) {
             ESP_LOGE(TAG, "stored AP config is corrupt; entering physical setup flow with regenerated credentials");
         }
@@ -405,7 +409,9 @@ void app_main(void)
     const bool persisted_web_auth = storage_web_auth_config_is_valid(&config);
     const bool rtc_web_password_available = ephemeral_cache_valid() &&
                                             s_ephemeral_rtc_cache.web_password_valid &&
-                                            s_ephemeral_rtc_cache.web_password[0] != '\0';
+                                            credentials_human_phrase_matches_policy(
+                                                s_ephemeral_rtc_cache.web_password,
+                                                CREDENTIALS_WEB_PASSWORD_WORD_COUNT);
     credentials_web_auth_boot_decision_t web_auth_decision = {0};
     ESP_ERROR_CHECK(credentials_web_auth_boot_decide(
         &(credentials_web_auth_boot_input_t){

@@ -7918,6 +7918,31 @@ credentials_result_t credentials_generate_human_web_password(
         random_ctx);
 }
 
+bool credentials_human_phrase_matches_policy(const char *phrase, size_t word_count)
+{
+    if (phrase == NULL || phrase[0] == '\0' || word_count == 0) {
+        return false;
+    }
+
+    size_t words = 1;
+    bool previous_space = false;
+    for (const char *p = phrase; *p != '\0'; ++p) {
+        if (*p == '-') {
+            return false;
+        }
+        if (*p == ' ') {
+            if (p == phrase || previous_space || p[1] == '\0') {
+                return false;
+            }
+            words++;
+            previous_space = true;
+        } else {
+            previous_space = false;
+        }
+    }
+    return words == word_count;
+}
+
 bool credentials_web_auth_boot_decide(
     const credentials_web_auth_boot_input_t *input,
     credentials_web_auth_boot_decision_t *decision)
