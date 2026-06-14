@@ -68,6 +68,18 @@ static bool security_random(uint8_t *buf, size_t len, void *ctx)
     return true;
 }
 
+static void secure_zero(void *ptr, size_t len)
+{
+    if (ptr == NULL) {
+        return;
+    }
+
+    volatile uint8_t *p = (volatile uint8_t *)ptr;
+    while (len-- > 0) {
+        *p++ = 0;
+    }
+}
+
 static void send_no_store_headers(httpd_req_t *req)
 {
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
@@ -645,12 +657,18 @@ static esp_err_t login_post_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char body[WEB_REQUEST_BODY_MAX + 1];
-    ESP_RETURN_ON_ERROR(read_small_body(req, body, sizeof(body)), TAG, "login body failed");
+    esp_err_t err = read_small_body(req, body, sizeof(body));
+    if (err != ESP_OK) {
+        secure_zero(body, sizeof(body));
+        return err;
+    }
 
     char password[WEB_SECURITY_PASSWORD_MAX_LEN];
     if (!form_value(body, "password", password, sizeof(password))) {
+        secure_zero(body, sizeof(body));
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing password");
     }
+    secure_zero(body, sizeof(body));
 
     const web_security_login_result_t result = web_security_login(
         &s_security,
@@ -658,7 +676,7 @@ static esp_err_t login_post_handler(httpd_req_t *req)
         now_ms(),
         security_random,
         NULL);
-    memset(password, 0, sizeof(password));
+    secure_zero(password, sizeof(password));
 
     if (result == WEB_SECURITY_LOGIN_LOCKED) {
         event_log_append(EVENT_LOG_SECURITY, now_ms(), "login locked after repeated failures");
@@ -1181,14 +1199,19 @@ fail:
 esp_err_t web_server_emergency_lock(void)
 {
     if (s_server == NULL) {
-        web_security_invalidate_all(&s_security);
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock engaged before http start");
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock ignored before http start");
         return ESP_OK;
     }
 
     const esp_err_t err = httpd_queue_work(s_server, emergency_lock_work, NULL);
     if (err != ESP_OK) {
-        emergency_lock_work(NULL);
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock queue failed; stopping AP");
+        const esp_err_t stop_err = wifi_ap_stop();
+        if (stop_err != ESP_OK) {
+            ESP_LOGE(TAG, "emergency lock could not stop AP: %s; restarting", esp_err_to_name(stop_err));
+            event_log_append(EVENT_LOG_ERROR, now_ms(), "emergency lock AP stop failed; restarting");
+            esp_restart();
+        }
     }
     return err;
 }

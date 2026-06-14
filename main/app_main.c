@@ -135,7 +135,9 @@ void app_main(void)
     ESP_ERROR_CHECK(init_nvs(&nvs_recovered));
 
     storage_config_t config;
-    log_init_result("storage", storage_init());
+    const esp_err_t storage_err = storage_init();
+    log_init_result("storage", storage_err);
+    ESP_ERROR_CHECK(storage_err);
     log_init_result("terminal_bridge", terminal_bridge_start());
     const esp_err_t config_err = storage_load_config(&config);
     if (config_err != ESP_OK && config_err != ESP_ERR_STORAGE_CONFIG_CORRUPT) {

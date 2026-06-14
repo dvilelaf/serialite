@@ -264,7 +264,7 @@ static void set_secret_labels(bool reveal)
     if (s_ctx.secret_hint_label != NULL) {
         lv_label_set_text(
             s_ctx.secret_hint_label,
-            reveal ? "Secrets visible for 30s" : "Press BOOT to reveal secrets");
+            reveal ? "Secrets visible for 30s" : "BOOT reveal. Hold 3s lock web. Hold 10s reset.");
         lv_obj_set_style_text_color(
             s_ctx.secret_hint_label,
             reveal ? lv_color_hex(0xffd37a) : lv_color_hex(0x6b8f85),

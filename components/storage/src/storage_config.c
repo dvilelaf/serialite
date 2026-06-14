@@ -76,6 +76,40 @@ bool storage_config_secret_persistence_allowed(bool nvs_encryption_enabled)
     return nvs_encryption_enabled;
 }
 
+bool storage_config_should_scrub_legacy_plaintext_secrets(bool nvs_encryption_enabled)
+{
+    return !nvs_encryption_enabled;
+}
+
+bool storage_config_scrub_legacy_plaintext_secrets(
+    bool nvs_encryption_enabled,
+    storage_secret_erase_fn_t erase_fn,
+    storage_secret_commit_fn_t commit_fn,
+    void *ctx)
+{
+    if (!storage_config_should_scrub_legacy_plaintext_secrets(nvs_encryption_enabled)) {
+        return true;
+    }
+    if (erase_fn == NULL || commit_fn == NULL) {
+        return false;
+    }
+
+    bool changed = false;
+    const storage_secret_erase_result_t ssid_result = erase_fn(STORAGE_SECRET_KEY_SSID, ctx);
+    if (ssid_result == STORAGE_SECRET_ERASE_ERROR) {
+        return false;
+    }
+    changed = changed || ssid_result == STORAGE_SECRET_ERASED;
+
+    const storage_secret_erase_result_t password_result = erase_fn(STORAGE_SECRET_KEY_PASSWORD, ctx);
+    if (password_result == STORAGE_SECRET_ERASE_ERROR) {
+        return false;
+    }
+    changed = changed || password_result == STORAGE_SECRET_ERASED;
+
+    return !changed || commit_fn(ctx);
+}
+
 void storage_secure_zero(void *ptr, size_t len)
 {
     if (ptr == NULL) {

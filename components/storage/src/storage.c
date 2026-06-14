@@ -16,6 +16,51 @@ static void storage_set_defaults(storage_config_t *config)
     config->font_size = 14;
 }
 
+typedef struct {
+    nvs_handle_t handle;
+    esp_err_t err;
+} storage_nvs_scrub_ctx_t;
+
+static storage_secret_erase_result_t erase_secret_key(storage_secret_key_t key, void *ctx)
+{
+    storage_nvs_scrub_ctx_t *scrub = (storage_nvs_scrub_ctx_t *)ctx;
+    const char *nvs_key = key == STORAGE_SECRET_KEY_SSID ? "ssid" : "password";
+    const esp_err_t err = nvs_erase_key(scrub->handle, nvs_key);
+    if (err == ESP_OK) {
+        return STORAGE_SECRET_ERASED;
+    }
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return STORAGE_SECRET_NOT_FOUND;
+    }
+    scrub->err = err;
+    return STORAGE_SECRET_ERASE_ERROR;
+}
+
+static bool commit_secret_scrub(void *ctx)
+{
+    storage_nvs_scrub_ctx_t *scrub = (storage_nvs_scrub_ctx_t *)ctx;
+    scrub->err = nvs_commit(scrub->handle);
+    return scrub->err == ESP_OK;
+}
+
+static esp_err_t scrub_legacy_plaintext_secrets(nvs_handle_t handle)
+{
+#if CONFIG_NVS_ENCRYPTION
+    const bool nvs_encryption_enabled = true;
+#else
+    const bool nvs_encryption_enabled = false;
+#endif
+    storage_nvs_scrub_ctx_t scrub = {
+        .handle = handle,
+        .err = ESP_OK,
+    };
+    return storage_config_scrub_legacy_plaintext_secrets(
+               nvs_encryption_enabled,
+               erase_secret_key,
+               commit_secret_scrub,
+               &scrub) ? ESP_OK : scrub.err;
+}
+
 esp_err_t storage_init(void)
 {
     nvs_handle_t handle;
@@ -24,8 +69,9 @@ esp_err_t storage_init(void)
         return err;
     }
 
+    err = scrub_legacy_plaintext_secrets(handle);
     nvs_close(handle);
-    return ESP_OK;
+    return err;
 }
 
 esp_err_t storage_load_config(storage_config_t *config)
