@@ -44,9 +44,9 @@ static const char *TAG = "lvgl_ui";
 #define UI_BOTTOM_Y (UI_MAIN_Y + UI_MAIN_H + UI_GAP)
 #define UI_BOTTOM_H (UI_LANDSCAPE_H - UI_BOTTOM_Y - UI_SCREEN_PAD)
 #define UI_CARD_PAD 12
-#define UI_SECRET_QR_SIZE 96
+#define UI_SECRET_QR_SIZE 120
 #define UI_SECRET_LEFT_W 150
-#define UI_SECRET_RIGHT_X 190
+#define UI_SECRET_RIGHT_X 172
 #define UI_ACCESS_CONTENT_W (UI_ACCESS_W - (UI_CARD_PAD * 2))
 #define UI_STATUS_CONTENT_W (UI_STATUS_W - (UI_CARD_PAD * 2))
 #define UI_BOTTOM_CONTENT_W (UI_LANDSCAPE_W - (UI_SCREEN_PAD * 2) - (UI_CARD_PAD * 2))
@@ -329,7 +329,7 @@ static void set_secret_labels(bool reveal)
         if (reveal && secret_display_reveal_hint(SECRET_REVEAL_TIMEOUT_US / 1000ULL, text, sizeof(text))) {
             lv_label_set_text(s_ctx.secret_hint_label, text);
         } else {
-            lv_label_set_text(s_ctx.secret_hint_label, "Press BOOT to reveal");
+            lv_label_set_text(s_ctx.secret_hint_label, "");
         }
         lv_obj_set_style_text_color(
             s_ctx.secret_hint_label,
@@ -532,18 +532,18 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     s_ctx.error_status_label = add_value(status_card, "", &lv_font_montserrat_20, lv_color_hex(UI_COLOR_WARN), 116, UI_STATUS_CONTENT_W);
 
     lv_obj_t *secrets = add_card(screen, UI_SCREEN_PAD, UI_BOTTOM_Y, UI_LANDSCAPE_W - (UI_SCREEN_PAD * 2), UI_BOTTOM_H);
-    s_ctx.secret_hint_label = add_value(secrets, "Press BOOT: reveal 30s", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 0, UI_BOTTOM_CONTENT_W);
+    s_ctx.secret_hint_label = add_label(secrets, "", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 72);
+    lv_obj_set_pos(s_ctx.secret_hint_label, UI_BOTTOM_CONTENT_W - 72, 0);
 
-    add_value(secrets, "WiFi", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 26, UI_SECRET_LEFT_W);
     s_ctx.wifi_password_label = add_label(secrets, password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_SECRET_LEFT_W);
-    lv_obj_set_pos(s_ctx.wifi_password_label, UI_CARD_PAD, 52);
+    lv_obj_set_pos(s_ctx.wifi_password_label, UI_CARD_PAD, 54);
 
     s_ctx.wifi_qr = lv_qrcode_create(secrets);
     lv_qrcode_set_size(s_ctx.wifi_qr, UI_SECRET_QR_SIZE);
     lv_qrcode_set_dark_color(s_ctx.wifi_qr, lv_color_hex(0x000000));
     lv_qrcode_set_light_color(s_ctx.wifi_qr, lv_color_hex(0xffffff));
     lv_qrcode_set_quiet_zone(s_ctx.wifi_qr, true);
-    lv_obj_set_pos(s_ctx.wifi_qr, UI_CARD_PAD, 42);
+    lv_obj_set_pos(s_ctx.wifi_qr, UI_CARD_PAD, 8);
     lv_obj_add_flag(s_ctx.wifi_qr, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *web_title = add_label(secrets, "Web", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), UI_BOTTOM_CONTENT_W - UI_SECRET_RIGHT_X);
