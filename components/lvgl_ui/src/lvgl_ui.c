@@ -11,6 +11,7 @@
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "draw/sw/lv_draw_sw_utils.h"
 #include "lvgl.h"
 #include "terminal_bridge.h"
 #include <stdio.h>
@@ -64,10 +65,30 @@ static bool notify_flush_ready(esp_lcd_panel_io_handle_t panel_io,
 static void flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *px_map)
 {
     esp_lcd_panel_handle_t panel = (esp_lcd_panel_handle_t)lv_display_get_user_data(display);
+    lv_draw_sw_rgb565_swap(px_map, lv_area_get_size(area));
     esp_err_t err = esp_lcd_panel_draw_bitmap(panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "panel draw failed: %s", esp_err_to_name(err));
         lv_display_flush_ready(display);
+    }
+}
+
+static void rounder_cb(lv_event_t *event)
+{
+    lv_area_t *area = lv_event_get_invalidated_area(event);
+    if (area == NULL) {
+        return;
+    }
+
+    area->x1 = (area->x1 < 0) ? 0 : ((area->x1 >> 1) << 1);
+    area->y1 = (area->y1 < 0) ? 0 : ((area->y1 >> 1) << 1);
+    area->x2 = ((area->x2 >> 1) << 1) + 1;
+    area->y2 = ((area->y2 >> 1) << 1) + 1;
+    if (area->x2 >= BOARD_LCD_H_RES) {
+        area->x2 = BOARD_LCD_H_RES - 1;
+    }
+    if (area->y2 >= BOARD_LCD_V_RES) {
+        area->y2 = BOARD_LCD_V_RES - 1;
     }
 }
 
@@ -202,7 +223,7 @@ static void keyboard_event_cb(lv_event_t *event)
 static void add_quick_button(lv_obj_t *parent, const char *label, const char *payload)
 {
     lv_obj_t *button = lv_button_create(parent);
-    lv_obj_set_height(button, 34);
+    lv_obj_set_height(button, 40);
     lv_obj_set_style_bg_color(button, lv_color_hex(0x14392d), 0);
     lv_obj_set_style_border_color(button, lv_color_hex(0x2ee6b8), 0);
     lv_obj_set_style_border_width(button, 1, 0);
@@ -210,6 +231,7 @@ static void add_quick_button(lv_obj_t *parent, const char *label, const char *pa
 
     lv_obj_t *button_label = lv_label_create(button);
     lv_label_set_text(button_label, label);
+    lv_obj_set_style_text_font(button_label, &lv_font_montserrat_16, 0);
     lv_obj_center(button_label);
 }
 
@@ -250,8 +272,8 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     lv_obj_set_flex_flow(screen, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(screen, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
-    add_label(screen, "ESP32-KVM", &lv_font_montserrat_16, lv_color_hex(0x79ffd8));
-    add_label(screen, "Consola de rescate local", &lv_font_montserrat_16, lv_color_hex(0xd8fff4));
+    add_label(screen, "KVM", &lv_font_montserrat_28, lv_color_hex(0x79ffd8));
+    add_label(screen, "Consola de rescate", &lv_font_montserrat_20, lv_color_hex(0xd8fff4));
 
     lv_obj_t *card = lv_obj_create(screen);
     lv_obj_set_width(card, BOARD_LCD_H_RES - 28);
@@ -261,27 +283,27 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     lv_obj_set_style_border_width(card, 1, 0);
     lv_obj_set_style_radius(card, 14, 0);
     lv_obj_set_style_pad_all(card, 12, 0);
-    lv_obj_set_style_margin_top(card, 12, 0);
+    lv_obj_set_style_margin_top(card, 8, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
 
     char line[128];
-    snprintf(line, sizeof(line), "WiFi AP: %s", ssid);
-    add_label(card, line, &lv_font_montserrat_16, lv_color_hex(0xffffff));
-    snprintf(line, sizeof(line), "Password: %s", password);
-    add_label(card, line, &lv_font_montserrat_16, lv_color_hex(0xffffff));
-    snprintf(line, sizeof(line), "Web: http://%s", ip_addr);
-    add_label(card, line, &lv_font_montserrat_16, lv_color_hex(0xb9ffe9));
+    snprintf(line, sizeof(line), "AP: %s", ssid);
+    add_label(card, line, &lv_font_montserrat_20, lv_color_hex(0xffffff));
+    snprintf(line, sizeof(line), "Pass: %s", password);
+    add_label(card, line, &lv_font_montserrat_20, lv_color_hex(0xffffff));
+    snprintf(line, sizeof(line), "http://%s", ip_addr);
+    add_label(card, line, &lv_font_montserrat_20, lv_color_hex(0xb9ffe9));
     snprintf(line, sizeof(line), "USB: %s", status->usb_connected ? "conectado" : "desconectado");
     add_label(card, line, &lv_font_montserrat_16, lv_color_hex(0xffd37a));
 
     add_label(screen,
-              "La password solo se muestra localmente. No se escribe en logs ni en NVS sin cifrado.",
+              "Password local temporal. No se escribe en logs.",
               &lv_font_montserrat_16,
               lv_color_hex(0x9fb8b0));
 
     lv_obj_t *terminal_box = lv_obj_create(screen);
     lv_obj_set_width(terminal_box, BOARD_LCD_H_RES - 28);
-    lv_obj_set_height(terminal_box, 120);
+    lv_obj_set_height(terminal_box, 126);
     lv_obj_set_style_bg_color(terminal_box, lv_color_hex(0x020604), 0);
     lv_obj_set_style_border_color(terminal_box, lv_color_hex(0x1f8f75), 0);
     lv_obj_set_style_border_width(terminal_box, 1, 0);
@@ -290,14 +312,14 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
 
     s_ctx.terminal_label = lv_label_create(terminal_box);
     lv_obj_set_width(s_ctx.terminal_label, BOARD_LCD_H_RES - 54);
-    lv_obj_set_style_text_font(s_ctx.terminal_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_ctx.terminal_label, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(s_ctx.terminal_label, lv_color_hex(0xd8fff4), 0);
     lv_label_set_long_mode(s_ctx.terminal_label, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_ctx.terminal_label, "[terminal local listo]\n");
 
     lv_obj_t *quick_row = lv_obj_create(screen);
     lv_obj_set_width(quick_row, BOARD_LCD_H_RES - 28);
-    lv_obj_set_height(quick_row, 46);
+    lv_obj_set_height(quick_row, 52);
     lv_obj_set_style_bg_opa(quick_row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(quick_row, 0, 0);
     lv_obj_set_style_pad_all(quick_row, 0, 0);
@@ -310,7 +332,7 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
 
     lv_obj_t *input_row = lv_obj_create(screen);
     lv_obj_set_width(input_row, BOARD_LCD_H_RES - 28);
-    lv_obj_set_height(input_row, 46);
+    lv_obj_set_height(input_row, 50);
     lv_obj_set_style_bg_opa(input_row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(input_row, 0, 0);
     lv_obj_set_style_pad_all(input_row, 0, 0);
@@ -319,6 +341,7 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     s_ctx.input_area = lv_textarea_create(input_row);
     lv_obj_set_width(s_ctx.input_area, BOARD_LCD_H_RES - 104);
     lv_obj_set_height(s_ctx.input_area, 42);
+    lv_obj_set_style_text_font(s_ctx.input_area, &lv_font_montserrat_16, 0);
     lv_textarea_set_one_line(s_ctx.input_area, true);
     lv_textarea_set_placeholder_text(s_ctx.input_area, "comando");
 
@@ -328,11 +351,12 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     lv_obj_add_event_cb(send_button, send_input_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *send_label = lv_label_create(send_button);
     lv_label_set_text(send_label, "Send");
+    lv_obj_set_style_text_font(send_label, &lv_font_montserrat_16, 0);
     lv_obj_center(send_label);
 
     lv_obj_t *keyboard = lv_keyboard_create(screen);
     lv_obj_set_width(keyboard, BOARD_LCD_H_RES - 28);
-    lv_obj_set_height(keyboard, 132);
+    lv_obj_set_height(keyboard, 118);
     lv_keyboard_set_textarea(keyboard, s_ctx.input_area);
     lv_obj_add_event_cb(keyboard, keyboard_event_cb, LV_EVENT_READY, NULL);
 
@@ -378,6 +402,7 @@ esp_err_t lvgl_ui_start(const lvgl_ui_boot_status_t *status)
         BOARD_LCD_H_RES * LVGL_BUF_LINES * sizeof(lv_color_t),
         LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(display, flush_cb);
+    lv_display_add_event_cb(display, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
 
     esp_lcd_touch_handle_t touch = NULL;
     esp_err_t touch_err = board_waveshare_amoled_new_touch(&touch);

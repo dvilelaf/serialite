@@ -18,7 +18,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 ## Seguridad
 
 - No hay password AP fija de fábrica.
-- La password efímera no se escribe en logs.
+- La password efímera usa cuatro palabras inglesas aleatorias y no se escribe en logs.
 - La password se muestra solo en pantalla local.
 - Si la password es efímera y la pantalla no inicializa, el AP no arranca.
 - `storage_save_config()` rechaza guardar credenciales WiFi si `CONFIG_NVS_ENCRYPTION` no está activo.
@@ -49,7 +49,7 @@ idf.py -p /dev/ttyACM0 monitor
 ## Uso
 
 1. Flashea la placa.
-2. Lee en la AMOLED el SSID `ESP32-KVM-...` y la password.
+2. Lee en la AMOLED el SSID `KVM` y la password temporal de cuatro palabras.
 3. Conéctate al AP desde móvil o portátil.
 4. Abre `http://192.168.4.1`.
 5. Usa `/terminal` para la terminal web.

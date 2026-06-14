@@ -1,7 +1,6 @@
 #include "esp_err.h"
 #include "esp_check.h"
 #include "esp_log.h"
-#include "esp_mac.h"
 #include "esp_random.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
@@ -16,6 +15,50 @@
 #include "wifi_ap.h"
 
 static const char *TAG = "esp32_kvm";
+
+static const char *const PASSWORD_WORDS[] = {
+    "amber", "anchor", "apple", "artist", "atlas", "autumn", "badge", "baker",
+    "bamboo", "beacon", "beaver", "berry", "bison", "blossom", "border", "bottle",
+    "bridge", "bronze", "bucket", "butter", "cactus", "camera", "candle", "canyon",
+    "castle", "cedar", "celery", "cement", "cherry", "circle", "clover", "cobalt",
+    "coffee", "comet", "copper", "cotton", "cradle", "cricket", "crystal", "daisy",
+    "dakota", "delta", "desert", "diamond", "dolphin", "dragon", "drift", "eagle",
+    "earth", "echo", "ember", "engine", "falcon", "farm", "feather", "ferry",
+    "field", "forest", "fossil", "garden", "ginger", "glacier", "golden", "grape",
+    "harbor", "hazel", "helmet", "hollow", "honest", "horizon", "island", "ivory",
+    "jacket", "jaguar", "jasmine", "jigsaw", "juniper", "kernel", "kettle", "kiwi",
+    "ladder", "lagoon", "lantern", "laser", "lemon", "linen", "lizard", "magnet",
+    "maple", "marble", "market", "meadow", "melon", "meteor", "mirror", "misty",
+    "monkey", "museum", "nectar", "needle", "nickel", "oasis", "olive", "orange",
+    "orbit", "orchid", "otter", "oxygen", "paddle", "paper", "parrot", "pebble",
+    "pepper", "pickle", "planet", "pocket", "prairie", "quartz", "rabbit", "radar",
+    "raven", "record", "river", "rocket", "saddle", "saffron", "sailor", "salmon",
+    "saturn", "shadow", "silver", "signal", "sketch", "socket", "sparrow", "spider",
+    "spring", "square", "stable", "station", "stone", "summer", "sunset", "tackle",
+    "tango", "temple", "ticket", "timber", "tomato", "tunnel", "turkey", "turtle",
+    "velvet", "violet", "voyage", "walnut", "wander", "window", "winter", "wizard",
+    "yellow", "yonder", "zephyr", "zigzag", "acorn", "banana", "basket", "button",
+    "carbon", "carrot", "cobalt", "coral", "denim", "donkey", "fabric", "finger",
+    "flower", "galaxy", "garage", "garlic", "goblin", "granite", "hammer", "hazard",
+    "icicle", "insect", "jungle", "kitten", "koala", "legend", "little", "lobster",
+    "lunar", "memory", "mineral", "muffin", "napkin", "native", "noodle", "number",
+    "onion", "opal", "palace", "pencil", "pepper", "person", "pigeon", "pirate",
+    "plasma", "potato", "puzzle", "quiver", "ribbon", "robot", "salsa", "school",
+    "season", "shrimp", "simple", "singer", "smoke", "snow", "spirit", "sponge",
+    "staple", "studio", "sugar", "switch", "tablet", "thunder", "tiger", "toast",
+    "topaz", "travel", "triple", "trumpet", "velcro", "vendor", "vessel", "walrus",
+    "water", "whisper", "willow", "winner", "yogurt", "zebra", "zenith", "zipper",
+    "almond", "arcade", "arctic", "balance", "beetle", "breeze", "broker", "canvas",
+    "casino", "citron", "cookie", "cosmic", "cotton", "damage", "dinner", "doodle",
+    "effect", "fabric", "famous", "folder", "gentle", "glider", "guitar", "honor",
+    "ignite", "jumper", "kingdom", "letter", "marine", "motion", "nectar", "pepper",
+    "public", "random", "remote", "rescue", "sample", "secure", "server", "socket",
+    "system", "tandem", "urgent", "vector", "vision", "volume", "writer", "zodiac",
+};
+
+enum {
+    PASSWORD_WORD_COUNT = sizeof(PASSWORD_WORDS) / sizeof(PASSWORD_WORDS[0]),
+};
 
 static void log_init_result(const char *name, esp_err_t err)
 {
@@ -51,28 +94,21 @@ static esp_err_t generate_ephemeral_wifi_config(kvm_wifi_ap_config_t *config)
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint8_t mac[6] = {0};
-    ESP_RETURN_ON_ERROR(esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP), TAG, "read softap mac failed");
+    strlcpy(config->ssid, "KVM", sizeof(config->ssid));
 
-    uint8_t random_bytes[12] = {0};
-    esp_fill_random(random_bytes, sizeof(random_bytes));
-
-    const int ssid_len = snprintf(
-        config->ssid,
-        sizeof(config->ssid),
-        "ESP32-KVM-%02X%02X%02X",
-        mac[3],
-        mac[4],
-        mac[5]);
-    if (ssid_len < 0 || ssid_len >= (int)sizeof(config->ssid)) {
+    uint32_t word_indexes[4] = {0};
+    esp_fill_random(word_indexes, sizeof(word_indexes));
+    const int password_len = snprintf(
+        config->password,
+        sizeof(config->password),
+        "%s-%s-%s-%s",
+        PASSWORD_WORDS[word_indexes[0] % PASSWORD_WORD_COUNT],
+        PASSWORD_WORDS[word_indexes[1] % PASSWORD_WORD_COUNT],
+        PASSWORD_WORDS[word_indexes[2] % PASSWORD_WORD_COUNT],
+        PASSWORD_WORDS[word_indexes[3] % PASSWORD_WORD_COUNT]);
+    if (password_len < 0 || password_len >= (int)sizeof(config->password)) {
         return ESP_ERR_INVALID_SIZE;
     }
-
-    static const char alphabet[] = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-    for (size_t i = 0; i < sizeof(random_bytes); i++) {
-        config->password[i] = alphabet[random_bytes[i] % (sizeof(alphabet) - 1)];
-    }
-    config->password[sizeof(random_bytes)] = '\0';
     config->channel = 6;
     config->max_clients = 4;
 
