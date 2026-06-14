@@ -20,9 +20,39 @@ static bool deterministic_random(uint8_t *buf, size_t len, void *ctx)
     return true;
 }
 
-static void test_human_password_uses_four_words(void)
+struct u32_sequence {
+    const uint32_t *values;
+    size_t count;
+    size_t offset;
+    size_t calls;
+};
+
+static bool u32_sequence_random(uint8_t *buf, size_t len, void *ctx)
 {
-    char password[64];
+    struct u32_sequence *sequence = (struct u32_sequence *)ctx;
+    CHECK(len == sizeof(uint32_t));
+    CHECK(sequence->offset < sequence->count);
+
+    const uint32_t value = sequence->values[sequence->offset++];
+    sequence->calls++;
+    buf[0] = (uint8_t)(value & 0xffU);
+    buf[1] = (uint8_t)((value >> 8) & 0xffU);
+    buf[2] = (uint8_t)((value >> 16) & 0xffU);
+    buf[3] = (uint8_t)((value >> 24) & 0xffU);
+    return true;
+}
+
+static bool failing_random(uint8_t *buf, size_t len, void *ctx)
+{
+    (void)buf;
+    (void)len;
+    (void)ctx;
+    return false;
+}
+
+static void test_human_password_uses_six_words(void)
+{
+    char password[128];
     uint8_t counter = 0;
 
     CHECK(credentials_generate_human_password(password, sizeof(password), deterministic_random, &counter) == CREDENTIALS_OK);
@@ -34,8 +64,60 @@ static void test_human_password_uses_four_words(void)
         }
     }
     CHECK(separators == CREDENTIALS_PASSWORD_WORD_COUNT - 1);
-    CHECK(strlen(password) >= 20);
-    CHECK(strlen(password) <= 32);
+    CHECK(CREDENTIALS_PASSWORD_WORD_COUNT == 6U);
+}
+
+static void test_human_password_uses_eff_large_wordlist_endpoints(void)
+{
+    char password[128];
+    const uint32_t values[] = {0U, 7775U, 0U, 0U, 0U, 0U};
+    struct u32_sequence sequence = {
+        .values = values,
+        .count = sizeof(values) / sizeof(values[0]),
+    };
+
+    CHECK(credentials_generate_human_password(password, sizeof(password), u32_sequence_random, &sequence) == CREDENTIALS_OK);
+    CHECK(strncmp(password, "abacus-zoom-abacus-", strlen("abacus-zoom-abacus-")) == 0);
+}
+
+static void test_human_password_rejects_out_of_range_random_values(void)
+{
+    char password[128];
+    const uint32_t values[] = {
+        UINT32_MAX, 0U,
+        UINT32_MAX, 0U,
+        UINT32_MAX, 0U,
+        UINT32_MAX, 0U,
+        UINT32_MAX, 0U,
+        UINT32_MAX, 0U,
+    };
+    struct u32_sequence sequence = {
+        .values = values,
+        .count = sizeof(values) / sizeof(values[0]),
+    };
+
+    CHECK(credentials_generate_human_password(password, sizeof(password), u32_sequence_random, &sequence) == CREDENTIALS_OK);
+    CHECK(strcmp(password, "abacus-abacus-abacus-abacus-abacus-abacus") == 0);
+    CHECK(sequence.calls == 12U);
+}
+
+static void test_human_password_random_failure_propagates(void)
+{
+    char password[128];
+
+    CHECK(credentials_generate_human_password(password, sizeof(password), failing_random, NULL) == CREDENTIALS_ERR_RANDOM_FAILED);
+}
+
+static void test_human_password_output_too_small_fails(void)
+{
+    char password[8];
+    const uint32_t values[] = {0U, 0U, 0U, 0U, 0U, 0U};
+    struct u32_sequence sequence = {
+        .values = values,
+        .count = sizeof(values) / sizeof(values[0]),
+    };
+
+    CHECK(credentials_generate_human_password(password, sizeof(password), u32_sequence_random, &sequence) == CREDENTIALS_ERR_OUTPUT_TOO_SMALL);
 }
 
 static void test_rotation_requires_local_display_and_safe_persistence(void)
@@ -55,7 +137,11 @@ static void test_rotation_policy_names_are_stable(void)
 
 int main(void)
 {
-    test_human_password_uses_four_words();
+    test_human_password_uses_six_words();
+    test_human_password_uses_eff_large_wordlist_endpoints();
+    test_human_password_rejects_out_of_range_random_values();
+    test_human_password_random_failure_propagates();
+    test_human_password_output_too_small_fails();
     test_rotation_requires_local_display_and_safe_persistence();
     test_rotation_policy_names_are_stable();
     return 0;

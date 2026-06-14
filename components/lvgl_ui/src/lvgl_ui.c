@@ -69,7 +69,6 @@ typedef struct {
     lv_obj_t *battery_label;
     lv_obj_t *wifi_password_label;
     lv_obj_t *web_password_label;
-    lv_obj_t *pairing_code_label;
     lv_obj_t *ssid_label;
     lv_obj_t *secret_hint_label;
     lv_obj_t *usb_status_label;
@@ -78,8 +77,6 @@ typedef struct {
     lv_obj_t *error_status_label;
     char wifi_password[96];
     char web_password[96];
-    char pairing_code[16];
-    char pairing_status[32];
     uint16_t *rotate_buf;
     SemaphoreHandle_t mutex;
     int64_t last_activity_us;
@@ -295,13 +292,6 @@ static void set_secret_labels(bool reveal)
         secret_display_text(s_ctx.web_password, reveal, text, sizeof(text))) {
         lv_label_set_text(s_ctx.web_password_label, text);
     }
-    if (s_ctx.pairing_code_label != NULL) {
-        if (s_ctx.pairing_code[0] == '\0' && s_ctx.pairing_status[0] != '\0') {
-            lv_label_set_text(s_ctx.pairing_code_label, s_ctx.pairing_status);
-        } else if (secret_display_text(s_ctx.pairing_code, reveal, text, sizeof(text))) {
-            lv_label_set_text(s_ctx.pairing_code_label, text);
-        }
-    }
     if (s_ctx.secret_hint_label != NULL) {
         if (reveal && secret_display_reveal_hint(SECRET_REVEAL_TIMEOUT_US / 1000ULL, text, sizeof(text))) {
             lv_label_set_text(s_ctx.secret_hint_label, text);
@@ -454,7 +444,6 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     const char *ssid = status->ssid != NULL ? status->ssid : "(sin ssid)";
     const char *password = status->password != NULL ? status->password : "(sin password)";
     const char *web_password = status->web_password != NULL ? status->web_password : "(sin web password)";
-    const char *pairing_code = status->pairing_code != NULL ? status->pairing_code : "(sin pairing)";
     const char *https_fingerprint = status->https_fingerprint != NULL ? status->https_fingerprint : "";
     const char *web_url = status->web_url != NULL ? status->web_url : "";
     const char *ip_addr = status->ip_addr != NULL ? status->ip_addr : "192.168.4.1";
@@ -520,13 +509,8 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     s_ctx.web_password_label = add_label(secrets, web_password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_BOTTOM_CONTENT_W - 58);
     lv_obj_set_pos(s_ctx.web_password_label, 58, 62);
 
-    add_value(secrets, "Pair", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 96, 44);
-    s_ctx.pairing_code_label = add_label(secrets, pairing_code, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_BOTTOM_CONTENT_W - 58);
-    lv_obj_set_pos(s_ctx.pairing_code_label, 58, 96);
     strlcpy(s_ctx.wifi_password, password, sizeof(s_ctx.wifi_password));
     strlcpy(s_ctx.web_password, web_password, sizeof(s_ctx.web_password));
-    strlcpy(s_ctx.pairing_code, pairing_code, sizeof(s_ctx.pairing_code));
-    s_ctx.pairing_status[0] = '\0';
     set_secret_labels(false);
 
     lv_screen_load(screen);
@@ -631,13 +615,8 @@ esp_err_t lvgl_ui_update_credentials(const lvgl_ui_boot_status_t *status, bool r
     const char *ssid = status->ssid != NULL ? status->ssid : "";
     const char *password = status->password != NULL ? status->password : "";
     const char *web_password = status->web_password != NULL ? status->web_password : "";
-    const char *pairing_code = status->pairing_code != NULL ? status->pairing_code : "";
     strlcpy(s_ctx.wifi_password, password, sizeof(s_ctx.wifi_password));
     strlcpy(s_ctx.web_password, web_password, sizeof(s_ctx.web_password));
-    if (pairing_code[0] != '\0') {
-        strlcpy(s_ctx.pairing_code, pairing_code, sizeof(s_ctx.pairing_code));
-        s_ctx.pairing_status[0] = '\0';
-    }
     if (s_ctx.ssid_label != NULL && ssid[0] != '\0') {
         lv_label_set_text(s_ctx.ssid_label, ssid);
     }
@@ -645,25 +624,6 @@ esp_err_t lvgl_ui_update_credentials(const lvgl_ui_boot_status_t *status, bool r
         reveal_secrets_temporarily(esp_timer_get_time());
     } else {
         set_secret_labels(false);
-    }
-
-    unlock_lvgl();
-    return ESP_OK;
-}
-
-esp_err_t lvgl_ui_set_pairing_status(const char *status_text)
-{
-    ESP_RETURN_ON_FALSE(status_text != NULL, ESP_ERR_INVALID_ARG, TAG, "pairing status is required");
-    ESP_RETURN_ON_FALSE(s_ctx.running && s_ctx.mutex != NULL, ESP_ERR_INVALID_STATE, TAG, "lvgl is not running");
-
-    if (!lock_lvgl(1000)) {
-        return ESP_ERR_TIMEOUT;
-    }
-
-    memset(s_ctx.pairing_code, 0, sizeof(s_ctx.pairing_code));
-    strlcpy(s_ctx.pairing_status, status_text, sizeof(s_ctx.pairing_status));
-    if (s_ctx.pairing_code_label != NULL) {
-        lv_label_set_text(s_ctx.pairing_code_label, s_ctx.pairing_status);
     }
 
     unlock_lvgl();

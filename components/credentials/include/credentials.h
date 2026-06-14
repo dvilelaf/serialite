@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #define CREDENTIALS_ROTATED_REVEAL_MS 120000ULL
-#define CREDENTIALS_PASSWORD_WORD_COUNT 4U
+#define CREDENTIALS_PASSWORD_WORD_COUNT 6U
 
 typedef bool (*credentials_random_fn_t)(uint8_t *buf, size_t len, void *ctx);
 

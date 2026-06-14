@@ -18,7 +18,6 @@ idf_component_register(
         app_watchdog
         credentials
         demo_serial
-        local_pairing
         diagnostics_export
         event_log
         esp_app_format

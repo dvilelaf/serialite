@@ -20,18 +20,11 @@ typedef esp_err_t (*web_server_rotate_credentials_fn_t)(
     const web_server_credential_rotation_t *rotation,
     void *ctx);
 
-typedef enum {
-    WEB_SERVER_PAIRING_CONSUMED = 0,
-    WEB_SERVER_PAIRING_LOCKED,
-} web_server_pairing_event_t;
-
-typedef void (*web_server_pairing_event_fn_t)(web_server_pairing_event_t event, void *ctx);
 typedef esp_err_t (*web_server_export_config_fn_t)(char *out, size_t out_size, void *ctx);
 typedef esp_err_t (*web_server_import_config_fn_t)(const char *json, void *ctx);
 
 typedef struct {
     const char *web_password;
-    const char *pairing_code;
     const uint8_t *web_password_salt;
     const uint8_t *web_password_hash;
     bool web_password_hash_configured;
@@ -39,8 +32,6 @@ typedef struct {
     bool tls_fingerprint_displayed_locally;
     web_server_rotate_credentials_fn_t rotate_credentials;
     void *rotate_credentials_ctx;
-    web_server_pairing_event_fn_t pairing_event;
-    void *pairing_event_ctx;
     web_server_export_config_fn_t export_config;
     web_server_import_config_fn_t import_config;
     void *config_ctx;

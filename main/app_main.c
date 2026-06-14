@@ -14,7 +14,6 @@
 #include "config_transfer.h"
 #include "credentials.h"
 #include "local_tls_identity.h"
-#include "local_pairing.h"
 #include "lvgl_ui.h"
 #include "network_identity.h"
 #include "ota_update.h"
@@ -169,15 +168,6 @@ static esp_err_t generate_human_password(char *out, size_t out_size)
     return result == CREDENTIALS_ERR_RANDOM_FAILED ? ESP_FAIL : ESP_ERR_INVALID_ARG;
 }
 
-static esp_err_t generate_pairing_code(char out[LOCAL_PAIRING_CODE_BUF_LEN])
-{
-    const local_pairing_result_t result = local_pairing_generate_code(out, credentials_random, NULL);
-    if (result == LOCAL_PAIRING_OK) {
-        return ESP_OK;
-    }
-    return result == LOCAL_PAIRING_ERR_RANDOM_FAILED ? ESP_FAIL : ESP_ERR_INVALID_ARG;
-}
-
 #if CONFIG_ESP32_KVM_BLE_PROVISIONING_ENABLE
 static bool ble_radio_not_implemented_start(uint32_t advertising_window_seconds, void *ctx)
 {
@@ -297,20 +287,6 @@ static esp_err_t rotate_credentials_cb(const web_server_credential_rotation_t *r
     return ESP_OK;
 }
 
-static void pairing_event_cb(web_server_pairing_event_t event, void *ctx)
-{
-    app_credentials_context_t *state = (app_credentials_context_t *)ctx;
-    if (state == NULL || !state->ui_ready) {
-        return;
-    }
-
-    const char *status = event == WEB_SERVER_PAIRING_LOCKED ? "Locked" : "Used";
-    const esp_err_t err = lvgl_ui_set_pairing_status(status);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "pairing status update failed: %s", esp_err_to_name(err));
-    }
-}
-
 static esp_err_t export_config_cb(char *out, size_t out_size, void *ctx)
 {
     app_credentials_context_t *state = (app_credentials_context_t *)ctx;
@@ -428,8 +404,6 @@ void app_main(void)
         strlcpy(web_password, "stored - use rotated password", sizeof(web_password));
     }
 
-    char pairing_code[LOCAL_PAIRING_CODE_BUF_LEN] = {0};
-    ESP_ERROR_CHECK(generate_pairing_code(pairing_code));
     bool tls_ready = false;
 #if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
     const local_tls_identity_result_t tls_result = local_tls_identity_generate(
@@ -447,7 +421,6 @@ void app_main(void)
         .ssid = mapped_wifi_config.ssid,
         .password = mapped_wifi_config.password,
         .web_password = web_password,
-        .pairing_code = pairing_code,
         .https_fingerprint =
 #if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
             tls_ready ? s_tls_identity.fingerprint_text : NULL,
@@ -473,7 +446,6 @@ void app_main(void)
         ESP_LOGE(TAG, "AP skipped: ephemeral password cannot be safely exposed without local display");
         storage_secure_zero(mapped_wifi_config.password, sizeof(mapped_wifi_config.password));
         storage_secure_zero(web_password, sizeof(web_password));
-        storage_secure_zero(pairing_code, sizeof(pairing_code));
 #if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
         local_tls_identity_zeroize(&s_tls_identity);
 #endif
@@ -501,11 +473,8 @@ void app_main(void)
                 NULL,
 #endif
             .tls_fingerprint_displayed_locally = tls_ready && s_credentials_ctx.ui_ready,
-            .pairing_code = pairing_code,
             .rotate_credentials = rotate_credentials_cb,
             .rotate_credentials_ctx = &s_credentials_ctx,
-            .pairing_event = pairing_event_cb,
-            .pairing_event_ctx = &s_credentials_ctx,
             .export_config = export_config_cb,
             .import_config = import_config_cb,
             .config_ctx = &s_credentials_ctx,
@@ -515,7 +484,6 @@ void app_main(void)
         local_tls_identity_zeroize(&s_tls_identity);
 #endif
         storage_secure_zero(web_password, sizeof(web_password));
-        storage_secure_zero(pairing_code, sizeof(pairing_code));
         log_init_result("web_server", web_err);
         const web_server_status_t web_status = web_server_get_status();
         const web_transport_t web_transport = web_transport_from_status(web_err == ESP_OK && web_status.started, web_status.tls_active);
@@ -549,7 +517,6 @@ void app_main(void)
         local_tls_identity_zeroize(&s_tls_identity);
 #endif
         storage_secure_zero(web_password, sizeof(web_password));
-        storage_secure_zero(pairing_code, sizeof(pairing_code));
         ESP_LOGE(TAG, "web_server skipped because AP did not start");
     }
 }
