@@ -18,6 +18,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - Mantener `BOOT` durante 10 segundos borra la configuración NVS del proyecto y reinicia con credenciales efímeras nuevas.
 - Servidor HTTP con página de estado y terminal web en `/terminal`.
 - Terminal web móvil con barra de estado fija, estados `Read-only`/`Write active`/`Writer busy`/`USB disconnected`/`Locked` y teclas táctiles rápidas.
+- La vista web filtra secuencias ANSI/OSC básicas para que logs de arranque con color o control de cursor no ensucien el terminal.
 - Endpoint autenticado `/about` con versión, límites del producto y resumen de seguridad local.
 - WebSocket en `/ws`.
 - Diagnóstico local autenticado en `/diagnostics` y export JSON en `/diagnostics.json`.

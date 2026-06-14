@@ -8,7 +8,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
 
 ## Must-Have
 
-- [ ] Terminal web robusta.
+- [x] Terminal web robusta.
   Criterio: soporta ANSI básico, reconexión automática, copy/paste, latencia baja y no bloquea si el cliente o USB se atascan.
 - [x] Backpressure y límites de buffers en el puente serial.
   Criterio: los buffers tienen tamaño acotado, contadores de drops y no provocan deadlocks.

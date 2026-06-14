@@ -24,6 +24,7 @@
 #include "usb_console.h"
 #include "web_input_policy.h"
 #include "web_security.h"
+#include "web_terminal_ansi.h"
 #include "web_terminal_contract.h"
 #include "wifi_ap.h"
 #include <stdlib.h>
@@ -54,6 +55,7 @@ static int s_ws_fds[WEB_MAX_WS_CLIENTS];
 static QueueHandle_t s_tx_queue;
 static TaskHandle_t s_web_tx_task;
 static TaskHandle_t s_ap_guard_task;
+static web_terminal_ansi_state_t s_web_ansi_state;
 static web_security_state_t s_security;
 static web_input_policy_state_t s_input_policy;
 static ap_exposure_policy_state_t s_ap_exposure_policy;
@@ -501,17 +503,17 @@ static void bridge_output_cb(const uint8_t *data, size_t len, void *ctx)
     size_t offset = 0;
     while (offset < len) {
         web_tx_chunk_t chunk = {0};
-        chunk.len = len - offset;
-        if (chunk.len > WEB_TX_CHUNK_MAX) {
-            chunk.len = WEB_TX_CHUNK_MAX;
+        const size_t input_len = (len - offset) > WEB_TX_CHUNK_MAX ? WEB_TX_CHUNK_MAX : (len - offset);
+        chunk.len = web_terminal_ansi_filter(&s_web_ansi_state, data + offset, input_len, chunk.data, sizeof(chunk.data));
+        offset += input_len;
+        if (chunk.len == 0) {
+            continue;
         }
-        memcpy(chunk.data, data + offset, chunk.len);
         if (xQueueSend(s_tx_queue, &chunk, 0) != pdTRUE) {
             ESP_LOGW(TAG, "websocket tx queue full; dropped %u bytes", (unsigned)(len - offset));
             event_log_append(EVENT_LOG_WARN, now_ms(), "websocket tx queue full");
             return;
         }
-        offset += chunk.len;
     }
 }
 
@@ -544,13 +546,20 @@ static void send_scrollback_to_ws_client(int fd)
     if (len == 0) {
         return;
     }
+    uint8_t filtered[1024];
+    web_terminal_ansi_state_t ansi_state;
+    web_terminal_ansi_init(&ansi_state);
+    const size_t filtered_len = web_terminal_ansi_filter(&ansi_state, snapshot, len, filtered, sizeof(filtered));
+    if (filtered_len == 0) {
+        return;
+    }
 
     size_t offset = 0;
-    while (offset < len) {
+    while (offset < filtered_len) {
         httpd_ws_frame_t frame = {
             .type = HTTPD_WS_TYPE_BINARY,
-            .payload = snapshot + offset,
-            .len = len - offset,
+            .payload = filtered + offset,
+            .len = filtered_len - offset,
         };
         if (frame.len > WEB_SCROLLBACK_SEND_CHUNK_MAX) {
             frame.len = WEB_SCROLLBACK_SEND_CHUNK_MAX;
@@ -1223,6 +1232,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         TAG,
         "invalid web auth config");
     web_input_policy_init(&s_input_policy);
+    web_terminal_ansi_init(&s_web_ansi_state);
     ap_exposure_policy_init(&s_ap_exposure_policy);
     http_rate_limit_init(&s_http_rate_limit);
     s_http_rate_limit_lock = xSemaphoreCreateMutexStatic(&s_http_rate_limit_lock_storage);
