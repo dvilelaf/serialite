@@ -491,10 +491,8 @@ static void emergency_lock_work(void *arg)
 static void web_tx_task(void *arg)
 {
     (void)arg;
-    app_watchdog_register_current_task("web_tx");
     web_tx_chunk_t chunk;
     while (true) {
-        app_watchdog_reset_current_task();
         if (xQueueReceive(s_tx_queue, &chunk, pdMS_TO_TICKS(1000)) != pdTRUE) {
             continue;
         }
@@ -541,9 +539,8 @@ static void ap_guard_task(void *arg)
             runtime_status_set_started(false);
             runtime_status_set_writer_active(false);
             if (err != ESP_OK) {
-                ESP_LOGE(TAG, "AP idle timeout stop failed: %s; restarting", esp_err_to_name(err));
-                event_log_append(EVENT_LOG_ERROR, now_ms(), "AP idle timeout stop failed; restarting");
-                esp_restart();
+                ESP_LOGE(TAG, "AP idle timeout stop failed: %s; keeping firmware alive", esp_err_to_name(err));
+                event_log_append(EVENT_LOG_ERROR, now_ms(), "AP idle timeout stop failed; firmware kept alive");
             }
         }
         vTaskDelay(pdMS_TO_TICKS(WEB_AP_GUARD_INTERVAL_MS));
@@ -2179,9 +2176,8 @@ esp_err_t web_server_emergency_lock(void)
         event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock queue failed; stopping AP");
         const esp_err_t stop_err = wifi_ap_stop();
         if (stop_err != ESP_OK) {
-            ESP_LOGE(TAG, "emergency lock could not stop AP: %s; restarting", esp_err_to_name(stop_err));
-            event_log_append(EVENT_LOG_ERROR, now_ms(), "emergency lock AP stop failed; restarting");
-            esp_restart();
+            ESP_LOGE(TAG, "emergency lock could not stop AP: %s; firmware kept alive for local recovery", esp_err_to_name(stop_err));
+            event_log_append(EVENT_LOG_ERROR, now_ms(), "emergency lock AP stop failed; firmware kept alive");
         }
     }
     return err;

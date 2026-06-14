@@ -439,14 +439,13 @@ void app_main(void)
                 }
             }
         }
-        if (bridge_err == ESP_OK && usb_err == ESP_OK && wifi_err == ESP_OK && web_err == ESP_OK) {
+        if (bridge_err == ESP_OK && wifi_err == ESP_OK) {
             log_init_result("ota_valid", ota_update_mark_running_app_valid());
         } else {
-            ESP_LOGW(TAG, "running app not marked valid for OTA rollback because critical services are not all ready");
+            ESP_LOGW(TAG, "running app not marked valid for OTA rollback because AP/bridge rescue services are not ready");
         }
-        if (startup_policy_after_web(true, web_err == ESP_OK) == STARTUP_POLICY_STOP_AP) {
-            ESP_LOGE(TAG, "AP stopped: web/auth service failed after WiFi startup");
-            log_init_result("wifi_ap_stop", wifi_ap_stop());
+        if (startup_policy_after_web(true, web_err == ESP_OK) == STARTUP_POLICY_CONTINUE && web_err != ESP_OK) {
+            ESP_LOGE(TAG, "web/auth service failed after WiFi startup; keeping AP alive for rescue diagnostics");
         }
     } else {
 #if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE

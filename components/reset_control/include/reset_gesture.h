@@ -6,6 +6,7 @@
 #define RESET_GESTURE_HOLD_MS 10000ULL
 
 typedef struct {
+    bool armed;
     bool was_pressed;
     bool triggered;
     uint64_t press_start_ms;

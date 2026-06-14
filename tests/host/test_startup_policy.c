@@ -17,9 +17,9 @@ static void test_ephemeral_credentials_require_working_local_display_before_ap(v
     CHECK(startup_policy_after_ui(false, false) == STARTUP_POLICY_CONTINUE);
 }
 
-static void test_web_failure_after_wifi_start_stops_ap(void)
+static void test_web_failure_after_wifi_start_keeps_rescue_ap(void)
 {
-    CHECK(startup_policy_after_web(true, false) == STARTUP_POLICY_STOP_AP);
+    CHECK(startup_policy_after_web(true, false) == STARTUP_POLICY_CONTINUE);
     CHECK(startup_policy_after_web(true, true) == STARTUP_POLICY_CONTINUE);
     CHECK(startup_policy_after_web(false, false) == STARTUP_POLICY_CONTINUE);
 }
@@ -27,7 +27,6 @@ static void test_web_failure_after_wifi_start_stops_ap(void)
 int main(void)
 {
     test_ephemeral_credentials_require_working_local_display_before_ap();
-    test_web_failure_after_wifi_start_stops_ap();
+    test_web_failure_after_wifi_start_keeps_rescue_ap();
     return 0;
 }
-

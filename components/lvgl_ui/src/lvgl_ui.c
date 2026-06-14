@@ -342,9 +342,7 @@ static void handle_display_power(void)
 static void lvgl_task(void *arg)
 {
     (void)arg;
-    app_watchdog_register_current_task("lvgl_ui");
     while (true) {
-        app_watchdog_reset_current_task();
         uint32_t delay_ms = LVGL_TASK_MAX_DELAY_MS;
         if (lock_lvgl(-1)) {
             handle_display_power();

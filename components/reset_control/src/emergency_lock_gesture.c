@@ -16,9 +16,14 @@ bool emergency_lock_gesture_update(emergency_lock_gesture_t *gesture, bool press
     }
 
     if (!pressed) {
+        gesture->armed = true;
         gesture->was_pressed = false;
         gesture->triggered = false;
         gesture->press_start_ms = 0;
+        return false;
+    }
+
+    if (!gesture->armed) {
         return false;
     }
 
@@ -36,4 +41,3 @@ bool emergency_lock_gesture_update(emergency_lock_gesture_t *gesture, bool press
 
     return false;
 }
-

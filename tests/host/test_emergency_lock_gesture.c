@@ -15,6 +15,7 @@ static void test_short_press_does_not_trigger(void)
     emergency_lock_gesture_t gesture;
     emergency_lock_gesture_init(&gesture);
 
+    CHECK(!emergency_lock_gesture_update(&gesture, false, 900));
     CHECK(!emergency_lock_gesture_update(&gesture, true, 1000));
     CHECK(!emergency_lock_gesture_update(&gesture, true, 1000 + EMERGENCY_LOCK_GESTURE_HOLD_MS - 1));
     CHECK(!emergency_lock_gesture_update(&gesture, false, 1000 + EMERGENCY_LOCK_GESTURE_HOLD_MS));
@@ -25,6 +26,7 @@ static void test_hold_triggers_once(void)
     emergency_lock_gesture_t gesture;
     emergency_lock_gesture_init(&gesture);
 
+    CHECK(!emergency_lock_gesture_update(&gesture, false, 1900));
     CHECK(!emergency_lock_gesture_update(&gesture, true, 2000));
     CHECK(emergency_lock_gesture_update(&gesture, true, 2000 + EMERGENCY_LOCK_GESTURE_HOLD_MS));
     CHECK(!emergency_lock_gesture_update(&gesture, true, 2000 + EMERGENCY_LOCK_GESTURE_HOLD_MS + 1000));
@@ -35,6 +37,7 @@ static void test_release_rearms_gesture(void)
     emergency_lock_gesture_t gesture;
     emergency_lock_gesture_init(&gesture);
 
+    CHECK(!emergency_lock_gesture_update(&gesture, false, 2900));
     CHECK(!emergency_lock_gesture_update(&gesture, true, 3000));
     CHECK(emergency_lock_gesture_update(&gesture, true, 3000 + EMERGENCY_LOCK_GESTURE_HOLD_MS));
     CHECK(!emergency_lock_gesture_update(&gesture, false, 3000 + EMERGENCY_LOCK_GESTURE_HOLD_MS + 1));
@@ -42,11 +45,23 @@ static void test_release_rearms_gesture(void)
     CHECK(emergency_lock_gesture_update(&gesture, true, 10000 + EMERGENCY_LOCK_GESTURE_HOLD_MS));
 }
 
+static void test_pressed_during_boot_does_not_trigger_until_released(void)
+{
+    emergency_lock_gesture_t gesture;
+    emergency_lock_gesture_init(&gesture);
+
+    CHECK(!emergency_lock_gesture_update(&gesture, true, 0));
+    CHECK(!emergency_lock_gesture_update(&gesture, true, EMERGENCY_LOCK_GESTURE_HOLD_MS + 1));
+    CHECK(!emergency_lock_gesture_update(&gesture, false, EMERGENCY_LOCK_GESTURE_HOLD_MS + 2));
+    CHECK(!emergency_lock_gesture_update(&gesture, true, EMERGENCY_LOCK_GESTURE_HOLD_MS + 1000));
+    CHECK(emergency_lock_gesture_update(&gesture, true, EMERGENCY_LOCK_GESTURE_HOLD_MS * 2 + 1000));
+}
+
 int main(void)
 {
     test_short_press_does_not_trigger();
     test_hold_triggers_once();
     test_release_rearms_gesture();
+    test_pressed_during_boot_does_not_trigger_until_released();
     return 0;
 }
-

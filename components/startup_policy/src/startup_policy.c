@@ -10,9 +10,7 @@ startup_policy_action_t startup_policy_after_ui(bool ui_ok, bool ephemeral_crede
 
 startup_policy_action_t startup_policy_after_web(bool wifi_ok, bool web_ok)
 {
-    if (wifi_ok && !web_ok) {
-        return STARTUP_POLICY_STOP_AP;
-    }
+    (void)wifi_ok;
+    (void)web_ok;
     return STARTUP_POLICY_CONTINUE;
 }
-

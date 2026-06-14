@@ -32,11 +32,9 @@ static uint64_t now_ms(void)
 static void demo_serial_task(void *arg)
 {
     (void)arg;
-    app_watchdog_register_current_task("demo_serial");
     char buf[DEMO_SERIAL_BUF_SIZE];
 
     while (true) {
-        app_watchdog_reset_current_task();
         if (usb_console_get_status().connected) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
             const bool was_active = demo_serial_is_active(&s_state);

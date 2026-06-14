@@ -16,9 +16,14 @@ bool reset_gesture_update(reset_gesture_t *gesture, bool pressed, uint64_t now_m
     }
 
     if (!pressed) {
+        gesture->armed = true;
         gesture->was_pressed = false;
         gesture->triggered = false;
         gesture->press_start_ms = 0;
+        return false;
+    }
+
+    if (!gesture->armed) {
         return false;
     }
 

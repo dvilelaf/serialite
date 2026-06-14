@@ -52,10 +52,12 @@ static void add_sent(size_t len)
 static void usb_rx_task(void *arg)
 {
     (void)arg;
-    app_watchdog_register_current_task("usb_rx");
+    const bool watchdog_registered = app_watchdog_register_current_task("usb_rx") == ESP_OK;
     uint8_t buf[USB_CONSOLE_BUF_SIZE];
     while (true) {
-        app_watchdog_reset_current_task();
+        if (watchdog_registered) {
+            app_watchdog_reset_current_task();
+        }
         const int read = usb_serial_jtag_read_bytes(buf, sizeof(buf), pdMS_TO_TICKS(20));
         if (read > 0) {
             add_received((size_t)read);
@@ -69,10 +71,12 @@ static void usb_rx_task(void *arg)
 static void usb_tx_task(void *arg)
 {
     (void)arg;
-    app_watchdog_register_current_task("usb_tx");
+    const bool watchdog_registered = app_watchdog_register_current_task("usb_tx") == ESP_OK;
     uint8_t buf[USB_CONSOLE_BUF_SIZE];
     while (true) {
-        app_watchdog_reset_current_task();
+        if (watchdog_registered) {
+            app_watchdog_reset_current_task();
+        }
         const size_t read = terminal_bridge_read_input_for_usb(buf, sizeof(buf), pdMS_TO_TICKS(100));
         if (read == 0) {
             update_connected();
