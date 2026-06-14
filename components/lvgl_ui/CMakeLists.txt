@@ -7,7 +7,5 @@ idf_component_register(
         board
         esp_timer
         esp_lcd
-        esp_lcd_touch
         lvgl
-        terminal_bridge
 )

@@ -10,7 +10,7 @@ El sistema debe:
 
 - crear un AP WiFi propio;
 - exponer una web local para estado y terminal;
-- actuar como puente bidireccional entre USB CDC ACM, la terminal local LVGL y la terminal web;
+- actuar como puente bidireccional entre USB CDC ACM y la terminal web;
 - mostrar estado básico del sistema en la pantalla AMOLED;
 - guardar configuración básica en NVS.
 
@@ -22,7 +22,7 @@ La primera versión debe limitarse a:
 
 1. AP WiFi + HTTP/WebSocket.
 2. Bridge USB CDC ACM.
-3. UI LVGL como monitor y terminal simple.
+3. UI LVGL como panel local de estado.
 4. Persistencia mínima.
 
 La función de vídeo o captura de pantalla no entra en este proyecto.
@@ -49,8 +49,8 @@ El firmware se organiza en módulos con responsabilidades separadas:
 - `usb_console`: lectura/escritura CDC ACM y detección de conexión.
 - `wifi_ap`: AP, DHCP y configuración de red.
 - `web_server`: HTTP, WebSocket y página de estado/terminal.
-- `terminal_bridge`: fan-out/fan-in entre USB, web y UI.
-- `lvgl_ui`: pantalla principal, terminal local, botones rápidos y teclado.
+- `terminal_bridge`: fan-out/fan-in entre USB y web.
+- `lvgl_ui`: pantalla local apaisada solo informativa.
 - `storage`: NVS, configuración y registro histórico básico.
 
 ## Regla de oro de concurrencia
@@ -97,10 +97,9 @@ Responsabilidad:
 Responsabilidad:
 
 - inicializar LVGL;
-- pintar estado WiFi, USB y últimas líneas;
-- procesar input táctil;
-- enviar teclas rápidas al bridge;
-- renderizar terminal local.
+- pintar SSID, password temporal, URL local y estado USB;
+- usar un tema oscuro adecuado para AMOLED;
+- no procesar input táctil ni enviar comandos.
 
 ### 5. `storage_task` o acceso sincronizado a NVS
 
@@ -116,8 +115,7 @@ Responsabilidad:
 1. `usb_task` recibe bytes del CDC ACM.
 2. Publica un evento en `core_task`.
 3. `core_task` reenvía el dato a:
-   - `ui_task` para pintar terminal;
-   - `web_task` para fans out por WebSocket;
+   - `web_task` para fan-out por WebSocket;
    - métricas y contadores.
 
 ### Entrada desde web
@@ -126,11 +124,9 @@ Responsabilidad:
 2. `web_task` convierte el mensaje a evento.
 3. `core_task` lo manda al `usb_task`.
 
-### Entrada desde UI local
+### UI local
 
-1. Un botón rápido, teclado o gesto táctil genera evento.
-2. `ui_task` lo manda al `core_task`.
-3. `core_task` lo convierte en bytes hacia `usb_task`.
+La pantalla local no envía comandos ni renderiza logs. En esta placa la superficie útil es demasiado pequeña para teclado, combinaciones y scrollback de rescate. La UI LVGL se limita a mostrar la información necesaria para conectarse a la web local.
 
 ## Interfaces públicas previstas
 
@@ -238,7 +234,7 @@ Antes de ampliar funciones, se debe probar:
 1. AP levanta con IP por defecto `192.168.4.1`.
 2. Un cliente web puede abrir el estado.
 3. USB recibe y reenvía bytes.
-4. LVGL muestra estado y últimas líneas.
+4. LVGL muestra estado local y credenciales temporales.
 5. El sistema no bloquea con buffers llenos.
 
 ## Verificacion de desarrollo
@@ -269,16 +265,15 @@ Mientras NVS encryption no este activa, el firmware genera credenciales WiFi efi
 - servidor web con estado: implementado;
 - WebSocket terminal: implementado;
 - bridge USB CDC ACM via USB-Serial/JTAG: implementado;
-- pantalla LVGL de monitor: implementado;
-- terminal local LVGL básica: implementado;
+- pantalla LVGL apaisada de monitor: implementado;
+- terminal local LVGL: descartada por ergonomía y seguridad;
 - persistencia básica en NVS.
 
 ### Fase 2
 
-- terminal LVGL interactiva;
-- scrollback configurable;
-- teclado virtual y botones rápidos;
-- mejoras de UX.
+- actualizaciones dinámicas de estado LVGL;
+- métricas adicionales en pantalla local;
+- mejoras de UX web.
 
 ### Fase 3
 
@@ -312,6 +307,6 @@ El plan queda aprobado si:
 
 - el alcance de fase 1 cabe en un firmware pequeño y verificable;
 - LVGL tiene un único dueño;
-- USB, web y UI se conectan solo por colas/eventos;
+- USB y web se conectan por colas/eventos; LVGL queda fuera del puente de consola;
 - no se presupone framebuffer completo ni KVM de vídeo;
 - el repo arranca con documentación clara antes del código.

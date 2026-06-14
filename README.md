@@ -7,11 +7,11 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - AP WiFi propio con DHCP en `192.168.4.1`.
 - Credenciales AP efímeras si NVS no contiene configuración válida.
 - Pantalla SH8601 inicializada con LVGL 9.5.
-- Táctil FT5x06 inicializado con gating por `INT`.
-- UI local con estado, password local, terminal, teclado virtual y botones rápidos.
+- Táctil FT5x06 no se inicializa en la UI actual porque la pantalla local es solo informativa.
+- UI local apaisada, oscura y solo informativa con SSID, password, URL y estado USB.
 - Servidor HTTP con página de estado y terminal web en `/terminal`.
 - WebSocket en `/ws`.
-- `terminal_bridge` para fan-in/fan-out entre USB, UI local y web.
+- `terminal_bridge` para fan-in/fan-out entre USB y terminal web.
 - USB implementado con el transporte oficial USB-Serial/JTAG del ESP32-S3.
 - Host tests para configuración y ring buffer.
 
