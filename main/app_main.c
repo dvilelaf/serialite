@@ -10,6 +10,7 @@
 #include "lvgl_ui.h"
 #include "reset_control.h"
 #include "storage.h"
+#include "startup_policy.h"
 #include "terminal_bridge.h"
 #include "usb_console.h"
 #include "web_server.h"
@@ -173,7 +174,7 @@ void app_main(void)
     if (ui_err == ESP_OK) {
         log_init_result("reset_control", reset_control_start());
     }
-    if (ui_err != ESP_OK && ephemeral_credentials) {
+    if (startup_policy_after_ui(ui_err == ESP_OK, ephemeral_credentials) == STARTUP_POLICY_SKIP_AP) {
         ESP_LOGE(TAG, "AP skipped: ephemeral password cannot be safely exposed without local display");
         log_init_result("usb_console", usb_console_start());
         return;
@@ -186,7 +187,12 @@ void app_main(void)
         const web_server_config_t web_config = {
             .web_password = web_password,
         };
-        log_init_result("web_server", web_server_start(&web_config));
+        const esp_err_t web_err = web_server_start(&web_config);
+        log_init_result("web_server", web_err);
+        if (startup_policy_after_web(true, web_err == ESP_OK) == STARTUP_POLICY_STOP_AP) {
+            ESP_LOGE(TAG, "AP stopped: web/auth service failed after WiFi startup");
+            log_init_result("wifi_ap_stop", wifi_ap_stop());
+        }
     } else {
         ESP_LOGE(TAG, "web_server skipped because AP did not start");
     }

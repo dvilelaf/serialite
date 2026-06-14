@@ -37,6 +37,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - La escritura hacia la consola exige lock explícito de un único cliente.
 - La entrada WebSocket tiene límite por frame y presupuesto por ventana para evitar DoS básico.
 - Las rutas HTTP están limitadas a endpoints conocidos con métodos y tamaños de body esperados.
+- Si el servicio web/auth falla tras arrancar WiFi, el AP se apaga para no dejar una red expuesta sin consola segura.
 - El paste web grande o multilínea requiere confirmación y se trocea antes de enviarse.
 - Los logs internos no almacenan passwords ni transcripción serial completa.
 - Las passwords se muestran solo en pantalla local tras presencia física y durante una ventana temporal.

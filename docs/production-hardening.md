@@ -77,6 +77,7 @@ Requisitos:
 - AP WPA2, nunca abierto por defecto.
 - IP local por defecto `192.168.4.1`.
 - Web local autenticada antes de exponer terminal, diagnostico o WebSocket.
+- Si auth/web no arranca, el AP debe apagarse o no iniciarse.
 - Sesiones con timeout e invalidacion.
 - CSRF en acciones mutadoras.
 - Validacion de `Origin` y `Host` en WebSocket y rutas sensibles.

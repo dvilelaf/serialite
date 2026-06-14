@@ -80,7 +80,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: UI web, terminal y estado funcionan sin Internet, DNS externo ni backend.
 - [x] Hardening HTTP/WebSocket.
   Criterio: límites de payload, validación de rutas, cierre limpio de sesiones y endpoints mínimos.
-- [ ] Fallo cerrado en seguridad.
+- [x] Fallo cerrado en seguridad.
   Criterio: fallo de auth, sesión, config corrupta o storage no concede acceso ni arranca AP abierto.
 - [x] Configuración corrupta recuperable sin modo inseguro.
   Criterio: config inválida entra en setup seguro o requiere reset físico, nunca bypass de auth.

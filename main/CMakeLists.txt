@@ -11,4 +11,5 @@ idf_component_register(
         usb_console
         lvgl_ui
         terminal_bridge
+        startup_policy
 )

@@ -16,6 +16,8 @@ static wifi_ap_status_t s_status = {
     .connected_clients = 0,
     .started = false,
 };
+static esp_netif_t *s_ap_netif;
+static esp_event_handler_instance_t s_wifi_event_instance;
 
 static bool wifi_ap_config_is_valid(const kvm_wifi_ap_config_t *config)
 {
@@ -75,8 +77,8 @@ esp_err_t wifi_ap_start(const kvm_wifi_ap_config_t *config)
         return err;
     }
 
-    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
-    if (ap_netif == NULL) {
+    s_ap_netif = esp_netif_create_default_wifi_ap();
+    if (s_ap_netif == NULL) {
         return ESP_ERR_NO_MEM;
     }
 
@@ -84,21 +86,22 @@ esp_err_t wifi_ap_start(const kvm_wifi_ap_config_t *config)
     err = esp_wifi_init(&init_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(err));
-        esp_netif_destroy_default_wifi(ap_netif);
+        esp_netif_destroy_default_wifi(s_ap_netif);
+        s_ap_netif = NULL;
         return err;
     }
 
-    esp_event_handler_instance_t wifi_event_instance = NULL;
     err = esp_event_handler_instance_register(
         WIFI_EVENT,
         ESP_EVENT_ANY_ID,
         &wifi_ap_event_handler,
         NULL,
-        &wifi_event_instance);
+        &s_wifi_event_instance);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "wifi event handler failed: %s", esp_err_to_name(err));
         esp_wifi_deinit();
-        esp_netif_destroy_default_wifi(ap_netif);
+        esp_netif_destroy_default_wifi(s_ap_netif);
+        s_ap_netif = NULL;
         return err;
     }
 
@@ -120,16 +123,55 @@ esp_err_t wifi_ap_start(const kvm_wifi_ap_config_t *config)
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "AP startup failed: %s", esp_err_to_name(err));
-        esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_instance);
-        esp_wifi_clear_default_wifi_driver_and_handlers(ap_netif);
+        esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_wifi_event_instance);
+        s_wifi_event_instance = NULL;
+        esp_wifi_clear_default_wifi_driver_and_handlers(s_ap_netif);
         esp_wifi_deinit();
-        esp_netif_destroy_default_wifi(ap_netif);
+        esp_netif_destroy_default_wifi(s_ap_netif);
+        s_ap_netif = NULL;
         return err;
     }
 
     s_status.started = true;
     ESP_LOGI(TAG, "AP started: ssid=%s ip=%s", config->ssid, s_status.ip_addr);
     return ESP_OK;
+}
+
+esp_err_t wifi_ap_stop(void)
+{
+    if (!s_status.started) {
+        return ESP_OK;
+    }
+
+    esp_err_t first_err = esp_wifi_stop();
+    if (first_err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_stop failed: %s", esp_err_to_name(first_err));
+    }
+
+    if (s_wifi_event_instance != NULL) {
+        const esp_err_t err = esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_wifi_event_instance);
+        if (first_err == ESP_OK && err != ESP_OK) {
+            first_err = err;
+        }
+        s_wifi_event_instance = NULL;
+    }
+
+    if (s_ap_netif != NULL) {
+        esp_wifi_clear_default_wifi_driver_and_handlers(s_ap_netif);
+    }
+    const esp_err_t deinit_err = esp_wifi_deinit();
+    if (first_err == ESP_OK && deinit_err != ESP_OK) {
+        first_err = deinit_err;
+    }
+    if (s_ap_netif != NULL) {
+        esp_netif_destroy_default_wifi(s_ap_netif);
+        s_ap_netif = NULL;
+    }
+
+    s_status.started = false;
+    s_status.connected_clients = 0;
+    ESP_LOGW(TAG, "AP stopped");
+    return first_err;
 }
 
 wifi_ap_status_t wifi_ap_get_status(void)

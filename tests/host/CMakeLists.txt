@@ -146,3 +146,14 @@ target_include_directories(test_reset_gesture PRIVATE
 )
 
 add_test(NAME reset_gesture COMMAND test_reset_gesture)
+
+add_executable(test_startup_policy
+    test_startup_policy.c
+    ../../components/startup_policy/src/startup_policy.c
+)
+
+target_include_directories(test_startup_policy PRIVATE
+    ../../components/startup_policy/include
+)
+
+add_test(NAME startup_policy COMMAND test_startup_policy)

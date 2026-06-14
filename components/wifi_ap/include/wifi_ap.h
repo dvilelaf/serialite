@@ -24,4 +24,5 @@ typedef struct {
 } wifi_ap_status_t;
 
 esp_err_t wifi_ap_start(const kvm_wifi_ap_config_t *config);
+esp_err_t wifi_ap_stop(void);
 wifi_ap_status_t wifi_ap_get_status(void);
