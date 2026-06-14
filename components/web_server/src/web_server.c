@@ -961,18 +961,27 @@ static esp_err_t login_get_handler(httpd_req_t *req)
         return redirect_to(req, "/");
     }
 
-    static const char login_page[] =
+    const bool pairing_pending = local_pairing_required(&s_pairing);
+    char login_page[1900];
+    const int written = snprintf(
+        login_page,
+        sizeof(login_page),
         "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>ESP32-KVM Login</title><style>"
-        "body{margin:0;min-height:100vh;background:linear-gradient(180deg,#020504,#07130f);color:#eafff8;font:16px sans-serif;display:grid;place-items:center}"
-        "main{width:min(420px,calc(100% - 32px));border:1px solid #174436;border-radius:22px;padding:24px;background:#030807}"
-        "input,button{width:100%;box-sizing:border-box;border-radius:12px;padding:13px;margin-top:12px;font:inherit}"
-        "input{background:#000;color:#fff;border:1px solid #245c4c}button{background:#0c3429;color:#bffff0;border:1px solid #2ee6b8}"
-        "p{color:#8bb5aa}</style></head><body><main><h1>KVM</h1>"
-        "<p>Serial rescue console. Press BOOT on the device to reveal the first-login pair code.</p>"
+        "<title>KVM Login</title><style>"
+        "*{box-sizing:border-box}body{margin:0;min-height:100svh;background:linear-gradient(180deg,#020504,#07130f);color:#eafff8;font:16px sans-serif;display:grid;place-items:center;padding:18px}"
+        "main{width:100%%;max-width:380px;border:1px solid #174436;border-radius:22px;padding:22px;background:#030807;box-shadow:0 18px 50px #0009}"
+        "h1{margin:0 0 8px;font-size:24px}input,button{width:100%%;border-radius:12px;padding:13px;margin-top:12px;font:inherit}"
+        "input{background:#000;color:#fff;border:1px solid #245c4c}button{background:#0c3429;color:#bffff0;border:1px solid #2ee6b8;font-weight:700}"
+        "p{color:#8bb5aa;line-height:1.4;margin:8px 0 14px}</style></head><body><main><h1>Serial console</h1>"
+        "<p>%s</p>"
         "<form method=\"post\" action=\"/login\"><input name=\"password\" type=\"password\" autocomplete=\"current-password\" placeholder=\"Web password\" autofocus>"
-        "<input name=\"pair\" inputmode=\"numeric\" pattern=\"[0-9]{6}\" autocomplete=\"one-time-code\" placeholder=\"First-login pair code\">"
-        "<button type=\"submit\">Unlock web console</button></form></main></body></html>";
+        "%s"
+        "<button type=\"submit\">Unlock console</button></form></main></body></html>",
+        pairing_pending ? "Press BOOT on the device to reveal the first-login pair code." : "Enter the web password to resume this local rescue session.",
+        pairing_pending ? "<input name=\"pair\" inputmode=\"numeric\" pattern=\"[0-9]{6}\" autocomplete=\"one-time-code\" placeholder=\"First-login pair code\">" : "");
+    if (written < 0 || written >= (int)sizeof(login_page)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "login overflow");
+    }
 
     send_no_store_headers(req);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
