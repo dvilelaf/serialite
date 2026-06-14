@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "lvgl_ui.h"
+#include "network_identity.h"
 #include "reset_control.h"
 #include "storage.h"
 #include "startup_policy.h"
@@ -190,6 +191,17 @@ void app_main(void)
     storage_secure_zero(mapped_wifi_config.password, sizeof(mapped_wifi_config.password));
     log_init_result("usb_console", usb_console_start());
     if (wifi_err == ESP_OK) {
+        const network_identity_config_t network_identity_config = {
+            .hostname = NETWORK_IDENTITY_HOSTNAME,
+            .instance_name = NETWORK_IDENTITY_SERVICE_NAME,
+            .service_type = NETWORK_IDENTITY_HTTP_SERVICE,
+            .port = 80,
+            .ttl_seconds = 120,
+        };
+        const esp_err_t identity_err = network_identity_start(&network_identity_config);
+        if (identity_err != ESP_OK) {
+            ESP_LOGW(TAG, "mDNS unavailable; use http://192.168.4.1: %s", esp_err_to_name(identity_err));
+        }
         const web_server_config_t web_config = {
             .web_password = web_password,
         };

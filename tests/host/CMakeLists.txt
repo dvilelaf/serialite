@@ -89,6 +89,17 @@ target_include_directories(test_web_terminal_ansi PRIVATE
 
 add_test(NAME web_terminal_ansi COMMAND test_web_terminal_ansi)
 
+add_executable(test_network_identity_policy
+    test_network_identity_policy.c
+    ../../components/network_identity/src/network_identity_policy.c
+)
+
+target_include_directories(test_network_identity_policy PRIVATE
+    ../../components/network_identity/include
+)
+
+add_test(NAME network_identity_policy COMMAND test_network_identity_policy)
+
 add_executable(test_ap_exposure_policy
     test_ap_exposure_policy.c
     ../../components/web_server/src/ap_exposure_policy.c

@@ -10,6 +10,7 @@ idf_component_register(
         web_server
         usb_console
         lvgl_ui
+        network_identity
         terminal_bridge
         startup_policy
 )

@@ -5,6 +5,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 ## Estado actual
 
 - AP WiFi propio con DHCP en `192.168.4.1`.
+- Publica `http://kvm.local` por mDNS cuando el cliente lo soporta; `http://192.168.4.1` sigue siendo el fallback operativo.
 - Credenciales AP efímeras si NVS no contiene configuración válida.
 - Autenticación web obligatoria con password temporal separada de la password WiFi.
 - Terminal web en modo solo lectura por defecto; escritura requiere tomar control explícitamente.
@@ -81,7 +82,7 @@ idf.py -p /dev/ttyACM0 monitor
 2. Lee en la AMOLED el SSID `KVM`.
 3. Pulsa `BOOT` con la pantalla encendida para revelar durante 30 segundos la password WiFi y la password web temporal.
 4. Conéctate al AP desde móvil o portátil.
-5. Abre `http://192.168.4.1`.
+5. Abre `http://kvm.local` si tu sistema soporta mDNS, o `http://192.168.4.1`.
 6. Autentica con la password web.
 7. Usa `/terminal`; por defecto es solo lectura hasta pulsar `Request write`. La barra superior muestra si puedes escribir, si otro cliente tiene el lock o si USB está desconectado.
 8. Usa `/diagnostics` para estado técnico y eventos recientes sin secretos.

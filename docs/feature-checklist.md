@@ -138,7 +138,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: facilita abrir URL/AP desde móvil sin escribir datos largos.
 - [ ] Modo demo/simulador serial.
   Criterio: permite probar la web sin servidor conectado.
-- [ ] mDNS local.
+- [x] mDNS local.
   Criterio: nombre local opcional sin depender de DNS externo.
 - [ ] HTTPS local con fingerprint.
   Criterio: TLS local opcional con fingerprint visible en pantalla; no depende de CA externa ni induce a ignorar warnings.

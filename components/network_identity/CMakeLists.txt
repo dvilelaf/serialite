@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "src/network_identity.c"
+        "src/network_identity_policy.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        espressif__mdns
+)
