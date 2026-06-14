@@ -260,6 +260,22 @@ bool web_security_can_write(const web_security_state_t *state, const char *token
            strncmp(state->writer_token, token, WEB_SECURITY_TOKEN_BUF_LEN) == 0;
 }
 
+web_security_writer_state_t web_security_writer_state(web_security_state_t *state, const char *token, uint64_t now_ms)
+{
+    if (state == NULL || token == NULL || find_session(state, token, now_ms) == NULL) {
+        return WEB_SECURITY_WRITER_INVALID_SESSION;
+    }
+
+    clear_writer_if_session_inactive(state, now_ms);
+    if (state->writer_token[0] == '\0') {
+        return WEB_SECURITY_WRITER_READ_ONLY;
+    }
+    if (strncmp(state->writer_token, token, WEB_SECURITY_TOKEN_BUF_LEN) == 0) {
+        return WEB_SECURITY_WRITER_ACTIVE;
+    }
+    return WEB_SECURITY_WRITER_BUSY;
+}
+
 bool web_security_origin_allowed(const char *origin, const char *host)
 {
     if (origin == NULL || host == NULL || host[0] == '\0') {

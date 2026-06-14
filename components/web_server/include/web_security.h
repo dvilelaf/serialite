@@ -17,6 +17,13 @@ typedef enum {
     WEB_SECURITY_LOGIN_LOCKED,
 } web_security_login_result_t;
 
+typedef enum {
+    WEB_SECURITY_WRITER_INVALID_SESSION = 0,
+    WEB_SECURITY_WRITER_READ_ONLY,
+    WEB_SECURITY_WRITER_ACTIVE,
+    WEB_SECURITY_WRITER_BUSY,
+} web_security_writer_state_t;
+
 typedef bool (*web_security_random_fn_t)(uint8_t *buf, size_t len, void *ctx);
 
 typedef struct {
@@ -59,4 +66,5 @@ void web_security_invalidate_all(web_security_state_t *state);
 bool web_security_acquire_writer(web_security_state_t *state, const char *token, uint64_t now_ms);
 void web_security_release_writer(web_security_state_t *state, const char *token);
 bool web_security_can_write(const web_security_state_t *state, const char *token, uint64_t now_ms);
+web_security_writer_state_t web_security_writer_state(web_security_state_t *state, const char *token, uint64_t now_ms);
 bool web_security_origin_allowed(const char *origin, const char *host);

@@ -15,6 +15,7 @@ static const route_rule_t ROUTES[] = {
     {"/login", HTTP_ROUTE_METHOD_POST, HTTP_ROUTE_LOGIN_BODY_MAX},
     {"/logout", HTTP_ROUTE_METHOD_POST, 0},
     {"/terminal", HTTP_ROUTE_METHOD_GET, 0},
+    {"/terminal-status.json", HTTP_ROUTE_METHOD_GET, 0},
     {"/diagnostics", HTTP_ROUTE_METHOD_GET, 0},
     {"/diagnostics.json", HTTP_ROUTE_METHOD_GET, 0},
     {"/about", HTTP_ROUTE_METHOD_GET, 0},

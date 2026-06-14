@@ -121,6 +121,29 @@ static void test_single_writer_lock(void)
     CHECK(web_security_can_write(&state, second_token, 2000));
 }
 
+static void test_writer_state_reports_read_only_active_busy_and_invalid(void)
+{
+    web_security_state_t state = valid_state();
+    uint8_t counter = 1;
+
+    CHECK(web_security_writer_state(&state, "not-a-session", 1000) == WEB_SECURITY_WRITER_INVALID_SESSION);
+
+    CHECK(web_security_login(&state, "correct horse battery staple", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
+    char first_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    strcpy(first_token, state.session_token);
+    CHECK(web_security_writer_state(&state, first_token, 1000) == WEB_SECURITY_WRITER_READ_ONLY);
+    CHECK(web_security_acquire_writer(&state, first_token, 1000));
+    CHECK(web_security_writer_state(&state, first_token, 1000) == WEB_SECURITY_WRITER_ACTIVE);
+
+    CHECK(web_security_login(&state, "correct horse battery staple", 2000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
+    char second_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    strcpy(second_token, state.session_token);
+    CHECK(web_security_writer_state(&state, second_token, 2000) == WEB_SECURITY_WRITER_BUSY);
+
+    web_security_release_writer(&state, first_token);
+    CHECK(web_security_writer_state(&state, second_token, 2000) == WEB_SECURITY_WRITER_READ_ONLY);
+}
+
 static void test_expired_writer_lock_does_not_block_new_writer(void)
 {
     web_security_state_t state = valid_state();
@@ -197,6 +220,7 @@ int main(void)
     test_wrong_password_rate_limits_login();
     test_session_expires_and_logout_invalidates_tokens();
     test_single_writer_lock();
+    test_writer_state_reports_read_only_active_busy_and_invalid();
     test_expired_writer_lock_does_not_block_new_writer();
     test_evicted_writer_lock_does_not_block_new_writer();
     test_origin_must_match_host();

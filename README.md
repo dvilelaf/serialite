@@ -16,6 +16,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - Mantener `BOOT` durante 3 segundos invalida sesiones web, libera escritura activa y cierra WebSockets.
 - Mantener `BOOT` durante 10 segundos borra la configuración NVS del proyecto y reinicia con credenciales efímeras nuevas.
 - Servidor HTTP con página de estado y terminal web en `/terminal`.
+- Terminal web móvil con barra de estado fija, estados `Read-only`/`Write active`/`Writer busy`/`USB disconnected`/`Locked` y teclas táctiles rápidas.
 - Endpoint autenticado `/about` con versión, límites del producto y resumen de seguridad local.
 - WebSocket en `/ws`.
 - Diagnóstico local autenticado en `/diagnostics` y export JSON en `/diagnostics.json`.
@@ -80,7 +81,7 @@ idf.py -p /dev/ttyACM0 monitor
 4. Conéctate al AP desde móvil o portátil.
 5. Abre `http://192.168.4.1`.
 6. Autentica con la password web.
-7. Usa `/terminal`; por defecto es solo lectura hasta pulsar `Request write control`.
+7. Usa `/terminal`; por defecto es solo lectura hasta pulsar `Request write`. La barra superior muestra si puedes escribir, si otro cliente tiene el lock o si USB está desconectado.
 8. Usa `/diagnostics` para estado técnico y eventos recientes sin secretos.
 9. Mantén `BOOT` durante 3 segundos para cortar sesiones web si pierdes control operacional.
 10. Mantén `BOOT` durante 10 segundos para factory reset si necesitas regenerar credenciales.

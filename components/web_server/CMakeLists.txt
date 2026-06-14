@@ -3,6 +3,7 @@ idf_component_register(
         "src/http_route_policy.c"
         "src/http_rate_limit.c"
         "src/web_server.c"
+        "src/web_terminal_contract.c"
         "src/web_input_policy.c"
         "src/web_password_hash.c"
         "src/web_security.c"

@@ -46,7 +46,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: ninguna entrada de teclado o paste se envia al host hasta solicitar control de escritura.
 - [x] Flujo explicito para solicitar y liberar escritura.
   Criterio: hay confirmacion de riesgo, un unico escritor y liberacion manual, por timeout o por logout.
-- [ ] Indicador persistente de modo terminal.
+- [x] Indicador persistente de modo terminal.
   Criterio: `Read-only`, `Write active`, `Writer busy`, `USB disconnected` y `Locked` son visibles sin abrir diagnostico.
 - [x] No inyección automática en consola.
   Criterio: abrir terminal, reconectar o cargar la web no envía bytes al servidor sin acción explícita.
@@ -103,9 +103,9 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: muestra uptime, heap libre, versión firmware, causa de reset, clientes, estado USB y contadores.
 - [x] Exportar logs de diagnóstico.
   Criterio: descarga texto/JSON de eventos internos recientes desde la web autenticada.
-- [ ] Mejor terminal móvil.
+- [x] Mejor terminal móvil.
   Criterio: botones web para `Esc`, `Ctrl+C`, `Ctrl+D`, `Tab`, flechas y `Enter`.
-- [ ] Web movil operable en rack.
+- [x] Web movil operable en rack.
   Criterio: terminal usable en movil con estado persistente, botones tactiles grandes y sin depender de hover.
 - [x] Paste seguro.
   Criterio: el pegado grande se limita, trocea o confirma antes de enviarse a consola.

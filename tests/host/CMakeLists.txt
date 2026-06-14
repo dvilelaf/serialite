@@ -67,6 +67,17 @@ target_include_directories(test_web_input_policy PRIVATE
 
 add_test(NAME web_input_policy COMMAND test_web_input_policy)
 
+add_executable(test_web_terminal_contract
+    test_web_terminal_contract.c
+    ../../components/web_server/src/web_terminal_contract.c
+)
+
+target_include_directories(test_web_terminal_contract PRIVATE
+    ../../components/web_server/include
+)
+
+add_test(NAME web_terminal_contract COMMAND test_web_terminal_contract)
+
 add_executable(test_http_route_policy
     test_http_route_policy.c
     ../../components/web_server/src/http_route_policy.c
