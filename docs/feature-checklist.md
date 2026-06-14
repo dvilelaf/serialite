@@ -148,7 +148,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: opcional; no reemplaza el flujo offline básico.
 - [x] Macros seguras.
   Criterio: desactivadas por defecto, visibles, nunca ejecutadas automáticamente y bloqueadas salvo estado seguro.
-- [ ] Carcasa/etiqueta operacional.
+- [x] Carcasa/etiqueta operacional.
   Criterio: indica propósito, URL, botón de reset/setup y advertencias básicas.
 
 ## No-Go / Posponer

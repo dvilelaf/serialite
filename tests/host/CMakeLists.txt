@@ -291,3 +291,13 @@ target_include_directories(test_startup_policy PRIVATE
 )
 
 add_test(NAME startup_policy COMMAND test_startup_policy)
+
+add_executable(test_operational_label_doc
+    test_operational_label_doc.c
+)
+
+target_compile_definitions(test_operational_label_doc PRIVATE
+    REPO_ROOT="${CMAKE_CURRENT_LIST_DIR}/../.."
+)
+
+add_test(NAME operational_label_doc COMMAND test_operational_label_doc)
