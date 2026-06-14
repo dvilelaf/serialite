@@ -3,6 +3,7 @@
 #include "esp_err.h"
 #include "web_password_hash.h"
 #include <stdbool.h>
+#include <stddef.h>
 
 typedef struct {
     const char *wifi_password;
@@ -23,6 +24,8 @@ typedef enum {
 } web_server_pairing_event_t;
 
 typedef void (*web_server_pairing_event_fn_t)(web_server_pairing_event_t event, void *ctx);
+typedef esp_err_t (*web_server_export_config_fn_t)(char *out, size_t out_size, void *ctx);
+typedef esp_err_t (*web_server_import_config_fn_t)(const char *json, void *ctx);
 
 typedef struct {
     const char *web_password;
@@ -34,6 +37,9 @@ typedef struct {
     void *rotate_credentials_ctx;
     web_server_pairing_event_fn_t pairing_event;
     void *pairing_event_ctx;
+    web_server_export_config_fn_t export_config;
+    web_server_import_config_fn_t import_config;
+    void *config_ctx;
 } web_server_config_t;
 
 typedef struct {

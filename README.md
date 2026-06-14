@@ -25,6 +25,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - Diagnóstico local autenticado en `/diagnostics` y export JSON en `/diagnostics.json`.
 - Actualización firmware local en `/ota`: subida manual autenticada, protegida por CSRF/Origin, validada por ESP-IDF OTA y con reboot explícito.
 - Rotación local de credenciales en `/credentials`: genera nuevas passwords human-readable, no las devuelve por HTTP, las muestra en AMOLED y exige NVS Encryption para persistir WiFi.
+- Export/import local de configuración no secreta en `/config`: JSON autenticado con schema y checksum; nunca exporta passwords, hashes ni salts.
 - Pairing local inicial: el primer login web tras arrancar exige la password web y un código de 6 dígitos mostrado en la AMOLED.
 - Log circular de eventos en RAM para auth, WebSocket, backpressure y estado operativo.
 - Task watchdog explícito para tareas críticas propias (`usb_rx`, `usb_tx`, `web_tx`, `lvgl_ui`).
@@ -51,6 +52,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - Las rutas HTTP están limitadas a endpoints conocidos con métodos y tamaños de body esperados.
 - La OTA local requiere sesión web, CSRF, `Origin` válido, tamaño compatible con slot OTA y no reinicia automáticamente tras la subida.
 - La rotación de credenciales requiere sesión web, CSRF, `Origin` válido, pantalla local operativa y NVS Encryption para persistencia.
+- La exportación de configuración omite secretos; la importación valida schema/checksum, conserva passwords existentes y falla si no puede guardar de forma segura.
 - Si el servicio web/auth falla tras arrancar WiFi, el AP se apaga para no dejar una red expuesta sin consola segura.
 - El paste web grande o multilínea requiere confirmación y se trocea antes de enviarse.
 - Los logs internos no almacenan passwords ni transcripción serial completa.
@@ -97,10 +99,11 @@ idf.py -p /dev/ttyACM0 monitor
 8. Usa `/diagnostics` para estado técnico y eventos recientes sin secretos.
 9. Usa `/credentials` para rotar WiFi/web passwords. La respuesta web no contiene secretos: pulsa `BOOT` y lee las nuevas passwords en la AMOLED.
 10. Tras rotar credenciales, vuelve a iniciar sesión con la nueva web password y reinicia desde `/credentials` para aplicar la nueva WiFi password.
-11. Usa `/ota` solo para cargar una imagen completa `.bin` generada por ESP-IDF para esta placa. En producción debe estar firmada con la clave configurada en `sdkconfig.prod.defaults`.
-12. Tras una OTA aceptada, pulsa `Reboot to pending image` cuando estés listo para reiniciar el bridge.
-13. Mantén `BOOT` durante 3 segundos para cortar sesiones web si pierdes control operacional.
-14. Mantén `BOOT` durante 10 segundos para factory reset si necesitas regenerar credenciales.
+11. Usa `/config` para exportar o importar configuración no secreta. La importación requiere reboot para aplicar cambios de AP.
+12. Usa `/ota` solo para cargar una imagen completa `.bin` generada por ESP-IDF para esta placa. En producción debe estar firmada con la clave configurada en `sdkconfig.prod.defaults`.
+13. Tras una OTA aceptada, pulsa `Reboot to pending image` cuando estés listo para reiniciar el bridge.
+14. Mantén `BOOT` durante 3 segundos para cortar sesiones web si pierdes control operacional.
+15. Mantén `BOOT` durante 10 segundos para factory reset si necesitas regenerar credenciales.
 
 ## Nota USB
 

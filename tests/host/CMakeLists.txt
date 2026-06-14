@@ -53,6 +53,18 @@ target_include_directories(test_local_pairing PRIVATE
 
 add_test(NAME local_pairing COMMAND test_local_pairing)
 
+add_executable(test_config_transfer
+    test_config_transfer.c
+    ../../components/config_transfer/src/config_transfer.c
+)
+
+target_include_directories(test_config_transfer PRIVATE
+    ../../components/config_transfer/include
+    ../../components/storage/include
+)
+
+add_test(NAME config_transfer COMMAND test_config_transfer)
+
 add_executable(test_storage_config
     test_storage_config.c
     ../../components/storage/src/storage_config.c

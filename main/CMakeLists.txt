@@ -5,6 +5,7 @@ idf_component_register(
         "."
     REQUIRES
         storage
+        config_transfer
         credentials
         local_pairing
         reset_control

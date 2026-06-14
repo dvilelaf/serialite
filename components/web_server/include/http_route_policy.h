@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #define HTTP_ROUTE_LOGIN_BODY_MAX 160U
+#define HTTP_ROUTE_CONFIG_IMPORT_BODY_MAX 512U
 
 typedef enum {
     HTTP_ROUTE_METHOD_GET = 0,

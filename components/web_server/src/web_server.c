@@ -40,7 +40,7 @@ static const char *TAG = "web_server";
 #define WEB_TX_QUEUE_DEPTH 16
 #define WEB_TX_CHUNK_MAX 256
 #define WEB_SCROLLBACK_SEND_CHUNK_MAX 256
-#define WEB_REQUEST_BODY_MAX HTTP_ROUTE_LOGIN_BODY_MAX
+#define WEB_REQUEST_BODY_MAX HTTP_ROUTE_CONFIG_IMPORT_BODY_MAX
 #define WEB_HEADER_VALUE_MAX 160
 #define WEB_DIAG_EVENT_LIMIT 16
 #define WEB_PASTE_CONFIRM_BYTES 64
@@ -75,6 +75,9 @@ static web_server_rotate_credentials_fn_t s_rotate_credentials;
 static void *s_rotate_credentials_ctx;
 static web_server_pairing_event_fn_t s_pairing_event;
 static void *s_pairing_event_ctx;
+static web_server_export_config_fn_t s_export_config;
+static web_server_import_config_fn_t s_import_config;
+static void *s_config_ctx;
 static bool s_credential_reboot_pending;
 static local_pairing_state_t s_pairing;
 
@@ -623,7 +626,7 @@ static esp_err_t index_handler(httpd_req_t *req)
     const wifi_ap_status_t wifi = wifi_ap_get_status();
     const terminal_bridge_status_t bridge = terminal_bridge_get_status();
 
-    char body[1024];
+    char body[1200];
     const int written = snprintf(
         body,
         sizeof(body),
@@ -643,7 +646,7 @@ static esp_err_t index_handler(httpd_req_t *req)
         "<p>Bridge USB TX: %llu</p>"
         "<p>Scrollback: %u/%u bytes, dropped old=%llu</p>"
         "<p><a href=\"/terminal\">Abrir terminal</a></p>"
-        "<p><a href=\"/diagnostics\">Diagnostico</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/credentials\">Credentials</a> | <a href=\"/ota\">Firmware</a> | <a href=\"/about\">About</a></p>"
+        "<p><a href=\"/diagnostics\">Diagnostico</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/credentials\">Credentials</a> | <a href=\"/config\">Config</a> | <a href=\"/ota\">Firmware</a> | <a href=\"/about\">About</a></p>"
         "<p><a href=\"/logout\" onclick=\"event.preventDefault();fetch('/logout',{method:'POST',headers:{'X-CSRF-Token':'%s'}}).then(()=>location='/login')\">Logout</a></p>"
         "</div>"
         "</body></html>",
@@ -1147,6 +1150,110 @@ static esp_err_t credentials_rotate_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, "credentials rotated; read new passwords on local display and reboot to apply WiFi");
 }
 
+static esp_err_t config_page_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
+    if (csrf == NULL) {
+        return redirect_to(req, "/login");
+    }
+
+    char body[3000];
+    const int written = snprintf(
+        body,
+        sizeof(body),
+        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>ESP32-KVM Config</title><style>"
+        "*{box-sizing:border-box}body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px;line-height:1.45}"
+        "main{border:1px solid #174436;border-radius:18px;padding:18px;background:#030807;max-width:760px;width:100%%}"
+        "button,textarea{font:inherit}button{border:1px solid #2ee6b8;border-radius:12px;background:#123d32;color:#bffff0;padding:11px 14px;margin:8px 8px 8px 0}"
+        "textarea{width:100%%;min-height:160px;background:#000;color:#e9fff8;border:1px solid #245c4c;border-radius:12px;padding:12px}"
+        "a{color:#7dffe1}.warn{color:#ffcf7a}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><main>"
+        "<h1>Configuration</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/config.json\">Export JSON</a></p>"
+        "<p class=\"warn\">Export excludes WiFi password, web password hash, salts and serial data. Import validates schema and checksum, then requires reboot to apply AP changes.</p>"
+        "<textarea id=\"cfg\" placeholder=\"Paste esp32-kvm config JSON here\"></textarea>"
+        "<p><button id=\"load\">Load current export</button><button id=\"import\">Import config</button></p><pre id=\"out\"></pre><script>"
+        "const CSRF='%s',out=document.getElementById('out'),cfg=document.getElementById('cfg');"
+        "function say(s){out.textContent+=s+'\\n'}"
+        "document.getElementById('load').onclick=async()=>{const r=await fetch('/config.json'),t=await r.text();"
+        "if(!r.ok||!(r.headers.get('content-type')||'').includes('application/json')){say('export failed: '+r.status+' '+t);return}"
+        "cfg.value=t;say(r.status+' export loaded')};"
+        "document.getElementById('import').onclick=async()=>{if(!confirm('Import non-secret config and require reboot?'))return;"
+        "const r=await fetch('/api/config/import',{method:'POST',headers:{'X-CSRF-Token':CSRF,'Content-Type':'application/json'},body:cfg.value});say(r.status+' '+await r.text())};"
+        "</script></main></body></html>",
+        csrf);
+    if (written < 0 || written >= (int)sizeof(body)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config page overflow");
+    }
+
+    send_no_store_headers(req);
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t config_json_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    if (s_export_config == NULL) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config export unavailable");
+    }
+
+    char body[HTTP_ROUTE_CONFIG_IMPORT_BODY_MAX];
+    const esp_err_t err = s_export_config(body, sizeof(body), s_config_ctx);
+    if (err != ESP_OK) {
+        event_log_append(EVENT_LOG_ERROR, now_ms(), "config export failed");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, esp_err_to_name(err));
+    }
+
+    send_no_store_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t config_import_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(
+        require_mutating_auth_csrf_origin(req, "config import rejected: origin", "config import rejected: csrf", session_token),
+        TAG,
+        "config import auth failed");
+    if (s_import_config == NULL) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config import unavailable");
+    }
+
+    char body[HTTP_ROUTE_CONFIG_IMPORT_BODY_MAX + 1U];
+    esp_err_t err = read_small_body(req, body, sizeof(body));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = s_import_config(body, s_config_ctx);
+    secure_zero(body, sizeof(body));
+    if (err != ESP_OK) {
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "config import rejected");
+        if (err != ESP_ERR_INVALID_ARG) {
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "import failed: config could not be saved safely; no changes saved");
+        }
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "import rejected: invalid JSON, schema, checksum, or unsupported value; no changes saved");
+    }
+
+    s_credential_reboot_pending = true;
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), "config imported; reboot pending");
+    send_no_store_headers(req);
+    return httpd_resp_sendstr(req, "config imported; reboot required to apply AP settings");
+}
+
 static void reboot_task(void *arg)
 {
     (void)arg;
@@ -1579,6 +1686,9 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     s_rotate_credentials_ctx = server_config->rotate_credentials_ctx;
     s_pairing_event = server_config->pairing_event;
     s_pairing_event_ctx = server_config->pairing_event_ctx;
+    s_export_config = server_config->export_config;
+    s_import_config = server_config->import_config;
+    s_config_ctx = server_config->config_ctx;
     ESP_RETURN_ON_FALSE(local_pairing_init(&s_pairing, server_config->pairing_code), ESP_ERR_INVALID_ARG, TAG, "invalid pairing config");
 
     if (!wifi_ap_get_status().started) {
@@ -1587,7 +1697,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
 
     httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
     http_config.lru_purge_enable = true;
-    http_config.max_uri_handlers = 18;
+    http_config.max_uri_handlers = 21;
 
     httpd_handle_t server = NULL;
     ESP_RETURN_ON_ERROR(httpd_start(&server, &http_config), TAG, "httpd_start failed");
@@ -1646,10 +1756,28 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         .handler = credentials_page_handler,
         .user_ctx = NULL,
     };
+    const httpd_uri_t config_page_uri = {
+        .uri = "/config",
+        .method = HTTP_GET,
+        .handler = config_page_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t config_json_uri = {
+        .uri = "/config.json",
+        .method = HTTP_GET,
+        .handler = config_json_handler,
+        .user_ctx = NULL,
+    };
     const httpd_uri_t credentials_rotate_uri = {
         .uri = "/api/credentials/rotate",
         .method = HTTP_POST,
         .handler = credentials_rotate_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t config_import_uri = {
+        .uri = "/api/config/import",
+        .method = HTTP_POST,
+        .handler = config_import_handler,
         .user_ctx = NULL,
     };
     const httpd_uri_t ota_upload_uri = {
@@ -1724,6 +1852,8 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &about_uri), fail, TAG, "about handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &runbook_uri), fail, TAG, "runbook handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &credentials_page_uri), fail, TAG, "credentials page handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &config_page_uri), fail, TAG, "config page handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &config_json_uri), fail, TAG, "config json handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ota_page_uri), fail, TAG, "ota page handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_uri), fail, TAG, "diagnostics handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_json_uri), fail, TAG, "diagnostics json handler failed");
@@ -1732,6 +1862,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ota_upload_uri), fail, TAG, "ota upload handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &reboot_uri), fail, TAG, "reboot handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &credentials_rotate_uri), fail, TAG, "credentials rotate handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &config_import_uri), fail, TAG, "config import handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ws_uri), fail, TAG, "websocket handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, http_error_handler), fail, TAG, "404 handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_err_handler(server, HTTPD_405_METHOD_NOT_ALLOWED, http_error_handler), fail, TAG, "405 handler failed");

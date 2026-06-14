@@ -123,7 +123,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: muestra cliente activo, terminal activa y estado lock/auth sin saturar la UI.
 - [x] Pairing local inicial.
   Criterio: primer login o cambio crítico requiere código mostrado en pantalla o pulsación física.
-- [ ] Export/import de configuración seguro.
+- [x] Export/import de configuración seguro.
   Criterio: export no incluye secretos en claro; import valida versión/checksum y falla cerrado.
 - [x] Tests de seguridad automatizados.
   Criterio: cubren auth requerida, CSRF/origin, rate limit, límites de payload y config corrupta.

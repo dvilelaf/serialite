@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "config_transfer.h"
 #include "credentials.h"
 #include "local_pairing.h"
 #include "lvgl_ui.h"
@@ -170,6 +171,47 @@ static void pairing_event_cb(web_server_pairing_event_t event, void *ctx)
     }
 }
 
+static esp_err_t export_config_cb(char *out, size_t out_size, void *ctx)
+{
+    app_credentials_context_t *state = (app_credentials_context_t *)ctx;
+    if (state == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    const config_transfer_result_t result = config_transfer_export_json(&state->config, out, out_size);
+    return result == CONFIG_TRANSFER_OK ? ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
+static esp_err_t import_config_cb(const char *json, void *ctx)
+{
+    app_credentials_context_t *state = (app_credentials_context_t *)ctx;
+    if (state == NULL || json == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    storage_config_t next = state->config;
+    const config_transfer_result_t import_result = config_transfer_import_json(json, &next);
+    if (import_result != CONFIG_TRANSFER_OK) {
+        ESP_LOGW(TAG, "config import rejected: %s", config_transfer_result_name(import_result));
+        return ESP_ERR_INVALID_ARG;
+    }
+    storage_wifi_config_apply_safe_ranges(&next.wifi);
+    if (!storage_wifi_config_is_valid(&next.wifi)) {
+        storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const esp_err_t save_err = storage_save_config(&next);
+    if (save_err != ESP_OK) {
+        storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
+        return save_err;
+    }
+
+    storage_secure_zero(state->config.wifi.password, sizeof(state->config.wifi.password));
+    state->config = next;
+    storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
+    return ESP_OK;
+}
+
 static esp_err_t generate_ephemeral_wifi_config(kvm_wifi_ap_config_t *config)
 {
     if (config == NULL) {
@@ -288,6 +330,9 @@ void app_main(void)
             .rotate_credentials_ctx = &s_credentials_ctx,
             .pairing_event = pairing_event_cb,
             .pairing_event_ctx = &s_credentials_ctx,
+            .export_config = export_config_cb,
+            .import_config = import_config_cb,
+            .config_ctx = &s_credentials_ctx,
         };
         const esp_err_t web_err = web_server_start(&web_config);
         storage_secure_zero(web_password, sizeof(web_password));
