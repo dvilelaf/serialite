@@ -54,14 +54,18 @@ El firmware usa dos slots OTA en `partitions.csv`. Esto permite instalar una ima
 
 El perfil de laboratorio no activa Secure Boot ni Flash Encryption para evitar quemar eFuses durante desarrollo. El perfil de produccion esta separado en `sdkconfig.prod.defaults` y exige:
 
+- `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`;
+- `CONFIG_SECURE_BOOT=y`;
 - `CONFIG_SECURE_BOOT_V2_ENABLED=y`;
 - `CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y`;
+- `CONFIG_SECURE_SIGNED_APPS=y`;
 - `CONFIG_SECURE_SIGNED_ON_UPDATE=y`;
+- `CONFIG_SECURE_FLASH_ENC_ENABLED=y`;
 - `CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE=y`;
 - `CONFIG_NVS_ENCRYPTION=y`;
-- clave de firma externa en `keys/esp32-kvm-secure-boot-signing-key.pem`.
+- clave de firma externa absoluta en `/run/secrets/esp32-kvm/prod-kvm-signing-key.pem`.
 
-La ruta `keys/` debe estar fuera del control de versiones o protegida por la infraestructura de CI. No se aceptan claves de ejemplo ni claves compartidas entre entornos.
+La ruta de la clave debe estar fuera del checkout y gestionada por la infraestructura de CI o por un secreto montado en runtime. No se aceptan claves de ejemplo, rutas relativas al repo ni claves compartidas entre entornos.
 
 ## Politica de secretos
 
