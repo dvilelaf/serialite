@@ -140,12 +140,16 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: permite probar la web sin servidor conectado; no escribe al USB real y se auto-detiene si aparece USB.
 - [x] mDNS local.
   Criterio: nombre local opcional sin depender de DNS externo.
-- [ ] HTTPS local con fingerprint.
-  Criterio: TLS local opcional con fingerprint visible en pantalla; no depende de CA externa ni induce a ignorar warnings.
+- [x] HTTPS fingerprint policy gate.
+  Criterio: helper probado para formatear SHA-256 y bloquear activacion salvo certificado, fingerprint visible localmente y confirmacion del operador.
+- [ ] HTTPS local runtime con fingerprint en pantalla.
+  Criterio: TLS local opcional con listener real, fingerprint visible en AMOLED; no depende de CA externa ni induce a ignorar warnings.
 - [x] Cliente WiFi opcional además de AP.
   Criterio: desactivado por defecto y documentado como aumento de superficie de ataque.
-- [ ] BLE provisioning.
-  Criterio: opcional; no reemplaza el flujo offline básico.
+- [x] BLE provisioning policy gate.
+  Criterio: helper probado, desactivado por defecto, exige presencia fisica, pairing local, NVS cifrado y ventanas de tiempo.
+- [ ] BLE provisioning runtime.
+  Criterio: opcional; no reemplaza el flujo offline básico y no activa radio salvo durante setup fisico acotado.
 - [x] Macros seguras.
   Criterio: desactivadas por defecto, visibles, nunca ejecutadas automáticamente y bloqueadas salvo estado seguro.
 - [x] Carcasa/etiqueta operacional.

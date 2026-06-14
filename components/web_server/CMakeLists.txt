@@ -23,6 +23,7 @@ idf_component_register(
         esp_app_format
         esp_http_server
         esp_timer
+        https_fingerprint
         mbedtls
         ota_update
         wifi_ap

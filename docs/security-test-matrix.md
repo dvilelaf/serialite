@@ -22,11 +22,13 @@ source /home/david/esp-idf/export.sh
 | Credential generation and rotation policy | `tests/host/test_credentials.c`, `tests/host/test_web_security.c`, `tests/host/test_http_route_policy.c` |
 | Corrupt or incomplete WiFi config fails closed | `tests/host/test_storage_config.c`, `tests/host/test_startup_policy.c` |
 | Optional WiFi client mode is disabled by default and gated by physical/risk/encryption policy | `tests/host/test_wifi_client_policy.c` |
+| Optional BLE provisioning is disabled by default, requires local presence/pairing/encrypted NVS, and time-boxes radio exposure | `tests/host/test_ble_provisioning_policy.c` |
 | Secret persistence requires encrypted NVS | `tests/host/test_storage_config.c` |
 | Persisted web auth uses hash+salt, not plaintext | `tests/host/test_storage_config.c`, `tests/host/test_web_security.c` |
 | Legacy plaintext secret scrub policy | `tests/host/test_storage_config.c` |
 | Local initial pairing code format, one-time consume and lockout | `tests/host/test_local_pairing.c` |
 | Config export/import omits secrets and validates schema/checksum | `tests/host/test_config_transfer.c`, `tests/host/test_http_route_policy.c` |
+| Local HTTPS fingerprint formatting and enable policy fail closed by default | `tests/host/test_https_fingerprint.c` |
 | Emergency lock gesture and session invalidation primitive | `tests/host/test_emergency_lock_gesture.c`, `tests/host/test_web_security.c` |
 | Diagnostics export redacts sensitive strings | `tests/host/test_diagnostics_export.c` |
 

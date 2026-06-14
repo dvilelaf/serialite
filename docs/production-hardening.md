@@ -117,7 +117,9 @@ Requisitos:
 - Rate limits y limites de payload para login, HTTP y WebSocket.
 - Cliente WiFi/STA desactivado por defecto. Si se implementa en runtime, requiere presencia fisica, aceptacion explicita del riesgo, NVS cifrado y mantener el AP como ruta de recuperacion.
 
-Limitacion conocida: HTTP local no equivale a transporte confidencial frente a un atacante ya conectado al AP. Para entornos con amenaza WiFi elevada, usar aislamiento fisico, ventana AP corta o TLS local con fingerprint operativo.
+Limitacion conocida: HTTP local no equivale a transporte confidencial frente a un atacante ya conectado al AP. Para entornos con amenaza WiFi elevada, usar aislamiento fisico, ventana AP corta o TLS local con fingerprint operativo. El modo HTTPS local esta desactivado por defecto y solo debe habilitarse cuando el fingerprint SHA-256 del certificado se muestre en pantalla y el operador lo compare explicitamente.
+
+BLE provisioning esta desactivado por defecto. Si se implementa en runtime, debe exigir presencia fisica, pairing local, NVS cifrado, mantener disponible el flujo AP offline y limitar por tiempo tanto la publicidad BLE como la sesion de provisioning.
 
 ## Despliegue fisico
 

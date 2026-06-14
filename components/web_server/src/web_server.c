@@ -10,6 +10,7 @@
 #include "credentials.h"
 #include "http_rate_limit.h"
 #include "http_route_policy.h"
+#include "https_fingerprint.h"
 #include "local_pairing.h"
 #include "ota_update.h"
 #include "ota_update_policy.h"
@@ -692,6 +693,7 @@ static esp_err_t about_handler(httpd_req_t *req)
 
     const esp_app_desc_t *app = esp_app_get_description();
     const terminal_bridge_status_t bridge = terminal_bridge_get_status();
+    const bool https_enabled = https_fingerprint_default_enabled();
 
     char body[2300];
     const int written = snprintf(
@@ -705,6 +707,7 @@ static esp_err_t about_handler(httpd_req_t *req)
         "<p>Serial rescue console over local WiFi AP. It is not HDMI KVM, HID remote input, virtual media, power control, cloud access, or command automation.</p>"
         "<dl><dt>Firmware</dt><dd>%s</dd><dt>Project</dt><dd>%s</dd><dt>Build date</dt><dd>%s %s</dd>"
         "<dt>IDF</dt><dd>%s</dd><dt>Security model</dt><dd>Local AP, web auth, CSRF, Origin checks, single writer, RAM diagnostics.</dd>"
+        "<dt>HTTPS fingerprint mode</dt><dd>%s. See docs/https-fingerprint.md; operators must compare the browser certificate SHA-256 fingerprint with the AMOLED fingerprint before trusting TLS.</dd>"
         "<dt>Production build</dt><dd>Requires Secure Boot, Flash Encryption, encrypted NVS for persisted secrets, and closed debug/JTAG. Treat unsigned debug builds as lab-only.</dd>"
         "<dt>Scrollback</dt><dd>%u/%u bytes retained, %llu old bytes dropped.</dd>"
         "<dt>Emergency lock</dt><dd>Hold BOOT for 3 seconds to invalidate web sessions, release write control, and close WebSockets.</dd>"
@@ -715,6 +718,7 @@ static esp_err_t about_handler(httpd_req_t *req)
         app != NULL ? app->date : "unknown",
         app != NULL ? app->time : "",
         esp_get_idf_version(),
+        https_enabled ? "enabled" : "disabled by default",
         (unsigned)bridge.scrollback_retained,
         (unsigned)bridge.scrollback_capacity,
         (unsigned long long)bridge.scrollback_dropped_oldest);

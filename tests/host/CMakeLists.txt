@@ -53,6 +53,17 @@ target_include_directories(test_local_pairing PRIVATE
 
 add_test(NAME local_pairing COMMAND test_local_pairing)
 
+add_executable(test_https_fingerprint
+    test_https_fingerprint.c
+    ../../components/https_fingerprint/src/https_fingerprint.c
+)
+
+target_include_directories(test_https_fingerprint PRIVATE
+    ../../components/https_fingerprint/include
+)
+
+add_test(NAME https_fingerprint COMMAND test_https_fingerprint)
+
 add_executable(test_config_transfer
     test_config_transfer.c
     ../../components/config_transfer/src/config_transfer.c
@@ -177,6 +188,17 @@ target_include_directories(test_wifi_client_policy PRIVATE
 )
 
 add_test(NAME wifi_client_policy COMMAND test_wifi_client_policy)
+
+add_executable(test_ble_provisioning_policy
+    test_ble_provisioning_policy.c
+    ../../components/ble_provisioning/src/ble_provisioning_policy.c
+)
+
+target_include_directories(test_ble_provisioning_policy PRIVATE
+    ../../components/ble_provisioning/include
+)
+
+add_test(NAME ble_provisioning_policy COMMAND test_ble_provisioning_policy)
 
 add_executable(test_ap_exposure_policy
     test_ap_exposure_policy.c
