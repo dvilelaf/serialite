@@ -5,6 +5,7 @@
 #include "web_password_hash.h"
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct {
     const char *wifi_password;
@@ -50,6 +51,7 @@ typedef struct {
     bool writer_active;
     bool locked;
     bool tls_active;
+    uint32_t ws_client_count;
 } web_server_status_t;
 
 esp_err_t web_server_start(const web_server_config_t *config);

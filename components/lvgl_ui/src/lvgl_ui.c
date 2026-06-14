@@ -139,7 +139,7 @@ static void update_status_labels(lv_timer_t *timer)
     const ui_status_format_input_t input = {
         .ap_started = wifi.started,
         .wifi_clients = wifi.connected_clients,
-        .web_clients = bridge.subscriber_count,
+        .web_clients = web.ws_client_count,
         .web_writer_active = web.writer_active,
         .web_locked = web.locked,
         .usb_connected = usb.connected,
@@ -303,15 +303,34 @@ static void set_secret_labels(bool reveal)
         }
     }
     if (s_ctx.secret_hint_label != NULL) {
-        lv_label_set_text(
-            s_ctx.secret_hint_label,
-            reveal ? "Visible for 30s" : "Press BOOT to reveal");
+        if (reveal && secret_display_reveal_hint(SECRET_REVEAL_TIMEOUT_US / 1000ULL, text, sizeof(text))) {
+            lv_label_set_text(s_ctx.secret_hint_label, text);
+        } else {
+            lv_label_set_text(s_ctx.secret_hint_label, "Press BOOT to reveal");
+        }
         lv_obj_set_style_text_color(
             s_ctx.secret_hint_label,
             reveal ? lv_color_hex(UI_COLOR_WARN) : lv_color_hex(UI_COLOR_MUTED),
             0);
     }
     s_ctx.secrets_visible = reveal;
+}
+
+static void update_secret_countdown(int64_t now_us)
+{
+    if (s_ctx.secret_hint_label == NULL || !s_ctx.secrets_visible) {
+        return;
+    }
+
+    const int64_t remaining_us = s_ctx.secret_reveal_until_us - now_us;
+    if (remaining_us <= 0) {
+        return;
+    }
+
+    char text[24];
+    if (secret_display_reveal_hint((uint64_t)remaining_us / 1000ULL, text, sizeof(text))) {
+        lv_label_set_text(s_ctx.secret_hint_label, text);
+    }
 }
 
 static void reveal_secrets_temporarily(int64_t now_us)
@@ -347,8 +366,12 @@ static void handle_display_power(void)
         }
     }
 
-    if (s_ctx.secrets_visible && now_us >= s_ctx.secret_reveal_until_us) {
-        set_secret_labels(false);
+    if (s_ctx.secrets_visible) {
+        if (now_us >= s_ctx.secret_reveal_until_us) {
+            set_secret_labels(false);
+        } else {
+            update_secret_countdown(now_us);
+        }
     }
 
     if (s_ctx.display_on && (now_us - s_ctx.last_activity_us) >= DISPLAY_IDLE_TIMEOUT_US) {

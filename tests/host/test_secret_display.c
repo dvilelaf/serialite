@@ -42,11 +42,26 @@ static void test_rejects_too_small_output_buffer(void)
     CHECK(out[0] == '\0');
 }
 
+static void test_reveal_hint_counts_down_seconds(void)
+{
+    char out[24];
+
+    CHECK(secret_display_reveal_hint(30000, out, sizeof(out)));
+    CHECK(strcmp(out, "Visible 30s") == 0);
+    CHECK(secret_display_reveal_hint(29100, out, sizeof(out)));
+    CHECK(strcmp(out, "Visible 30s") == 0);
+    CHECK(secret_display_reveal_hint(29000, out, sizeof(out)));
+    CHECK(strcmp(out, "Visible 29s") == 0);
+    CHECK(secret_display_reveal_hint(1, out, sizeof(out)));
+    CHECK(strcmp(out, "Visible 1s") == 0);
+}
+
 int main(void)
 {
     test_masks_secret_by_default();
     test_reveals_secret_when_allowed();
     test_missing_secret_stays_masked();
     test_rejects_too_small_output_buffer();
+    test_reveal_hint_counts_down_seconds();
     return 0;
 }

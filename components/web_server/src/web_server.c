@@ -36,6 +36,8 @@
 #include "web_terminal_ansi.h"
 #include "web_terminal_contract.h"
 #include "wifi_ap.h"
+#include "esp_attr.h"
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -54,11 +56,23 @@ static const char *TAG = "web_server";
 #define WEB_AP_GUARD_TASK_PRIORITY 2
 #define WEB_AP_GUARD_INTERVAL_MS 30000
 #define WEB_OTA_RECV_CHUNK 2048
+#define WEB_HTTPD_STACK_SIZE (16 * 1024)
+#define WEB_ROUTE_TRACE_MAGIC 0x4b565754U
+#define WEB_ROUTE_TRACE_VERSION 1U
 
 typedef struct {
     size_t len;
     uint8_t data[WEB_TX_CHUNK_MAX];
 } web_tx_chunk_t;
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t checksum;
+    uint32_t sequence;
+    char route[24];
+    char phase[12];
+} web_route_trace_t;
 
 static httpd_handle_t s_server;
 static bool s_server_tls;
@@ -89,6 +103,63 @@ static void *s_config_ctx;
 static bool s_credential_reboot_pending;
 static bool s_macros_enabled;
 static local_pairing_state_t s_pairing;
+static RTC_NOINIT_ATTR web_route_trace_t s_route_trace;
+
+static uint64_t now_ms(void);
+
+static uint32_t web_route_trace_checksum(const web_route_trace_t *trace)
+{
+    uint32_t hash = 2166136261U;
+    const uint8_t *bytes = (const uint8_t *)trace;
+    for (size_t i = 0; i < sizeof(*trace); ++i) {
+        if (i >= offsetof(web_route_trace_t, checksum) &&
+            i < offsetof(web_route_trace_t, checksum) + sizeof(trace->checksum)) {
+            continue;
+        }
+        hash ^= bytes[i];
+        hash *= 16777619U;
+    }
+    return hash;
+}
+
+static bool web_route_trace_valid(void)
+{
+    return s_route_trace.magic == WEB_ROUTE_TRACE_MAGIC &&
+           s_route_trace.version == WEB_ROUTE_TRACE_VERSION &&
+           s_route_trace.checksum == web_route_trace_checksum(&s_route_trace);
+}
+
+static void web_route_trace_mark(const char *route, const char *phase)
+{
+    s_route_trace.magic = WEB_ROUTE_TRACE_MAGIC;
+    s_route_trace.version = WEB_ROUTE_TRACE_VERSION;
+    s_route_trace.sequence++;
+    strlcpy(s_route_trace.route, route, sizeof(s_route_trace.route));
+    strlcpy(s_route_trace.phase, phase, sizeof(s_route_trace.phase));
+    s_route_trace.checksum = web_route_trace_checksum(&s_route_trace);
+}
+
+static bool reset_reason_is_crash_like(esp_reset_reason_t reason)
+{
+    return reason == ESP_RST_PANIC ||
+           reason == ESP_RST_INT_WDT ||
+           reason == ESP_RST_TASK_WDT ||
+           reason == ESP_RST_WDT;
+}
+
+static void web_route_trace_report_previous(void)
+{
+    if (!web_route_trace_valid() || strcmp(s_route_trace.phase, "done") == 0) {
+        return;
+    }
+    if (!reset_reason_is_crash_like(esp_reset_reason())) {
+        return;
+    }
+
+    char message[EVENT_LOG_MESSAGE_MAX];
+    snprintf(message, sizeof(message), "previous web route incomplete: %s/%s", s_route_trace.route, s_route_trace.phase);
+    event_log_append(EVENT_LOG_ERROR, now_ms(), message);
+}
 
 static uint64_t now_ms(void)
 {
@@ -161,7 +232,7 @@ static void send_no_store_headers(httpd_req_t *req)
     httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
     httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
     httpd_resp_set_hdr(req, "X-Frame-Options", "DENY");
-    httpd_resp_set_hdr(req, "Content-Security-Policy", "default-src 'self'; connect-src 'self' ws:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'");
+    httpd_resp_set_hdr(req, "Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'");
 }
 
 static esp_err_t enforce_http_rate_limit(httpd_req_t *req)
@@ -463,6 +534,23 @@ static void snapshot_ws_fds(int fds[WEB_MAX_WS_CLIENTS])
     }
 }
 
+static uint32_t count_ws_clients(void)
+{
+    if (s_ws_fds_lock == NULL) {
+        return 0;
+    }
+
+    uint32_t count = 0;
+    xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
+    for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
+        if (s_ws_fds[i] >= 0) {
+            count++;
+        }
+    }
+    xSemaphoreGive(s_ws_fds_lock);
+    return count;
+}
+
 static void close_all_ws_clients(void)
 {
     if (s_server == NULL) {
@@ -526,12 +614,11 @@ static void ap_guard_task(void *arg)
     // Registering it would create a false-positive reboot loop while the AP is healthy.
     while (true) {
         const wifi_ap_status_t wifi = wifi_ap_get_status();
-        const terminal_bridge_status_t bridge = terminal_bridge_get_status();
         const ap_exposure_policy_result_t result = ap_exposure_policy_evaluate(
             &s_ap_exposure_policy,
             wifi.started,
             wifi.connected_clients,
-            bridge.subscriber_count,
+            count_ws_clients(),
             now_ms());
         if (result == AP_EXPOSURE_STOP_AP) {
             event_log_append(EVENT_LOG_SECURITY, now_ms(), "AP idle timeout; stopping AP");
@@ -637,6 +724,7 @@ static void send_scrollback_to_ws_client(int fd)
 
 static esp_err_t index_handler(httpd_req_t *req)
 {
+    web_route_trace_mark("/", "enter");
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
@@ -694,6 +782,7 @@ static esp_err_t index_handler(httpd_req_t *req)
 
     send_no_store_headers(req);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
+    web_route_trace_mark("/", "done");
     return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
 }
 
@@ -766,10 +855,10 @@ static esp_err_t runbook_handler(httpd_req_t *req)
         "<li>Comprueba en Status que USB esta conectado y que no hay drops creciendo rapidamente.</li>"
         "<li>Abre Terminal en modo solo lectura y espera salida antes de pedir escritura.</li>"
         "</ol><h2>Recuperar acceso</h2><ol>"
-        "<li>Pulsa <code>Request write control</code> solo si necesitas enviar comandos.</li>"
+        "<li>Pulsa <code>Unlock input</code> solo si necesitas enviar comandos.</li>"
         "<li>Usa comandos de diagnostico de bajo riesgo primero: <code>ip addr</code>, <code>ip route</code>, <code>systemctl status</code>, <code>journalctl -xb</code>.</li>"
         "<li>Evita pegar bloques largos. El paste grande se confirma y se trocea, pero sigue ejecutandose en la consola fisica.</li>"
-        "<li>Libera escritura con <code>Release</code> al terminar.</li>"
+        "<li>Bloquea la entrada con <code>Lock input</code> al terminar.</li>"
         "</ol><h2>Si algo falla</h2><ol>"
         "<li>Si USB aparece desconectado, revisa cable, puerto y que el servidor exponga consola CDC ACM.</li>"
         "<li>Si hay rate limit, espera unos segundos y reduce recargas/conexiones.</li>"
@@ -863,6 +952,7 @@ static esp_err_t macros_page_handler(httpd_req_t *req)
 
 static esp_err_t login_get_handler(httpd_req_t *req)
 {
+    web_route_trace_mark("/login", "enter");
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
@@ -885,11 +975,13 @@ static esp_err_t login_get_handler(httpd_req_t *req)
 
     send_no_store_headers(req);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
+    web_route_trace_mark("/login", "done");
     return httpd_resp_send(req, login_page, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t login_post_handler(httpd_req_t *req)
 {
+    web_route_trace_mark("/login POST", "enter");
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
@@ -955,6 +1047,7 @@ static esp_err_t login_post_handler(httpd_req_t *req)
     char cookie[96];
     snprintf(cookie, sizeof(cookie), "kvm_session=%s; HttpOnly; SameSite=Strict; Path=/", s_security.session_token);
     httpd_resp_set_hdr(req, "Set-Cookie", cookie);
+    web_route_trace_mark("/login POST", "done");
     return redirect_to(req, "/terminal");
 }
 
@@ -980,6 +1073,7 @@ static esp_err_t logout_handler(httpd_req_t *req)
 
 static esp_err_t terminal_handler(httpd_req_t *req)
 {
+    web_route_trace_mark("/terminal", "enter");
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
@@ -991,14 +1085,13 @@ static esp_err_t terminal_handler(httpd_req_t *req)
     }
 
     const usb_console_status_t usb = usb_console_get_status();
-    const demo_serial_runtime_status_t demo = demo_serial_runtime_get_status();
 
     char terminal_page[9600];
     const int written = snprintf(
         terminal_page,
         sizeof(terminal_page),
         "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>ESP32-KVM Terminal</title><style>"
+        "<title>Serial console</title><style>"
         ":root{--bg:#050b09;--panel:#0b1814;--line:#1f5b4b;--hot:#7dffe1;--warn:#ffcf7a;--bad:#ff875c;--text:#e9fff8;--muted:#8bb5aa}"
         "html,body{margin:0;height:100%%;background:radial-gradient(circle at 20%% -10%%,#143a30 0,#050b09 45%%);color:var(--text);font:15px ui-monospace,SFMono-Regular,Menlo,monospace}"
         "body{display:grid;grid-template-rows:auto 1fr auto;overflow:hidden}"
@@ -1012,47 +1105,47 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "#term{white-space:pre-wrap;overflow:auto;padding:12px;box-sizing:border-box;background:#020604}"
         "#input{width:100%%;height:48px;box-sizing:border-box;border:0;border-top:1px solid var(--line);background:#07110e;color:#fff;padding:12px;font:16px ui-monospace,SFMono-Regular,Menlo,monospace}"
         "a{color:var(--hot)}@media(max-width:640px){html,body{font-size:14px}#bar{padding:8px}button{flex:1 1 27%%;min-height:46px;padding:10px 8px}#term{padding:10px}#input{height:52px}}"
-        "</style></head><body><div id=\"bar\"><div id=\"top\"><span id=\"brand\">ESP32-KVM</span><span id=\"mode\" class=\"pill\">%s</span>"
-        "<span id=\"state\" class=\"pill\">Connecting</span><a href=\"/runbook\">Runbook</a></div>"
-        "<div id=\"actions\"><button class=\"primary\" id=\"write\">Request write</button><button id=\"release\">Release</button>"
-        "<button id=\"demoStart\">Start demo</button><button id=\"demoStop\">Stop demo</button><button class=\"danger\" id=\"logout\">Logout</button></div>"
+        "</style></head><body><div id=\"bar\"><div id=\"top\"><span id=\"brand\">Serial console</span><span id=\"mode\" class=\"pill\">%s</span>"
+        "<span id=\"state\" class=\"pill\">Connecting stream</span><a href=\"/diagnostics\">Diagnostics</a></div>"
+        "<div id=\"actions\"><button class=\"primary\" id=\"write\">%s</button><button id=\"release\">%s</button>"
+        "<button class=\"danger\" id=\"panic\">Emergency lock</button><button class=\"danger\" id=\"logout\">Logout</button></div>"
         "<div id=\"keys\"><button data-k=\"\\u0003\">%s</button><button data-k=\"\\u0004\">%s</button>"
         "<button data-k=\"\\r\">%s</button><button data-k=\"\\u001b\">%s</button><button data-k=\"\\t\">%s</button>"
         "<button data-k=\"\\u001b[A\">%s</button><button data-k=\"\\u001b[B\">%s</button>"
         "<button data-k=\"\\u001b[D\">%s</button><button data-k=\"\\u001b[C\">%s</button></div>"
-        "</div><div id=\"term\"></div><input id=\"input\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"Read-only until write control is active\" autofocus>"
+        "</div><div id=\"term\">Waiting for serial output.\r\nIf the server is at a login prompt, unlock input and press Enter.</div><input id=\"input\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"Unlock input to type commands\" disabled>"
         "<script>"
-        "const CSRF='%s';let canWrite=false,usbConnected=%s,demoActive=%s,writerState='read-only',locked=false,connected=false;"
+        "const CSRF='%s';let canWrite=false,usbConnected=%s,writerState='read-only',locked=false,connected=false,empty=true;"
         "const CHUNK=%u,PASTE_CONFIRM=%u,PASTE_MAX=%u;"
         "const term=document.getElementById('term'),input=document.getElementById('input'),state=document.getElementById('state');"
-        "const mode=document.getElementById('mode'),writeBtn=document.getElementById('write'),releaseBtn=document.getElementById('release'),demoStart=document.getElementById('demoStart'),demoStop=document.getElementById('demoStop');"
-        "function modeLabel(){if(locked)return'%s';if(demoActive)return'DEMO';if(!usbConnected)return'%s';if(writerState==='write-active')return'%s';if(writerState==='writer-busy')return'%s';return'%s'}"
+        "const mode=document.getElementById('mode'),writeBtn=document.getElementById('write'),releaseBtn=document.getElementById('release');"
+        "function modeLabel(){if(locked)return'%s';if(!usbConnected)return'%s';if(writerState==='write-active')return'%s';if(writerState==='writer-busy')return'%s';return'%s'}"
         "function render(){const label=modeLabel();mode.textContent=label;mode.className='pill '+(label==='%s'?'write':label==='%s'?'busy':label==='%s'?'usb':label==='%s'?'locked':'');"
-        "canWrite=connected&&usbConnected&&writerState==='write-active'&&!locked;input.disabled=!canWrite;writeBtn.disabled=locked||!connected||writerState==='write-active';releaseBtn.disabled=!canWrite;"
-        "demoStart.disabled=locked||usbConnected||demoActive||writerState!=='read-only';demoStop.disabled=locked||!demoActive;"
-        "input.placeholder=canWrite?'Type command, Enter sends CR':'Read-only until write control is active'}"
-        "let ws,backoff=500;function add(t){term.textContent+=t;term.scrollTop=term.scrollHeight;if(term.textContent.length>65536)term.textContent=term.textContent.slice(-49152)}"
-        "function connect(){state.textContent='Connecting';connected=false;render();ws=new WebSocket(`ws://${location.host}/ws`);ws.binaryType='arraybuffer';"
-        "ws.onopen=()=>{state.textContent='Connected';connected=true;backoff=500;render();add('\\r\\n[web connected]\\r\\n')};"
+        "canWrite=connected&&usbConnected&&writerState==='write-active'&&!locked;input.disabled=!canWrite;document.querySelectorAll('#keys button').forEach(b=>b.disabled=!canWrite);writeBtn.disabled=locked||!connected||!usbConnected||writerState==='write-active';releaseBtn.disabled=writerState!=='write-active';"
+        "input.placeholder=canWrite?'Type command, Enter sends to serial':'Unlock input to type commands'}"
+        "let ws,backoff=500;function add(t){if(empty){term.textContent='';empty=false}term.textContent+=t;term.scrollTop=term.scrollHeight;if(term.textContent.length>65536)term.textContent=term.textContent.slice(-49152)}"
+        "function connect(){state.textContent='Connecting stream';connected=false;render();const scheme=location.protocol==='https:'?'wss://':'ws://';ws=new WebSocket(scheme+location.host+'/ws');ws.binaryType='arraybuffer';"
+        "ws.onopen=()=>{state.textContent='Stream live';connected=true;backoff=500;render()};"
         "ws.onmessage=e=>{if(e.data instanceof ArrayBuffer)add(new TextDecoder().decode(e.data));else add(e.data)};"
-        "ws.onclose=()=>{connected=false;state.textContent='Reconnecting';render();setTimeout(connect,backoff);backoff=Math.min(backoff*2,5000)};"
+        "ws.onclose=()=>{connected=false;state.textContent='Stream disconnected. Retrying; check Wi-Fi/power or open Diagnostics.';render();refreshStatus();setTimeout(connect,backoff);backoff=Math.min(backoff*2,5000)};"
         "ws.onerror=()=>ws.close()}"
-        "async function refreshStatus(){try{const r=await fetch('/terminal-status.json',{cache:'no-store'});if(r.status===401||r.redirected){locked=true;render();return}if(!r.ok)return;const s=await r.json();usbConnected=!!s.usb_connected;demoActive=!!s.demo_active;writerState=s.writer_state||'read-only';locked=writerState==='locked';render()}catch(e){}}"
-        "async function post(u){const r=await fetch(u,{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();await refreshStatus();if(!r.ok&&u.includes('/api/demo/'))alert(t||('Request failed: '+r.status));return r.ok}"
+        "async function refreshStatus(){try{const r=await fetch('/terminal-status.json',{cache:'no-store'});if(r.status===401||r.redirected){locked=true;state.textContent='Session expired. Log in again.';render();return}if(!r.ok)return;const s=await r.json();usbConnected=!!s.usb_connected;writerState=s.writer_state||'read-only';locked=writerState==='locked';render()}catch(e){}}"
+        "async function post(u){const r=await fetch(u,{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();await refreshStatus();if(!r.ok)alert(t||('Request failed: '+r.status));return r.ok}"
         "function send(s){if(!(canWrite&&ws&&ws.readyState===1))return;for(let i=0;i<s.length;i+=CHUNK)ws.send(s.slice(i,i+CHUNK))}"
         "function safePaste(t){if(!canWrite)return;if(t.length>PASTE_MAX){alert('Paste too large; max '+PASTE_MAX+' bytes');return}"
         "if((t.length>PASTE_CONFIRM||t.includes('\\n'))&&!confirm('Send '+t.length+' bytes to the physical console?'))return;send(t)}"
         "input.addEventListener('keydown',e=>{if(e.key==='Enter'){send(input.value+'\\r');input.value='';e.preventDefault()}});"
         "input.addEventListener('paste',e=>{const t=(e.clipboardData||window.clipboardData).getData('text');if(t.length>PASTE_CONFIRM||t.includes('\\n')){e.preventDefault();safePaste(t)}});"
         "document.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>send(b.dataset.k));"
-        "writeBtn.onclick=async()=>{if(confirm('Writing here is equivalent to privileged physical console access. Continue?')){const ok=await post('/api/write/acquire');if(!ok&&writerState==='read-only')writerState='writer-busy';render()}};"
+        "writeBtn.onclick=async()=>{if(confirm('Unlock input?\\n\\nAnything you type will be sent to the server serial console.\\nOnly continue if you are operating this server.')){input.disabled=false;input.focus();const ok=await post('/api/write/acquire');if(ok){writerState='write-active';render()}else if(writerState==='read-only')writerState='writer-busy';render()}};"
         "releaseBtn.onclick=async()=>{await post('/api/write/release');writerState='read-only';render()};"
-        "demoStart.onclick=async()=>{if(confirm('Start local demo output? This never writes to USB.'))await post('/api/demo/start')};"
-        "demoStop.onclick=async()=>{await post('/api/demo/stop')};"
+        "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock closes web sessions and disables input. Continue?'))await post('/api/emergency-lock')};"
         "document.getElementById('logout').onclick=async()=>{await post('/logout');location='/login'};"
         "render();refreshStatus();setInterval(refreshStatus,2000);connect();"
         "</script></body></html>",
         usb.connected ? WEB_TERMINAL_STATUS_READ_ONLY : WEB_TERMINAL_STATUS_USB_DISCONNECTED,
+        WEB_TERMINAL_ACTION_UNLOCK,
+        WEB_TERMINAL_ACTION_LOCK,
         WEB_TERMINAL_KEY_CTRL_C,
         WEB_TERMINAL_KEY_CTRL_D,
         WEB_TERMINAL_KEY_ENTER,
@@ -1064,7 +1157,6 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         WEB_TERMINAL_KEY_RIGHT,
         csrf,
         usb.connected ? "true" : "false",
-        demo.active ? "true" : "false",
         (unsigned)WEB_INPUT_POLICY_FRAME_MAX,
         (unsigned)WEB_PASTE_CONFIRM_BYTES,
         (unsigned)WEB_PASTE_MAX_BYTES,
@@ -1083,11 +1175,13 @@ static esp_err_t terminal_handler(httpd_req_t *req)
 
     send_no_store_headers(req);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
+    web_route_trace_mark("/terminal", "done");
     return httpd_resp_send(req, terminal_page, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t terminal_status_handler(httpd_req_t *req)
 {
+    web_route_trace_mark("/terminal-status", "enter");
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
@@ -1116,6 +1210,7 @@ static esp_err_t terminal_status_handler(httpd_req_t *req)
 
     send_no_store_headers(req);
     httpd_resp_set_type(req, "application/json");
+    web_route_trace_mark("/terminal-status", "done");
     return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
 }
 
@@ -1251,6 +1346,25 @@ static esp_err_t write_release_handler(httpd_req_t *req)
     runtime_status_set_writer_active(false);
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "write control released");
     return httpd_resp_sendstr(req, "ok");
+}
+
+static esp_err_t emergency_lock_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(
+        require_mutating_auth_csrf_origin(req, "emergency lock rejected: origin", "emergency lock rejected: csrf", session_token),
+        TAG,
+        "emergency lock auth failed");
+
+    const esp_err_t err = httpd_queue_work(s_server, emergency_lock_work, NULL);
+    if (err != ESP_OK) {
+        event_log_append(EVENT_LOG_ERROR, now_ms(), "emergency lock queue failed");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "emergency lock failed");
+    }
+    return httpd_resp_sendstr(req, "locking");
 }
 
 static esp_err_t credentials_page_handler(httpd_req_t *req)
@@ -1638,6 +1752,7 @@ static esp_err_t reboot_handler(httpd_req_t *req)
 
 static esp_err_t diagnostics_handler(httpd_req_t *req)
 {
+    web_route_trace_mark("/diagnostics", "enter");
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
@@ -1733,11 +1848,13 @@ static esp_err_t diagnostics_handler(httpd_req_t *req)
 
     send_no_store_headers(req);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
+    web_route_trace_mark("/diagnostics", "done");
     return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t diagnostics_json_handler(httpd_req_t *req)
 {
+    web_route_trace_mark("/diagnostics.json", "enter");
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
@@ -1780,11 +1897,13 @@ static esp_err_t diagnostics_json_handler(httpd_req_t *req)
 
     send_no_store_headers(req);
     httpd_resp_set_type(req, "application/json");
+    web_route_trace_mark("/diagnostics.json", "done");
     return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t websocket_handler(httpd_req_t *req)
 {
+    web_route_trace_mark("/ws", "enter");
     if (req->method == HTTP_GET) {
         ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
         ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
@@ -1813,6 +1932,7 @@ static esp_err_t websocket_handler(httpd_req_t *req)
         ESP_LOGI(TAG, "websocket client connected fd=%d", fd);
         event_log_append(EVENT_LOG_INFO, now_ms(), "websocket client connected");
         send_scrollback_to_ws_client(fd);
+        web_route_trace_mark("/ws", "done");
         return ESP_OK;
     }
 
@@ -1833,20 +1953,24 @@ static esp_err_t websocket_handler(httpd_req_t *req)
     if (frame.type == HTTPD_WS_TYPE_CLOSE) {
         remove_ws_fd(httpd_req_to_sockfd(req));
         event_log_append(EVENT_LOG_INFO, now_ms(), "websocket client closed");
+        web_route_trace_mark("/ws", "done");
         return ESP_OK;
     }
     if (frame.type != HTTPD_WS_TYPE_BINARY && frame.type != HTTPD_WS_TYPE_TEXT) {
+        web_route_trace_mark("/ws", "done");
         return ESP_OK;
     }
 
     if (!web_security_can_write(&s_security, session_token, now_ms())) {
         ESP_LOGW(TAG, "dropping websocket input without write lock");
         event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input dropped: read-only");
+        web_route_trace_mark("/ws", "done");
         return ESP_OK;
     }
     if (demo_serial_runtime_get_status().active) {
         ESP_LOGW(TAG, "dropping websocket input while demo is active");
         event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input dropped: demo active");
+        web_route_trace_mark("/ws", "done");
         return ESP_OK;
     }
 
@@ -1854,6 +1978,7 @@ static esp_err_t websocket_handler(httpd_req_t *req)
     if (policy != WEB_INPUT_POLICY_ACCEPT) {
         ESP_LOGW(TAG, "dropping websocket input: %s", web_input_policy_result_name(policy));
         event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input rejected by policy");
+        web_route_trace_mark("/ws", "done");
         return ESP_OK;
     }
 
@@ -1862,6 +1987,7 @@ static esp_err_t websocket_handler(httpd_req_t *req)
         ESP_LOGW(TAG, "bridge input queue full; accepted %u/%u bytes", (unsigned)written, (unsigned)frame.len);
         event_log_append(EVENT_LOG_WARN, now_ms(), "bridge input queue full");
     }
+    web_route_trace_mark("/ws", "done");
     return ESP_OK;
 }
 
@@ -1881,6 +2007,8 @@ static esp_err_t http_error_handler(httpd_req_t *req, httpd_err_code_t error)
 esp_err_t web_server_start(const web_server_config_t *server_config)
 {
     ESP_RETURN_ON_FALSE(server_config != NULL, ESP_ERR_INVALID_ARG, TAG, "missing web config");
+    web_route_trace_report_previous();
+
     bool auth_ok = false;
     if (server_config->web_password_hash_configured) {
         auth_ok = web_security_init_from_hash(&s_security, server_config->web_password_salt, server_config->web_password_hash);
@@ -1929,6 +2057,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
             httpd_ssl_config_t https_config = HTTPD_SSL_CONFIG_DEFAULT();
             https_config.httpd.lru_purge_enable = true;
             https_config.httpd.max_uri_handlers = 25;
+            https_config.httpd.stack_size = WEB_HTTPD_STACK_SIZE;
             https_config.servercert = (const uint8_t *)server_config->tls_identity->cert_pem;
             https_config.servercert_len = server_config->tls_identity->cert_pem_len + 1U;
             https_config.prvtkey_pem = (const uint8_t *)server_config->tls_identity->key_pem;
@@ -1951,6 +2080,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
         http_config.lru_purge_enable = true;
         http_config.max_uri_handlers = 25;
+        http_config.stack_size = WEB_HTTPD_STACK_SIZE;
         ESP_RETURN_ON_ERROR(httpd_start(&server, &http_config), TAG, "httpd_start failed");
     }
     s_server = server;
@@ -2100,6 +2230,12 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         .handler = write_release_handler,
         .user_ctx = NULL,
     };
+    const httpd_uri_t emergency_lock_uri = {
+        .uri = "/api/emergency-lock",
+        .method = HTTP_POST,
+        .handler = emergency_lock_handler,
+        .user_ctx = NULL,
+    };
     const httpd_uri_t demo_start_uri = {
         .uri = "/api/demo/start",
         .method = HTTP_POST,
@@ -2138,6 +2274,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_json_uri), fail, TAG, "diagnostics json handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &write_acquire_uri), fail, TAG, "write acquire handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &write_release_uri), fail, TAG, "write release handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &emergency_lock_uri), fail, TAG, "emergency lock handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &demo_start_uri), fail, TAG, "demo start handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &demo_stop_uri), fail, TAG, "demo stop handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ota_upload_uri), fail, TAG, "ota upload handler failed");
@@ -2189,5 +2326,6 @@ web_server_status_t web_server_get_status(void)
     portENTER_CRITICAL(&s_runtime_status_lock);
     status = s_runtime_status;
     portEXIT_CRITICAL(&s_runtime_status_lock);
+    status.ws_client_count = count_ws_clients();
     return status;
 }

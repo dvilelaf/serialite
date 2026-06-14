@@ -1,4 +1,5 @@
 #include "esp_err.h"
+#include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -29,15 +30,94 @@
 
 static const char *TAG = "esp32_kvm";
 
+#define EPHEMERAL_RTC_MAGIC 0x4b564d45U
+#define EPHEMERAL_RTC_VERSION 1U
+
 typedef struct {
     storage_config_t config;
     bool ui_ready;
 } app_credentials_context_t;
 
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t checksum;
+    kvm_wifi_ap_config_t wifi;
+    char web_password[WIFI_AP_PASSWORD_MAX_LEN];
+    bool web_password_valid;
+} ephemeral_rtc_cache_t;
+
 static app_credentials_context_t s_credentials_ctx;
+static RTC_NOINIT_ATTR ephemeral_rtc_cache_t s_ephemeral_rtc_cache;
 #if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
 static local_tls_identity_t s_tls_identity;
 #endif
+
+static uint32_t fnv1a_update(uint32_t hash, const void *data, size_t len)
+{
+    const uint8_t *bytes = (const uint8_t *)data;
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= bytes[i];
+        hash *= 16777619U;
+    }
+    return hash;
+}
+
+static uint32_t ephemeral_cache_checksum(const ephemeral_rtc_cache_t *cache)
+{
+    uint32_t hash = 2166136261U;
+    hash = fnv1a_update(hash, &cache->magic, sizeof(cache->magic));
+    hash = fnv1a_update(hash, &cache->version, sizeof(cache->version));
+    hash = fnv1a_update(hash, &cache->wifi, sizeof(cache->wifi));
+    hash = fnv1a_update(hash, cache->web_password, sizeof(cache->web_password));
+    hash = fnv1a_update(hash, &cache->web_password_valid, sizeof(cache->web_password_valid));
+    return hash;
+}
+
+static bool runtime_wifi_config_is_valid(const kvm_wifi_ap_config_t *config)
+{
+    if (config == NULL || config->channel == 0 || config->max_clients == 0) {
+        return false;
+    }
+
+    const size_t ssid_len = strnlen(config->ssid, sizeof(config->ssid));
+    const size_t password_len = strnlen(config->password, sizeof(config->password));
+    return ssid_len > 0 && ssid_len < sizeof(config->ssid) &&
+           password_len >= 8 && password_len < sizeof(config->password);
+}
+
+static bool ephemeral_cache_valid(void)
+{
+    return s_ephemeral_rtc_cache.magic == EPHEMERAL_RTC_MAGIC &&
+           s_ephemeral_rtc_cache.version == EPHEMERAL_RTC_VERSION &&
+           s_ephemeral_rtc_cache.checksum == ephemeral_cache_checksum(&s_ephemeral_rtc_cache) &&
+           runtime_wifi_config_is_valid(&s_ephemeral_rtc_cache.wifi);
+}
+
+static void ephemeral_cache_store_wifi(const kvm_wifi_ap_config_t *wifi)
+{
+    if (wifi == NULL) {
+        return;
+    }
+
+    s_ephemeral_rtc_cache.magic = EPHEMERAL_RTC_MAGIC;
+    s_ephemeral_rtc_cache.version = EPHEMERAL_RTC_VERSION;
+    s_ephemeral_rtc_cache.wifi = *wifi;
+    memset(s_ephemeral_rtc_cache.web_password, 0, sizeof(s_ephemeral_rtc_cache.web_password));
+    s_ephemeral_rtc_cache.web_password_valid = false;
+    s_ephemeral_rtc_cache.checksum = ephemeral_cache_checksum(&s_ephemeral_rtc_cache);
+}
+
+static void ephemeral_cache_store_web_password(const char *web_password)
+{
+    if (web_password == NULL || web_password[0] == '\0' || !ephemeral_cache_valid()) {
+        return;
+    }
+
+    strlcpy(s_ephemeral_rtc_cache.web_password, web_password, sizeof(s_ephemeral_rtc_cache.web_password));
+    s_ephemeral_rtc_cache.web_password_valid = true;
+    s_ephemeral_rtc_cache.checksum = ephemeral_cache_checksum(&s_ephemeral_rtc_cache);
+}
 
 static bool credentials_random(uint8_t *buf, size_t len, void *ctx)
 {
@@ -318,7 +398,13 @@ void app_main(void)
         if (config_err == ESP_ERR_STORAGE_CONFIG_CORRUPT) {
             ESP_LOGE(TAG, "stored AP config is corrupt; entering physical setup flow with regenerated credentials");
         }
-        ESP_ERROR_CHECK(generate_ephemeral_wifi_config(&mapped_wifi_config));
+        if (ephemeral_cache_valid()) {
+            mapped_wifi_config = s_ephemeral_rtc_cache.wifi;
+            ESP_LOGW(TAG, "reusing ephemeral AP credentials from RTC after software reboot");
+        } else {
+            ESP_ERROR_CHECK(generate_ephemeral_wifi_config(&mapped_wifi_config));
+            ephemeral_cache_store_wifi(&mapped_wifi_config);
+        }
         ephemeral_credentials = true;
     }
     storage_secure_zero(config.wifi.password, sizeof(config.wifi.password));
@@ -326,7 +412,18 @@ void app_main(void)
     char web_password[WIFI_AP_PASSWORD_MAX_LEN] = {0};
     const bool persisted_web_auth = storage_web_auth_config_is_valid(&config);
     if (!persisted_web_auth) {
-        ESP_ERROR_CHECK(generate_human_password(web_password, sizeof(web_password)));
+        if (ephemeral_credentials &&
+            ephemeral_cache_valid() &&
+            s_ephemeral_rtc_cache.web_password_valid &&
+            s_ephemeral_rtc_cache.web_password[0] != '\0') {
+            strlcpy(web_password, s_ephemeral_rtc_cache.web_password, sizeof(web_password));
+            ESP_LOGW(TAG, "reusing ephemeral web password from RTC after software reboot");
+        } else {
+            ESP_ERROR_CHECK(generate_human_password(web_password, sizeof(web_password)));
+            if (ephemeral_credentials) {
+                ephemeral_cache_store_web_password(web_password);
+            }
+        }
     } else {
         strlcpy(web_password, "stored - use rotated password", sizeof(web_password));
     }

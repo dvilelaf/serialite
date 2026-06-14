@@ -2,11 +2,14 @@
 
 #include <stdbool.h>
 
-#define WEB_TERMINAL_STATUS_READ_ONLY "Read-only"
-#define WEB_TERMINAL_STATUS_WRITE_ACTIVE "Write active"
-#define WEB_TERMINAL_STATUS_WRITER_BUSY "Writer busy"
-#define WEB_TERMINAL_STATUS_USB_DISCONNECTED "USB disconnected"
-#define WEB_TERMINAL_STATUS_LOCKED "Locked"
+#define WEB_TERMINAL_STATUS_READ_ONLY "Input locked"
+#define WEB_TERMINAL_STATUS_WRITE_ACTIVE "Input enabled"
+#define WEB_TERMINAL_STATUS_WRITER_BUSY "Input busy"
+#define WEB_TERMINAL_STATUS_USB_DISCONNECTED "USB lost"
+#define WEB_TERMINAL_STATUS_LOCKED "Session locked"
+
+#define WEB_TERMINAL_ACTION_UNLOCK "Unlock input"
+#define WEB_TERMINAL_ACTION_LOCK "Lock input"
 
 #define WEB_TERMINAL_KEY_CTRL_C "Ctrl+C"
 #define WEB_TERMINAL_KEY_CTRL_D "Ctrl+D"
