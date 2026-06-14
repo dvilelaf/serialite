@@ -7,6 +7,7 @@ cd "$repo_root"
 cmake -S tests/host -B build-host-tests -G Ninja
 cmake --build build-host-tests
 ctest --test-dir build-host-tests --output-on-failure
+python3 tests/test_web_harness.py
 python3 scripts/test_verify_production_profile.py
 python3 scripts/verify_production_profile.py
 
