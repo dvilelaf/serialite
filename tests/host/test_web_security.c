@@ -212,6 +212,36 @@ static void test_invalidate_all_clears_sessions_and_writer(void)
     CHECK(state.writer_token[0] == '\0');
 }
 
+static void test_rotate_password_invalidates_existing_sessions_and_accepts_new_password(void)
+{
+    web_security_state_t state = valid_state();
+    uint8_t counter = 1;
+
+    CHECK(web_security_login(&state, "correct horse battery staple", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
+    char old_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    strcpy(old_token, state.session_token);
+
+    CHECK(web_security_rotate_password(&state, "new horse battery staple", deterministic_random, &counter));
+
+    CHECK(!web_security_session_valid(&state, old_token, 2000));
+    CHECK(web_security_login(&state, "correct horse battery staple", 2000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_DENIED);
+    CHECK(web_security_login(&state, "new horse battery staple", 3000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
+}
+
+static void test_init_from_persisted_hash_accepts_same_password(void)
+{
+    uint8_t counter = 1;
+    uint8_t salt[WEB_PASSWORD_SALT_LEN];
+    uint8_t hash[WEB_PASSWORD_HASH_LEN];
+    CHECK(web_security_prepare_password_hash("persisted horse battery staple", deterministic_random, &counter, salt, hash));
+
+    web_security_state_t state;
+    CHECK(web_security_init_from_hash(&state, salt, hash));
+
+    CHECK(web_security_login(&state, "persisted horse battery staple", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
+    CHECK(web_security_login(&state, "wrong horse battery staple", 2000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_DENIED);
+}
+
 int main(void)
 {
     test_password_is_not_stored_in_plaintext();
@@ -225,5 +255,7 @@ int main(void)
     test_evicted_writer_lock_does_not_block_new_writer();
     test_origin_must_match_host();
     test_invalidate_all_clears_sessions_and_writer();
+    test_rotate_password_invalidates_existing_sessions_and_accepts_new_password();
+    test_init_from_persisted_hash_accepts_same_password();
     return 0;
 }

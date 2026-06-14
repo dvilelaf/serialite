@@ -13,6 +13,7 @@ idf_component_register(
         "include"
     REQUIRES
         app_watchdog
+        credentials
         diagnostics_export
         event_log
         esp_app_format

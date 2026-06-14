@@ -51,6 +51,23 @@ bool storage_wifi_config_is_valid(const storage_wifi_config_t *config)
     return true;
 }
 
+bool storage_web_auth_config_is_valid(const storage_config_t *config)
+{
+    if (config == NULL || !config->web_password_hash_configured) {
+        return false;
+    }
+
+    uint8_t salt_or = 0;
+    uint8_t hash_or = 0;
+    for (size_t i = 0; i < STORAGE_WEB_PASSWORD_SALT_LEN; ++i) {
+        salt_or |= config->web_password_salt[i];
+    }
+    for (size_t i = 0; i < STORAGE_WEB_PASSWORD_HASH_LEN; ++i) {
+        hash_or |= config->web_password_hash[i];
+    }
+    return salt_or != 0 && hash_or != 0;
+}
+
 storage_config_status_t storage_wifi_config_classify(const storage_wifi_config_t *config)
 {
     if (config == NULL) {

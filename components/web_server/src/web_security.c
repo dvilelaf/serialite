@@ -135,6 +135,79 @@ bool web_security_init(
     return true;
 }
 
+bool web_security_rotate_password(
+    web_security_state_t *state,
+    const char *new_password,
+    web_security_random_fn_t random_fn,
+    void *random_ctx)
+{
+    if (state == NULL) {
+        return false;
+    }
+    uint8_t new_salt[WEB_PASSWORD_SALT_LEN];
+    uint8_t new_hash[WEB_PASSWORD_HASH_LEN];
+    if (!web_security_prepare_password_hash(new_password, random_fn, random_ctx, new_salt, new_hash)) {
+        return false;
+    }
+
+    web_security_apply_password_hash(state, new_salt, new_hash);
+    memset(new_salt, 0, sizeof(new_salt));
+    memset(new_hash, 0, sizeof(new_hash));
+    return true;
+}
+
+bool web_security_prepare_password_hash(
+    const char *password,
+    web_security_random_fn_t random_fn,
+    void *random_ctx,
+    uint8_t out_salt[WEB_PASSWORD_SALT_LEN],
+    uint8_t out_hash[WEB_PASSWORD_HASH_LEN])
+{
+    size_t len = 0;
+    if (!bounded_strlen(password, WEB_SECURITY_PASSWORD_MAX_LEN - 1, &len) ||
+        len < MIN_PASSWORD_LEN || random_fn == NULL || out_salt == NULL || out_hash == NULL) {
+        return false;
+    }
+    if (!random_fn(out_salt, WEB_PASSWORD_SALT_LEN, random_ctx) ||
+        !web_password_hash_derive(password, out_salt, out_hash)) {
+        memset(out_salt, 0, WEB_PASSWORD_SALT_LEN);
+        memset(out_hash, 0, WEB_PASSWORD_HASH_LEN);
+        return false;
+    }
+    return true;
+}
+
+bool web_security_init_from_hash(
+    web_security_state_t *state,
+    const uint8_t salt[WEB_PASSWORD_SALT_LEN],
+    const uint8_t hash[WEB_PASSWORD_HASH_LEN])
+{
+    if (state == NULL || salt == NULL || hash == NULL) {
+        return false;
+    }
+    memset(state, 0, sizeof(*state));
+    memcpy(state->password_salt, salt, sizeof(state->password_salt));
+    memcpy(state->password_hash, hash, sizeof(state->password_hash));
+    state->password_hash_configured = true;
+    return true;
+}
+
+void web_security_apply_password_hash(
+    web_security_state_t *state,
+    const uint8_t salt[WEB_PASSWORD_SALT_LEN],
+    const uint8_t hash[WEB_PASSWORD_HASH_LEN])
+{
+    if (state == NULL || salt == NULL || hash == NULL) {
+        return;
+    }
+    web_security_invalidate_all(state);
+    memcpy(state->password_salt, salt, sizeof(state->password_salt));
+    memcpy(state->password_hash, hash, sizeof(state->password_hash));
+    state->lockout_until_ms = 0;
+    state->failed_logins = 0;
+    state->password_hash_configured = true;
+}
+
 web_security_login_result_t web_security_login(
     web_security_state_t *state,
     const char *password,

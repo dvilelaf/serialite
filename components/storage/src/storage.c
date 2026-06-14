@@ -104,6 +104,20 @@ esp_err_t storage_load_config(storage_config_t *config)
         storage_set_defaults(config);
         return ESP_ERR_STORAGE_CONFIG_CORRUPT;
     }
+    len = sizeof(config->web_password_salt);
+    const esp_err_t web_salt_err = nvs_get_blob(handle, "web_salt", config->web_password_salt, &len);
+    const bool web_salt_ok = web_salt_err == ESP_OK && len == sizeof(config->web_password_salt);
+    len = sizeof(config->web_password_hash);
+    const esp_err_t web_hash_err = nvs_get_blob(handle, "web_hash", config->web_password_hash, &len);
+    const bool web_hash_ok = web_hash_err == ESP_OK && len == sizeof(config->web_password_hash);
+    if (web_salt_ok != web_hash_ok ||
+        (web_salt_err != ESP_OK && web_salt_err != ESP_ERR_NVS_NOT_FOUND) ||
+        (web_hash_err != ESP_OK && web_hash_err != ESP_ERR_NVS_NOT_FOUND)) {
+        nvs_close(handle);
+        storage_set_defaults(config);
+        return ESP_ERR_STORAGE_CONFIG_CORRUPT;
+    }
+    config->web_password_hash_configured = web_salt_ok && web_hash_ok;
 #endif
     (void)nvs_get_u8(handle, "channel", &config->wifi.channel);
     (void)nvs_get_u8(handle, "max_clients", &config->wifi.max_clients);
@@ -132,6 +146,9 @@ esp_err_t storage_save_config(const storage_config_t *config)
     if (!storage_wifi_config_is_valid(&config->wifi)) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (config->web_password_hash_configured && !storage_web_auth_config_is_valid(config)) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
 #if CONFIG_NVS_ENCRYPTION
     const bool nvs_encryption_enabled = true;
@@ -157,6 +174,12 @@ esp_err_t storage_save_config(const storage_config_t *config)
     }
     if (err == ESP_OK) {
         err = nvs_set_u8(handle, "max_clients", config->wifi.max_clients);
+    }
+    if (err == ESP_OK && config->web_password_hash_configured) {
+        err = nvs_set_blob(handle, "web_salt", config->web_password_salt, sizeof(config->web_password_salt));
+    }
+    if (err == ESP_OK && config->web_password_hash_configured) {
+        err = nvs_set_blob(handle, "web_hash", config->web_password_hash, sizeof(config->web_password_hash));
     }
     if (err == ESP_OK) {
         err = nvs_set_u8(handle, "brightness", config->brightness);

@@ -72,10 +72,12 @@ La ruta de la clave debe estar fuera del checkout y gestionada por la infraestru
 ## Politica de secretos
 
 - La password WiFi y la password web deben ser distintas.
-- La password WiFi persistente debe tener al menos 20 bytes y ser unica por dispositivo.
+- La password WiFi persistente debe tener al menos 8 palabras human-readable, 20 bytes o mas, y ser unica por dispositivo.
 - No debe existir password maestra, recovery password universal ni backdoor.
 - Las passwords efimeras solo se muestran en pantalla local tras presencia fisica.
+- La rotacion de credenciales debe mostrarse solo en pantalla local; la interfaz web puede iniciar la accion pero no devuelve passwords.
 - La password web debe validarse mediante KDF con sal; no debe almacenarse reversible.
+- La password web rotada debe persistir como hash+sal en NVS cifrado, nunca como plaintext.
 - Credenciales persistentes solo son aceptables con NVS Encryption activo.
 - Los buffers temporales con passwords deben limpiarse cuando WiFi, UI o auth ya hayan tomado su propia copia.
 - Configuracion persistente corrupta o incompleta no debe reutilizarse ni degradar a AP abierto; debe entrar en setup fisico con credenciales nuevas.

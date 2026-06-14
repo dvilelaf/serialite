@@ -113,7 +113,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: puede limitar ventana de exposición WiFi o requerir botón para activar AP.
 - [x] Emergency lock físico.
   Criterio: un botón o gesto local invalida sesiones, cierra WebSockets y opcionalmente apaga/bloquea el AP.
-- [ ] Rotación/generación controlada de credenciales.
+- [x] Rotación/generación controlada de credenciales.
   Criterio: permite renovar passwords y mostrar la nueva en pantalla local.
 - [x] OTA local protegida.
   Criterio: actualización firmware local, manual, autenticada, firmada y con rollback si está disponible.

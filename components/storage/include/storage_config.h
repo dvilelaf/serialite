@@ -9,6 +9,8 @@
 #define STORAGE_PRODUCTION_PASSWORD_MIN_BYTES 20
 #define STORAGE_SSID_MAX_LEN (STORAGE_SSID_MAX_BYTES + 1)
 #define STORAGE_PASSWORD_MAX_LEN (STORAGE_PASSWORD_MAX_BYTES + 1)
+#define STORAGE_WEB_PASSWORD_SALT_LEN 16
+#define STORAGE_WEB_PASSWORD_HASH_LEN 32
 
 typedef struct {
     char ssid[STORAGE_SSID_MAX_LEN];
@@ -19,6 +21,9 @@ typedef struct {
 
 typedef struct {
     storage_wifi_config_t wifi;
+    uint8_t web_password_salt[STORAGE_WEB_PASSWORD_SALT_LEN];
+    uint8_t web_password_hash[STORAGE_WEB_PASSWORD_HASH_LEN];
+    bool web_password_hash_configured;
     uint8_t brightness;
     uint8_t font_size;
 } storage_config_t;
@@ -44,6 +49,7 @@ typedef storage_secret_erase_result_t (*storage_secret_erase_fn_t)(storage_secre
 typedef bool (*storage_secret_commit_fn_t)(void *ctx);
 
 bool storage_wifi_config_is_valid(const storage_wifi_config_t *config);
+bool storage_web_auth_config_is_valid(const storage_config_t *config);
 void storage_wifi_config_apply_safe_ranges(storage_wifi_config_t *config);
 storage_config_status_t storage_wifi_config_classify(const storage_wifi_config_t *config);
 bool storage_config_secret_persistence_allowed(bool nvs_encryption_enabled);

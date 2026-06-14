@@ -52,6 +52,25 @@ bool web_security_init(
     const char *password,
     web_security_random_fn_t random_fn,
     void *random_ctx);
+bool web_security_rotate_password(
+    web_security_state_t *state,
+    const char *new_password,
+    web_security_random_fn_t random_fn,
+    void *random_ctx);
+bool web_security_prepare_password_hash(
+    const char *password,
+    web_security_random_fn_t random_fn,
+    void *random_ctx,
+    uint8_t out_salt[WEB_PASSWORD_SALT_LEN],
+    uint8_t out_hash[WEB_PASSWORD_HASH_LEN]);
+bool web_security_init_from_hash(
+    web_security_state_t *state,
+    const uint8_t salt[WEB_PASSWORD_SALT_LEN],
+    const uint8_t hash[WEB_PASSWORD_HASH_LEN]);
+void web_security_apply_password_hash(
+    web_security_state_t *state,
+    const uint8_t salt[WEB_PASSWORD_SALT_LEN],
+    const uint8_t hash[WEB_PASSWORD_HASH_LEN]);
 web_security_login_result_t web_security_login(
     web_security_state_t *state,
     const char *password,

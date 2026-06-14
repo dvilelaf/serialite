@@ -31,6 +31,17 @@ target_include_directories(test_terminal_scrollback PRIVATE
 
 add_test(NAME terminal_scrollback COMMAND test_terminal_scrollback)
 
+add_executable(test_credentials
+    test_credentials.c
+    ../../components/credentials/src/credentials.c
+)
+
+target_include_directories(test_credentials PRIVATE
+    ../../components/credentials/include
+)
+
+add_test(NAME credentials COMMAND test_credentials)
+
 add_executable(test_storage_config
     test_storage_config.c
     ../../components/storage/src/storage_config.c

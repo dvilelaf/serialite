@@ -50,6 +50,7 @@ typedef struct {
     lv_obj_t *battery_label;
     lv_obj_t *wifi_password_label;
     lv_obj_t *web_password_label;
+    lv_obj_t *ssid_label;
     lv_obj_t *secret_hint_label;
     lv_obj_t *usb_status_label;
     lv_obj_t *client_status_label;
@@ -425,6 +426,7 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     snprintf(line, sizeof(line), "%s", ssid);
     lv_obj_t *ssid_label = add_label(card, line, &lv_font_montserrat_28, lv_color_hex(0xffffff), UI_CONTENT_W);
     lv_obj_set_style_margin_bottom(ssid_label, 8, 0);
+    s_ctx.ssid_label = ssid_label;
 
     add_label(card, "2  WiFi password", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
     lv_obj_t *password_label = add_label(card, password, &lv_font_montserrat_16, lv_color_hex(0xffffff), UI_CONTENT_W);
@@ -538,5 +540,32 @@ esp_err_t lvgl_ui_start(const lvgl_ui_boot_status_t *status)
 
     board_waveshare_amoled_display_on();
     s_ctx.running = true;
+    return ESP_OK;
+}
+
+esp_err_t lvgl_ui_update_credentials(const lvgl_ui_boot_status_t *status, bool reveal)
+{
+    ESP_RETURN_ON_FALSE(status != NULL, ESP_ERR_INVALID_ARG, TAG, "status is required");
+    ESP_RETURN_ON_FALSE(s_ctx.running && s_ctx.mutex != NULL, ESP_ERR_INVALID_STATE, TAG, "lvgl is not running");
+
+    if (!lock_lvgl(1000)) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    const char *ssid = status->ssid != NULL ? status->ssid : "";
+    const char *password = status->password != NULL ? status->password : "";
+    const char *web_password = status->web_password != NULL ? status->web_password : "";
+    strlcpy(s_ctx.wifi_password, password, sizeof(s_ctx.wifi_password));
+    strlcpy(s_ctx.web_password, web_password, sizeof(s_ctx.web_password));
+    if (s_ctx.ssid_label != NULL && ssid[0] != '\0') {
+        lv_label_set_text(s_ctx.ssid_label, ssid);
+    }
+    if (reveal) {
+        reveal_secrets_temporarily(esp_timer_get_time());
+    } else {
+        set_secret_labels(false);
+    }
+
+    unlock_lvgl();
     return ESP_OK;
 }

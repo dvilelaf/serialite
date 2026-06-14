@@ -6,6 +6,7 @@
 #include "app_watchdog.h"
 #include "diagnostics_export.h"
 #include "event_log.h"
+#include "credentials.h"
 #include "http_rate_limit.h"
 #include "http_route_policy.h"
 #include "ota_update.h"
@@ -69,6 +70,9 @@ static SemaphoreHandle_t s_ws_fds_lock;
 static StaticSemaphore_t s_ws_fds_lock_storage;
 static portMUX_TYPE s_runtime_status_lock = portMUX_INITIALIZER_UNLOCKED;
 static web_server_status_t s_runtime_status;
+static web_server_rotate_credentials_fn_t s_rotate_credentials;
+static void *s_rotate_credentials_ctx;
+static bool s_credential_reboot_pending;
 
 static uint64_t now_ms(void)
 {
@@ -628,7 +632,7 @@ static esp_err_t index_handler(httpd_req_t *req)
         "<p>Bridge USB TX: %llu</p>"
         "<p>Scrollback: %u/%u bytes, dropped old=%llu</p>"
         "<p><a href=\"/terminal\">Abrir terminal</a></p>"
-        "<p><a href=\"/diagnostics\">Diagnostico</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/ota\">Firmware</a> | <a href=\"/about\">About</a></p>"
+        "<p><a href=\"/diagnostics\">Diagnostico</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/credentials\">Credentials</a> | <a href=\"/ota\">Firmware</a> | <a href=\"/about\">About</a></p>"
         "<p><a href=\"/logout\" onclick=\"event.preventDefault();fetch('/logout',{method:'POST',headers:{'X-CSRF-Token':'%s'}}).then(()=>location='/login')\">Logout</a></p>"
         "</div>"
         "</body></html>",
@@ -673,7 +677,7 @@ static esp_err_t about_handler(httpd_req_t *req)
         "<title>ESP32-KVM About</title><style>body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px}"
         ".card{border:1px solid #174436;border-radius:16px;padding:14px;background:#030807;max-width:760px}"
         "dt{color:#7dffe1}dd{margin:0 0 8px 0}a{color:#7dffe1}</style></head><body><main class=\"card\">"
-        "<h1>About ESP32-KVM</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/ota\">Firmware</a></p>"
+        "<h1>About ESP32-KVM</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/credentials\">Credentials</a> | <a href=\"/ota\">Firmware</a></p>"
         "<p>Serial rescue console over local WiFi AP. It is not HDMI KVM, HID remote input, virtual media, power control, cloud access, or command automation.</p>"
         "<dl><dt>Firmware</dt><dd>%s</dd><dt>Project</dt><dd>%s</dd><dt>Build date</dt><dd>%s %s</dd>"
         "<dt>IDF</dt><dd>%s</dd><dt>Security model</dt><dd>Local AP, web auth, CSRF, Origin checks, single writer, RAM diagnostics.</dd>"
@@ -714,7 +718,7 @@ static esp_err_t runbook_handler(httpd_req_t *req)
         "main{border:1px solid #174436;border-radius:16px;padding:16px;background:#030807;max-width:820px}"
         "h2{color:#7dffe1}a{color:#7dffe1}li{margin:8px 0}code{color:#bffff0}</style></head><body><main>"
         "<h1>Runbook de rescate</h1>"
-        "<p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/ota\">Firmware</a> | <a href=\"/about\">About</a></p>"
+        "<p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/credentials\">Credentials</a> | <a href=\"/ota\">Firmware</a> | <a href=\"/about\">About</a></p>"
         "<h2>Antes de escribir</h2><ol>"
         "<li>Confirma que estas conectado al AP local correcto y fisicamente junto al servidor.</li>"
         "<li>Comprueba en Status que USB esta conectado y que no hay drops creciendo rapidamente.</li>"
@@ -998,6 +1002,114 @@ static esp_err_t write_release_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, "ok");
 }
 
+static esp_err_t credentials_page_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
+    if (csrf == NULL) {
+        return redirect_to(req, "/login");
+    }
+
+    char body[2800];
+    const int written = snprintf(
+        body,
+        sizeof(body),
+        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>ESP32-KVM Credentials</title><style>"
+        "*{box-sizing:border-box}body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px;line-height:1.45}"
+        "main{border:1px solid #174436;border-radius:18px;padding:18px;background:#030807;max-width:760px;width:100%%}"
+        "button{font:inherit;border:1px solid #ff875c;border-radius:12px;background:#24110c;color:#ffd2c0;padding:12px 14px;margin:8px 0}"
+        "a{color:#7dffe1}.warn{color:#ffcf7a}code{color:#bffff0}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><main>"
+        "<h1>Credential rotation</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/runbook\">Runbook</a></p>"
+        "<p class=\"warn\">Rotation immediately invalidates web sessions and changes the next WiFi AP password. Secrets are never returned over HTTP.</p>"
+        "<ol><li>Stay physically near the device.</li><li>Click rotate.</li><li>Read the new WiFi and web passwords on the AMOLED after pressing BOOT if needed.</li><li>Reboot to apply the new WiFi AP password.</li></ol>"
+        "<button id=\"rotate\">Rotate credentials</button><button id=\"reboot\" %s>Reboot to apply WiFi</button><pre id=\"out\"></pre><script>"
+        "const CSRF='%s',out=document.getElementById('out'),reboot=document.getElementById('reboot');let rebootPending=%s;"
+        "function say(s){out.textContent+=s+'\\n'}"
+        "document.getElementById('rotate').onclick=async()=>{if(!confirm('Rotate WiFi and web passwords now? Existing web sessions will be invalidated.'))return;"
+        "const r=await fetch('/api/credentials/rotate',{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();say(r.status+' '+t);if(r.ok){say('Session invalidated. Press BOOT, read AMOLED passwords, log in with the new web password, then return here to reboot.');setTimeout(()=>location='/login',2500)}};"
+        "reboot.onclick=async()=>{if(!rebootPending){say('no pending credential reboot');return}if(confirm('Reboot now to apply the new WiFi password?')){const r=await fetch('/api/reboot',{method:'POST',headers:{'X-CSRF-Token':CSRF}});say(r.status+' '+await r.text())}};"
+        "</script></main></body></html>",
+        s_credential_reboot_pending ? "" : "disabled",
+        csrf,
+        s_credential_reboot_pending ? "true" : "false");
+    if (written < 0 || written >= (int)sizeof(body)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "credentials page overflow");
+    }
+
+    send_no_store_headers(req);
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t credentials_rotate_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(
+        require_mutating_auth_csrf_origin(req, "credential rotation rejected: origin", "credential rotation rejected: csrf", session_token),
+        TAG,
+        "credential rotation auth failed");
+
+    if (s_rotate_credentials == NULL) {
+        event_log_append(EVENT_LOG_ERROR, now_ms(), "credential rotation unavailable");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "rotation unavailable");
+    }
+
+    char wifi_password[WEB_SECURITY_PASSWORD_MAX_LEN];
+    char web_password[WEB_SECURITY_PASSWORD_MAX_LEN];
+    uint8_t web_salt[WEB_PASSWORD_SALT_LEN];
+    uint8_t web_hash[WEB_PASSWORD_HASH_LEN];
+    if (credentials_generate_human_password(wifi_password, sizeof(wifi_password), security_random, NULL) != CREDENTIALS_OK ||
+        credentials_generate_human_password(web_password, sizeof(web_password), security_random, NULL) != CREDENTIALS_OK) {
+        secure_zero(wifi_password, sizeof(wifi_password));
+        secure_zero(web_password, sizeof(web_password));
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "password generation failed");
+    }
+    if (!web_security_prepare_password_hash(web_password, security_random, NULL, web_salt, web_hash)) {
+        secure_zero(wifi_password, sizeof(wifi_password));
+        secure_zero(web_password, sizeof(web_password));
+        secure_zero(web_salt, sizeof(web_salt));
+        secure_zero(web_hash, sizeof(web_hash));
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "password hash failed");
+    }
+
+    const web_server_credential_rotation_t rotation = {
+        .wifi_password = wifi_password,
+        .web_password = web_password,
+        .web_password_salt = web_salt,
+        .web_password_hash = web_hash,
+        .reveal_on_local_display = true,
+        .reboot_required = true,
+    };
+    esp_err_t err = s_rotate_credentials(&rotation, s_rotate_credentials_ctx);
+    if (err == ESP_OK) {
+        web_security_apply_password_hash(&s_security, web_salt, web_hash);
+    }
+
+    secure_zero(wifi_password, sizeof(wifi_password));
+    secure_zero(web_password, sizeof(web_password));
+    secure_zero(web_salt, sizeof(web_salt));
+    secure_zero(web_hash, sizeof(web_hash));
+    if (err != ESP_OK) {
+        event_log_append(EVENT_LOG_ERROR, now_ms(), "credential rotation failed");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, esp_err_to_name(err));
+    }
+
+    runtime_status_set_writer_active(false);
+    runtime_status_set_locked(true);
+    s_credential_reboot_pending = true;
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), "credentials rotated");
+    send_no_store_headers(req);
+    return httpd_resp_sendstr(req, "credentials rotated; read new passwords on local display and reboot to apply WiFi");
+}
+
 static void reboot_task(void *arg)
 {
     (void)arg;
@@ -1155,10 +1267,10 @@ static esp_err_t reboot_handler(httpd_req_t *req)
         "reboot auth failed");
 
     const ota_update_status_t ota = ota_update_get_status();
-    if (!ota_update_policy_reboot_allowed(ota.pending_reboot, ota.in_progress)) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "reboot rejected: no pending ota");
+    if (!ota_update_policy_reboot_allowed(ota.pending_reboot, ota.in_progress) && !s_credential_reboot_pending) {
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "reboot rejected: no pending action");
         httpd_resp_set_status(req, "409 Conflict");
-        return httpd_resp_send(req, "no pending ota image", HTTPD_RESP_USE_STRLEN);
+        return httpd_resp_send(req, "no pending reboot action", HTTPD_RESP_USE_STRLEN);
     }
     if (xTaskCreate(reboot_task, "web_reboot", 2048, NULL, 5, NULL) != pdPASS) {
         event_log_append(EVENT_LOG_ERROR, now_ms(), "reboot task creation failed");
@@ -1408,12 +1520,14 @@ static esp_err_t http_error_handler(httpd_req_t *req, httpd_err_code_t error)
 
 esp_err_t web_server_start(const web_server_config_t *server_config)
 {
-    ESP_RETURN_ON_FALSE(
-        server_config != NULL &&
-            web_security_init(&s_security, server_config->web_password, security_random, NULL),
-        ESP_ERR_INVALID_ARG,
-        TAG,
-        "invalid web auth config");
+    ESP_RETURN_ON_FALSE(server_config != NULL, ESP_ERR_INVALID_ARG, TAG, "missing web config");
+    bool auth_ok = false;
+    if (server_config->web_password_hash_configured) {
+        auth_ok = web_security_init_from_hash(&s_security, server_config->web_password_salt, server_config->web_password_hash);
+    } else {
+        auth_ok = web_security_init(&s_security, server_config->web_password, security_random, NULL);
+    }
+    ESP_RETURN_ON_FALSE(auth_ok, ESP_ERR_INVALID_ARG, TAG, "invalid web auth config");
     web_input_policy_init(&s_input_policy);
     web_terminal_ansi_init(&s_web_ansi_state);
     ap_exposure_policy_init(&s_ap_exposure_policy);
@@ -1424,6 +1538,8 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_RETURN_ON_FALSE(s_ws_fds_lock != NULL, ESP_ERR_NO_MEM, TAG, "websocket fd lock failed");
     event_log_init();
     event_log_append(EVENT_LOG_INFO, now_ms(), "web server starting");
+    s_rotate_credentials = server_config->rotate_credentials;
+    s_rotate_credentials_ctx = server_config->rotate_credentials_ctx;
 
     if (!wifi_ap_get_status().started) {
         return ESP_ERR_INVALID_STATE;
@@ -1431,7 +1547,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
 
     httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
     http_config.lru_purge_enable = true;
-    http_config.max_uri_handlers = 16;
+    http_config.max_uri_handlers = 18;
 
     httpd_handle_t server = NULL;
     ESP_RETURN_ON_ERROR(httpd_start(&server, &http_config), TAG, "httpd_start failed");
@@ -1482,6 +1598,18 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         .uri = "/ota",
         .method = HTTP_GET,
         .handler = ota_page_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t credentials_page_uri = {
+        .uri = "/credentials",
+        .method = HTTP_GET,
+        .handler = credentials_page_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t credentials_rotate_uri = {
+        .uri = "/api/credentials/rotate",
+        .method = HTTP_POST,
+        .handler = credentials_rotate_handler,
         .user_ctx = NULL,
     };
     const httpd_uri_t ota_upload_uri = {
@@ -1555,6 +1683,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &terminal_status_uri), fail, TAG, "terminal status handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &about_uri), fail, TAG, "about handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &runbook_uri), fail, TAG, "runbook handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &credentials_page_uri), fail, TAG, "credentials page handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ota_page_uri), fail, TAG, "ota page handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_uri), fail, TAG, "diagnostics handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_json_uri), fail, TAG, "diagnostics json handler failed");
@@ -1562,6 +1691,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &write_release_uri), fail, TAG, "write release handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ota_upload_uri), fail, TAG, "ota upload handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &reboot_uri), fail, TAG, "reboot handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &credentials_rotate_uri), fail, TAG, "credentials rotate handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ws_uri), fail, TAG, "websocket handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, http_error_handler), fail, TAG, "404 handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_err_handler(server, HTTPD_405_METHOD_NOT_ALLOWED, http_error_handler), fail, TAG, "405 handler failed");

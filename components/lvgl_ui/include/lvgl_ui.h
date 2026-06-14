@@ -12,3 +12,4 @@ typedef struct {
 } lvgl_ui_boot_status_t;
 
 esp_err_t lvgl_ui_start(const lvgl_ui_boot_status_t *status);
+esp_err_t lvgl_ui_update_credentials(const lvgl_ui_boot_status_t *status, bool reveal);

@@ -110,6 +110,19 @@ static void test_secret_persistence_requires_encrypted_nvs(void)
     CHECK(storage_config_secret_persistence_allowed(true));
 }
 
+static void test_web_auth_hash_requires_salt_and_hash(void)
+{
+    storage_config_t config = {0};
+
+    CHECK(!storage_web_auth_config_is_valid(&config));
+    config.web_password_hash_configured = true;
+    CHECK(!storage_web_auth_config_is_valid(&config));
+    config.web_password_salt[0] = 1;
+    CHECK(!storage_web_auth_config_is_valid(&config));
+    config.web_password_hash[0] = 1;
+    CHECK(storage_web_auth_config_is_valid(&config));
+}
+
 static void test_plaintext_legacy_secrets_are_scrubbed_without_encrypted_nvs(void)
 {
     CHECK(storage_config_should_scrub_legacy_plaintext_secrets(false));
@@ -217,6 +230,7 @@ int main(void)
     test_safe_ranges_clamp_numeric_values();
     test_classifies_missing_valid_and_corrupt_configs();
     test_secret_persistence_requires_encrypted_nvs();
+    test_web_auth_hash_requires_salt_and_hash();
     test_plaintext_legacy_secrets_are_scrubbed_without_encrypted_nvs();
     test_scrub_erases_legacy_plaintext_secret_keys_and_commits();
     test_scrub_skips_commit_when_legacy_secret_keys_are_missing();

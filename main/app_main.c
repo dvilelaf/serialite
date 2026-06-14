@@ -4,9 +4,11 @@
 #include "esp_random.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
+#include "sdkconfig.h"
 #include <stdio.h>
 #include <string.h>
 
+#include "credentials.h"
 #include "lvgl_ui.h"
 #include "network_identity.h"
 #include "ota_update.h"
@@ -19,6 +21,23 @@
 #include "wifi_ap.h"
 
 static const char *TAG = "esp32_kvm";
+
+typedef struct {
+    storage_config_t config;
+    bool ui_ready;
+} app_credentials_context_t;
+
+static app_credentials_context_t s_credentials_ctx;
+
+static bool credentials_random(uint8_t *buf, size_t len, void *ctx)
+{
+    (void)ctx;
+    if (buf == NULL) {
+        return false;
+    }
+    esp_fill_random(buf, len);
+    return true;
+}
 
 static const char *const PASSWORD_WORDS[] = {
     "amber", "anchor", "apple", "artist", "atlas", "autumn", "badge", "baker",
@@ -94,23 +113,80 @@ static esp_err_t init_nvs(bool *recovered)
 
 static esp_err_t generate_human_password(char *out, size_t out_size)
 {
-    if (out == NULL || out_size == 0) {
+    const credentials_result_t result = credentials_generate_human_password(out, out_size, credentials_random, NULL);
+    if (result == CREDENTIALS_OK) {
+        return ESP_OK;
+    }
+    if (result == CREDENTIALS_ERR_OUTPUT_TOO_SMALL) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return result == CREDENTIALS_ERR_RANDOM_FAILED ? ESP_FAIL : ESP_ERR_INVALID_ARG;
+}
+
+static esp_err_t rotate_credentials_cb(const web_server_credential_rotation_t *rotation, void *ctx)
+{
+    app_credentials_context_t *state = (app_credentials_context_t *)ctx;
+    if (rotation == NULL || state == NULL || rotation->wifi_password == NULL || rotation->web_password == NULL ||
+        rotation->web_password_salt == NULL || rotation->web_password_hash == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint32_t word_indexes[4] = {0};
-    esp_fill_random(word_indexes, sizeof(word_indexes));
-    const int password_len = snprintf(
-        out,
-        out_size,
-        "%s-%s-%s-%s",
-        PASSWORD_WORDS[word_indexes[0] % PASSWORD_WORD_COUNT],
-        PASSWORD_WORDS[word_indexes[1] % PASSWORD_WORD_COUNT],
-        PASSWORD_WORDS[word_indexes[2] % PASSWORD_WORD_COUNT],
-        PASSWORD_WORDS[word_indexes[3] % PASSWORD_WORD_COUNT]);
-    if (password_len < 0 || password_len >= (int)out_size) {
-        return ESP_ERR_INVALID_SIZE;
+#if CONFIG_NVS_ENCRYPTION
+    const bool nvs_encryption_enabled = true;
+#else
+    const bool nvs_encryption_enabled = false;
+#endif
+    const credential_rotation_policy_result_t policy = credential_rotation_policy_evaluate(
+        state->ui_ready,
+        storage_config_secret_persistence_allowed(nvs_encryption_enabled));
+    if (policy != CREDENTIAL_ROTATION_ACCEPT) {
+        ESP_LOGW(TAG, "credential rotation rejected: %s", credential_rotation_policy_result_name(policy));
+        return ESP_ERR_INVALID_STATE;
     }
+
+    storage_config_t next = state->config;
+    strlcpy(next.wifi.ssid, "KVM", sizeof(next.wifi.ssid));
+    strlcpy(next.wifi.password, rotation->wifi_password, sizeof(next.wifi.password));
+    memcpy(next.web_password_salt, rotation->web_password_salt, sizeof(next.web_password_salt));
+    memcpy(next.web_password_hash, rotation->web_password_hash, sizeof(next.web_password_hash));
+    next.web_password_hash_configured = true;
+    storage_wifi_config_apply_safe_ranges(&next.wifi);
+    if (!storage_wifi_config_is_valid(&next.wifi)) {
+        storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const lvgl_ui_boot_status_t ui_status = {
+        .ssid = next.wifi.ssid,
+        .password = rotation->wifi_password,
+        .web_password = rotation->web_password,
+        .ip_addr = "192.168.4.1",
+        .usb_connected = usb_console_get_status().connected,
+    };
+    ESP_RETURN_ON_ERROR(lvgl_ui_update_credentials(&ui_status, false), TAG, "local credential display staging failed");
+
+    const esp_err_t save_err = storage_save_config(&next);
+    if (save_err != ESP_OK) {
+        const lvgl_ui_boot_status_t rollback_ui_status = {
+            .ssid = state->config.wifi.ssid,
+            .password = state->config.wifi.password,
+            .web_password = "current web password unchanged",
+            .ip_addr = "192.168.4.1",
+            .usb_connected = usb_console_get_status().connected,
+        };
+        (void)lvgl_ui_update_credentials(&rollback_ui_status, false);
+        storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
+        return save_err;
+    }
+
+    const esp_err_t reveal_err = lvgl_ui_update_credentials(&ui_status, rotation->reveal_on_local_display);
+    if (reveal_err != ESP_OK) {
+        ESP_LOGW(TAG, "rotated credentials stored but immediate reveal failed: %s", esp_err_to_name(reveal_err));
+    }
+
+    storage_secure_zero(state->config.wifi.password, sizeof(state->config.wifi.password));
+    state->config = next;
+    storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
     return ESP_OK;
 }
 
@@ -165,8 +241,13 @@ void app_main(void)
     }
     storage_secure_zero(config.wifi.password, sizeof(config.wifi.password));
 
-    char web_password[WIFI_AP_PASSWORD_MAX_LEN];
-    ESP_ERROR_CHECK(generate_human_password(web_password, sizeof(web_password)));
+    char web_password[WIFI_AP_PASSWORD_MAX_LEN] = {0};
+    const bool persisted_web_auth = storage_web_auth_config_is_valid(&config);
+    if (!persisted_web_auth) {
+        ESP_ERROR_CHECK(generate_human_password(web_password, sizeof(web_password)));
+    } else {
+        strlcpy(web_password, "stored - use rotated password", sizeof(web_password));
+    }
 
     const lvgl_ui_boot_status_t ui_status = {
         .ssid = mapped_wifi_config.ssid,
@@ -177,6 +258,12 @@ void app_main(void)
     };
     const esp_err_t ui_err = lvgl_ui_start(&ui_status);
     log_init_result("lvgl_ui", ui_err);
+    s_credentials_ctx.config = config;
+    s_credentials_ctx.ui_ready = ui_err == ESP_OK;
+    strlcpy(s_credentials_ctx.config.wifi.ssid, mapped_wifi_config.ssid, sizeof(s_credentials_ctx.config.wifi.ssid));
+    strlcpy(s_credentials_ctx.config.wifi.password, mapped_wifi_config.password, sizeof(s_credentials_ctx.config.wifi.password));
+    s_credentials_ctx.config.wifi.channel = mapped_wifi_config.channel;
+    s_credentials_ctx.config.wifi.max_clients = mapped_wifi_config.max_clients;
     if (ui_err == ESP_OK) {
         log_init_result("reset_control", reset_control_start());
     }
@@ -207,7 +294,12 @@ void app_main(void)
             ESP_LOGW(TAG, "mDNS unavailable; use http://192.168.4.1: %s", esp_err_to_name(identity_err));
         }
         const web_server_config_t web_config = {
-            .web_password = web_password,
+            .web_password = persisted_web_auth ? NULL : web_password,
+            .web_password_salt = persisted_web_auth ? config.web_password_salt : NULL,
+            .web_password_hash = persisted_web_auth ? config.web_password_hash : NULL,
+            .web_password_hash_configured = persisted_web_auth,
+            .rotate_credentials = rotate_credentials_cb,
+            .rotate_credentials_ctx = &s_credentials_ctx,
         };
         const esp_err_t web_err = web_server_start(&web_config);
         storage_secure_zero(web_password, sizeof(web_password));
