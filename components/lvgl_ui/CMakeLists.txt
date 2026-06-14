@@ -8,6 +8,7 @@ idf_component_register(
     REQUIRES
         app_watchdog
         board
+        credentials
         esp_timer
         esp_lcd
         lvgl

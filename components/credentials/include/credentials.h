@@ -46,6 +46,11 @@ credentials_result_t credentials_generate_human_web_password(
     credentials_random_fn_t random_fn,
     void *random_ctx);
 bool credentials_human_phrase_matches_policy(const char *phrase, size_t word_count);
+bool credentials_wifi_qr_payload(
+    const char *ssid,
+    const char *password,
+    char *out,
+    size_t out_size);
 bool credentials_web_auth_boot_decide(
     const credentials_web_auth_boot_input_t *input,
     credentials_web_auth_boot_decision_t *decision);

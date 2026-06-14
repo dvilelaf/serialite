@@ -7943,6 +7943,63 @@ bool credentials_human_phrase_matches_policy(const char *phrase, size_t word_cou
     return words == word_count;
 }
 
+static bool credentials_wifi_qr_append_escaped(const char *value, char *out, size_t out_size, size_t *used)
+{
+    if (value == NULL || out == NULL || used == NULL || *used >= out_size) {
+        return false;
+    }
+
+    for (const char *p = value; *p != '\0'; ++p) {
+        const bool escape = *p == '\\' || *p == ';' || *p == ',' || *p == ':' || *p == '"';
+        const size_t needed = escape ? 2U : 1U;
+        if (*used + needed >= out_size) {
+            return false;
+        }
+        if (escape) {
+            out[(*used)++] = '\\';
+        }
+        out[(*used)++] = *p;
+    }
+    out[*used] = '\0';
+    return true;
+}
+
+static bool credentials_wifi_qr_append_literal(const char *literal, char *out, size_t out_size, size_t *used)
+{
+    if (literal == NULL || out == NULL || used == NULL || *used >= out_size) {
+        return false;
+    }
+    for (const char *p = literal; *p != '\0'; ++p) {
+        if (*used + 1U >= out_size) {
+            return false;
+        }
+        out[(*used)++] = *p;
+    }
+    out[*used] = '\0';
+    return true;
+}
+
+bool credentials_wifi_qr_payload(
+    const char *ssid,
+    const char *password,
+    char *out,
+    size_t out_size)
+{
+    if (ssid == NULL || ssid[0] == '\0' ||
+        password == NULL || password[0] == '\0' ||
+        out == NULL || out_size == 0) {
+        return false;
+    }
+
+    size_t used = 0;
+    out[0] = '\0';
+    return credentials_wifi_qr_append_literal("WIFI:T:WPA;S:", out, out_size, &used) &&
+           credentials_wifi_qr_append_escaped(ssid, out, out_size, &used) &&
+           credentials_wifi_qr_append_literal(";P:", out, out_size, &used) &&
+           credentials_wifi_qr_append_escaped(password, out, out_size, &used) &&
+           credentials_wifi_qr_append_literal(";;", out, out_size, &used);
+}
+
 bool credentials_web_auth_boot_decide(
     const credentials_web_auth_boot_input_t *input,
     credentials_web_auth_boot_decision_t *decision)
