@@ -17,6 +17,8 @@ static void test_formats_healthy_state(void)
         .ap_started = true,
         .wifi_clients = 2,
         .web_clients = 1,
+        .web_writer_active = false,
+        .web_locked = false,
         .usb_connected = true,
         .usb_rx_bytes = 1234,
         .usb_tx_bytes = 56,
@@ -27,6 +29,7 @@ static void test_formats_healthy_state(void)
     CHECK(ui_status_format(&input, &output));
     CHECK(strcmp(output.usb_line, "USB connected  RX 1234  TX 56") == 0);
     CHECK(strcmp(output.client_line, "AP active  WiFi 2  Web 1") == 0);
+    CHECK(strcmp(output.audit_line, "Web read-only") == 0);
     CHECK(strcmp(output.error_line, "No bridge drops") == 0);
 }
 
@@ -36,6 +39,8 @@ static void test_formats_problem_state(void)
         .ap_started = false,
         .wifi_clients = 0,
         .web_clients = 0,
+        .web_writer_active = true,
+        .web_locked = false,
         .usb_connected = false,
         .usb_rx_bytes = 0,
         .usb_tx_bytes = 0,
@@ -46,7 +51,24 @@ static void test_formats_problem_state(void)
     CHECK(ui_status_format(&input, &output));
     CHECK(strcmp(output.usb_line, "USB disconnected") == 0);
     CHECK(strcmp(output.client_line, "AP inactive  WiFi 0  Web 0") == 0);
+    CHECK(strcmp(output.audit_line, "Web write active") == 0);
     CHECK(strcmp(output.error_line, "Bridge drops 7") == 0);
+}
+
+static void test_formats_locked_audit_state(void)
+{
+    ui_status_format_input_t input = {
+        .ap_started = true,
+        .wifi_clients = 1,
+        .web_clients = 2,
+        .web_writer_active = true,
+        .web_locked = true,
+        .usb_connected = true,
+    };
+    ui_status_format_output_t output;
+
+    CHECK(ui_status_format(&input, &output));
+    CHECK(strcmp(output.audit_line, "Web locked") == 0);
 }
 
 static void test_rejects_invalid_arguments(void)
@@ -62,6 +84,7 @@ int main(void)
 {
     test_formats_healthy_state();
     test_formats_problem_state();
+    test_formats_locked_audit_state();
     test_rejects_invalid_arguments();
     return 0;
 }

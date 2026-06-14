@@ -27,6 +27,14 @@ bool ui_status_format(const ui_status_format_input_t *input, ui_status_format_ou
         (unsigned)input->wifi_clients,
         (unsigned)input->web_clients);
 
+    if (input->web_locked) {
+        snprintf(output->audit_line, sizeof(output->audit_line), "Web locked");
+    } else if (input->web_writer_active) {
+        snprintf(output->audit_line, sizeof(output->audit_line), "Web write active");
+    } else {
+        snprintf(output->audit_line, sizeof(output->audit_line), "Web read-only");
+    }
+
     if (input->bridge_drops == 0) {
         snprintf(output->error_line, sizeof(output->error_line), "No bridge drops");
     } else {

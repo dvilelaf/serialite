@@ -119,7 +119,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: actualización firmware local, manual, autenticada, firmada y con rollback si está disponible.
 - [x] Endpoint `/about`.
   Criterio: muestra versión firmware, hash corto, estado de seguridad de build y sin secretos.
-- [ ] Auditoría visible en pantalla.
+- [x] Auditoría visible en pantalla.
   Criterio: muestra cliente activo, terminal activa y estado lock/auth sin saturar la UI.
 - [ ] Pairing local inicial.
   Criterio: primer login o cambio crítico requiere código mostrado en pantalla o pulsación física.

@@ -56,6 +56,8 @@ static SemaphoreHandle_t s_http_rate_limit_lock;
 static StaticSemaphore_t s_http_rate_limit_lock_storage;
 static SemaphoreHandle_t s_ws_fds_lock;
 static StaticSemaphore_t s_ws_fds_lock_storage;
+static portMUX_TYPE s_runtime_status_lock = portMUX_INITIALIZER_UNLOCKED;
+static web_server_status_t s_runtime_status;
 
 static uint64_t now_ms(void)
 {
@@ -67,6 +69,30 @@ static bool security_random(uint8_t *buf, size_t len, void *ctx)
     (void)ctx;
     esp_fill_random(buf, len);
     return true;
+}
+
+static void runtime_status_set_started(bool started)
+{
+    portENTER_CRITICAL(&s_runtime_status_lock);
+    s_runtime_status.started = started;
+    portEXIT_CRITICAL(&s_runtime_status_lock);
+}
+
+static void runtime_status_set_writer_active(bool active)
+{
+    portENTER_CRITICAL(&s_runtime_status_lock);
+    s_runtime_status.writer_active = active;
+    portEXIT_CRITICAL(&s_runtime_status_lock);
+}
+
+static void runtime_status_set_locked(bool locked)
+{
+    portENTER_CRITICAL(&s_runtime_status_lock);
+    s_runtime_status.locked = locked;
+    if (locked) {
+        s_runtime_status.writer_active = false;
+    }
+    portEXIT_CRITICAL(&s_runtime_status_lock);
 }
 
 static void secure_zero(void *ptr, size_t len)
@@ -392,6 +418,7 @@ static void emergency_lock_work(void *arg)
 {
     (void)arg;
     web_security_invalidate_all(&s_security);
+    runtime_status_set_locked(true);
     close_all_ws_clients();
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock engaged");
 }
@@ -467,6 +494,8 @@ static void cleanup_failed_start(httpd_handle_t server)
         httpd_stop(server);
     }
     s_server = NULL;
+    runtime_status_set_started(false);
+    runtime_status_set_writer_active(false);
 }
 
 static void send_scrollback_to_ws_client(int fd)
@@ -705,6 +734,7 @@ static esp_err_t login_post_handler(httpd_req_t *req)
     }
 
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "login ok");
+    runtime_status_set_locked(false);
     char cookie[96];
     snprintf(cookie, sizeof(cookie), "kvm_session=%s; HttpOnly; SameSite=Strict; Path=/", s_security.session_token);
     httpd_resp_set_hdr(req, "Set-Cookie", cookie);
@@ -725,6 +755,7 @@ static esp_err_t logout_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid csrf");
     }
     web_security_logout(&s_security, session_token);
+    runtime_status_set_writer_active(false);
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "logout");
     httpd_resp_set_hdr(req, "Set-Cookie", "kvm_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
     return redirect_to(req, "/login");
@@ -845,6 +876,7 @@ static esp_err_t terminal_status_handler(httpd_req_t *req)
 
     const usb_console_status_t usb = usb_console_get_status();
     const web_security_writer_state_t writer = web_security_writer_state(&s_security, session_token, now_ms());
+    runtime_status_set_writer_active(writer == WEB_SECURITY_WRITER_ACTIVE);
 
     char body[192];
     const int written = snprintf(
@@ -881,6 +913,7 @@ static esp_err_t write_acquire_handler(httpd_req_t *req)
         httpd_resp_set_status(req, "409 Conflict");
         return httpd_resp_send(req, "writer busy", HTTPD_RESP_USE_STRLEN);
     }
+    runtime_status_set_writer_active(true);
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "write control acquired");
     return httpd_resp_sendstr(req, "ok");
 }
@@ -900,6 +933,7 @@ static esp_err_t write_release_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid csrf");
     }
     web_security_release_writer(&s_security, session_token);
+    runtime_status_set_writer_active(false);
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "write control released");
     return httpd_resp_sendstr(req, "ok");
 }
@@ -1169,6 +1203,9 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     httpd_handle_t server = NULL;
     ESP_RETURN_ON_ERROR(httpd_start(&server, &http_config), TAG, "httpd_start failed");
     s_server = server;
+    runtime_status_set_started(true);
+    runtime_status_set_locked(false);
+    runtime_status_set_writer_active(false);
     for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
         s_ws_fds[i] = -1;
     }
@@ -1304,4 +1341,13 @@ esp_err_t web_server_emergency_lock(void)
         }
     }
     return err;
+}
+
+web_server_status_t web_server_get_status(void)
+{
+    web_server_status_t status;
+    portENTER_CRITICAL(&s_runtime_status_lock);
+    status = s_runtime_status;
+    portEXIT_CRITICAL(&s_runtime_status_lock);
+    return status;
 }

@@ -14,5 +14,6 @@ idf_component_register(
         secret_display
         terminal_bridge
         usb_console
+        web_server
         wifi_ap
 )

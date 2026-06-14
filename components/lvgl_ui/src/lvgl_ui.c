@@ -7,6 +7,7 @@
 #include "terminal_bridge.h"
 #include "ui_status_format.h"
 #include "usb_console.h"
+#include "web_server.h"
 #include "wifi_ap.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
@@ -52,6 +53,7 @@ typedef struct {
     lv_obj_t *secret_hint_label;
     lv_obj_t *usb_status_label;
     lv_obj_t *client_status_label;
+    lv_obj_t *audit_status_label;
     lv_obj_t *error_status_label;
     char wifi_password[96];
     char web_password[96];
@@ -101,6 +103,7 @@ static void update_status_labels(lv_timer_t *timer)
     if (!s_ctx.display_on ||
         s_ctx.usb_status_label == NULL ||
         s_ctx.client_status_label == NULL ||
+        s_ctx.audit_status_label == NULL ||
         s_ctx.error_status_label == NULL) {
         return;
     }
@@ -108,11 +111,14 @@ static void update_status_labels(lv_timer_t *timer)
     const wifi_ap_status_t wifi = wifi_ap_get_status();
     const usb_console_status_t usb = usb_console_get_status();
     const terminal_bridge_status_t bridge = terminal_bridge_get_status();
+    const web_server_status_t web = web_server_get_status();
     ui_status_format_output_t output;
     const ui_status_format_input_t input = {
         .ap_started = wifi.started,
         .wifi_clients = wifi.connected_clients,
         .web_clients = bridge.subscriber_count,
+        .web_writer_active = web.writer_active,
+        .web_locked = web.locked,
         .usb_connected = usb.connected,
         .usb_rx_bytes = usb.bytes_received,
         .usb_tx_bytes = usb.bytes_sent,
@@ -125,10 +131,15 @@ static void update_status_labels(lv_timer_t *timer)
 
     lv_label_set_text(s_ctx.usb_status_label, output.usb_line);
     lv_label_set_text(s_ctx.client_status_label, output.client_line);
+    lv_label_set_text(s_ctx.audit_status_label, output.audit_line);
     lv_label_set_text(s_ctx.error_status_label, output.error_line);
     lv_obj_set_style_text_color(
         s_ctx.usb_status_label,
         usb.connected ? lv_color_hex(0x7dffe1) : lv_color_hex(0xff875c),
+        0);
+    lv_obj_set_style_text_color(
+        s_ctx.audit_status_label,
+        web.locked ? lv_color_hex(0xff875c) : (web.writer_active ? lv_color_hex(0xffd37a) : lv_color_hex(0x6b8f85)),
         0);
     lv_obj_set_style_text_color(
         s_ctx.error_status_label,
@@ -432,6 +443,7 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     add_label(card, "Status", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
     s_ctx.usb_status_label = add_label(card, status->usb_connected ? "USB connected" : "USB disconnected", &lv_font_montserrat_16, lv_color_hex(0xff875c), UI_CONTENT_W);
     s_ctx.client_status_label = add_label(card, "AP starting  WiFi 0  Web 0", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
+    s_ctx.audit_status_label = add_label(card, "Web read-only", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
     s_ctx.error_status_label = add_label(card, "No bridge drops", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
 
     s_ctx.secret_hint_label = add_label(card, "BOOT: reveal. Hold 3s: lock web. Hold 10s: reset.", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);

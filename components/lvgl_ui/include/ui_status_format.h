@@ -9,6 +9,8 @@ typedef struct {
     bool ap_started;
     uint32_t wifi_clients;
     uint32_t web_clients;
+    bool web_writer_active;
+    bool web_locked;
     bool usb_connected;
     uint64_t usb_rx_bytes;
     uint64_t usb_tx_bytes;
@@ -18,6 +20,7 @@ typedef struct {
 typedef struct {
     char usb_line[UI_STATUS_LINE_MAX];
     char client_line[UI_STATUS_LINE_MAX];
+    char audit_line[UI_STATUS_LINE_MAX];
     char error_line[UI_STATUS_LINE_MAX];
 } ui_status_format_output_t;
 
