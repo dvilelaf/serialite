@@ -125,7 +125,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: primer login o cambio crítico requiere código mostrado en pantalla o pulsación física.
 - [ ] Export/import de configuración seguro.
   Criterio: export no incluye secretos en claro; import valida versión/checksum y falla cerrado.
-- [ ] Tests de seguridad automatizados.
+- [x] Tests de seguridad automatizados.
   Criterio: cubren auth requerida, CSRF/origin, rate limit, límites de payload y config corrupta.
 - [x] Runbook integrado.
   Criterio: web incluye instrucciones cortas de uso y recuperación durante incidente.

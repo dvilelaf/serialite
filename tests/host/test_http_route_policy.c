@@ -43,10 +43,42 @@ static void test_rejects_oversized_bodies(void)
     CHECK(http_route_policy_allowed("/api/write/acquire", HTTP_ROUTE_METHOD_POST, 1) == HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE);
 }
 
+static void test_security_classifies_public_and_authenticated_routes(void)
+{
+    CHECK(http_route_policy_security("/login", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_PUBLIC);
+    CHECK(http_route_policy_security("/login", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_PUBLIC);
+
+    CHECK(http_route_policy_security("/", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
+    CHECK(http_route_policy_security("/terminal", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
+    CHECK(http_route_policy_security("/terminal-status.json", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
+    CHECK(http_route_policy_security("/diagnostics", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
+    CHECK(http_route_policy_security("/diagnostics.json", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
+    CHECK(http_route_policy_security("/about", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
+    CHECK(http_route_policy_security("/runbook", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
+}
+
+static void test_security_classifies_mutating_and_websocket_routes(void)
+{
+    CHECK(http_route_policy_security("/logout", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_MUTATING_AUTH_CSRF_ORIGIN);
+    CHECK(http_route_policy_security("/api/write/acquire", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_MUTATING_AUTH_CSRF_ORIGIN);
+    CHECK(http_route_policy_security("/api/write/release", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_MUTATING_AUTH_CSRF_ORIGIN);
+    CHECK(http_route_policy_security("/ws", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_WEBSOCKET_AUTH_ORIGIN);
+}
+
+static void test_security_rejects_unknown_or_wrong_method_routes(void)
+{
+    CHECK(http_route_policy_security("/admin", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_UNKNOWN);
+    CHECK(http_route_policy_security("/terminal", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_UNKNOWN);
+    CHECK(http_route_policy_security(NULL, HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_UNKNOWN);
+}
+
 int main(void)
 {
     test_allows_known_routes_and_methods();
     test_rejects_unknown_routes_and_wrong_methods();
     test_rejects_oversized_bodies();
+    test_security_classifies_public_and_authenticated_routes();
+    test_security_classifies_mutating_and_websocket_routes();
+    test_security_rejects_unknown_or_wrong_method_routes();
     return 0;
 }
