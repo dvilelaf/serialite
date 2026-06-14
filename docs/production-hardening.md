@@ -115,6 +115,7 @@ Requisitos:
 - Escritura de terminal en modo single-writer.
 - Terminal en solo lectura tras login hasta solicitar control explicitamente.
 - Rate limits y limites de payload para login, HTTP y WebSocket.
+- Cliente WiFi/STA desactivado por defecto. Si se implementa en runtime, requiere presencia fisica, aceptacion explicita del riesgo, NVS cifrado y mantener el AP como ruta de recuperacion.
 
 Limitacion conocida: HTTP local no equivale a transporte confidencial frente a un atacante ya conectado al AP. Para entornos con amenaza WiFi elevada, usar aislamiento fisico, ventana AP corta o TLS local con fingerprint operativo.
 

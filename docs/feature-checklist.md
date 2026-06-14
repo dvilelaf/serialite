@@ -142,7 +142,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: nombre local opcional sin depender de DNS externo.
 - [ ] HTTPS local con fingerprint.
   Criterio: TLS local opcional con fingerprint visible en pantalla; no depende de CA externa ni induce a ignorar warnings.
-- [ ] Cliente WiFi opcional además de AP.
+- [x] Cliente WiFi opcional además de AP.
   Criterio: desactivado por defecto y documentado como aumento de superficie de ataque.
 - [ ] BLE provisioning.
   Criterio: opcional; no reemplaza el flujo offline básico.

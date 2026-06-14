@@ -21,6 +21,7 @@ source /home/david/esp-idf/export.sh
 | Route allow-list and request body limits | `tests/host/test_http_route_policy.c` |
 | Credential generation and rotation policy | `tests/host/test_credentials.c`, `tests/host/test_web_security.c`, `tests/host/test_http_route_policy.c` |
 | Corrupt or incomplete WiFi config fails closed | `tests/host/test_storage_config.c`, `tests/host/test_startup_policy.c` |
+| Optional WiFi client mode is disabled by default and gated by physical/risk/encryption policy | `tests/host/test_wifi_client_policy.c` |
 | Secret persistence requires encrypted NVS | `tests/host/test_storage_config.c` |
 | Persisted web auth uses hash+salt, not plaintext | `tests/host/test_storage_config.c`, `tests/host/test_web_security.c` |
 | Legacy plaintext secret scrub policy | `tests/host/test_storage_config.c` |

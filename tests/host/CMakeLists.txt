@@ -167,6 +167,17 @@ target_include_directories(test_network_identity_policy PRIVATE
 
 add_test(NAME network_identity_policy COMMAND test_network_identity_policy)
 
+add_executable(test_wifi_client_policy
+    test_wifi_client_policy.c
+    ../../components/wifi_client/src/wifi_client_policy.c
+)
+
+target_include_directories(test_wifi_client_policy PRIVATE
+    ../../components/wifi_client/include
+)
+
+add_test(NAME wifi_client_policy COMMAND test_wifi_client_policy)
+
 add_executable(test_ap_exposure_policy
     test_ap_exposure_policy.c
     ../../components/web_server/src/ap_exposure_policy.c
