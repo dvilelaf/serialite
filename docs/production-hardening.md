@@ -56,6 +56,7 @@ Un build que no cumpla estos puntos debe considerarse build de laboratorio aunqu
 - Credenciales persistentes solo son aceptables con NVS Encryption activo.
 - Los buffers temporales con passwords deben limpiarse cuando WiFi, UI o auth ya hayan tomado su propia copia.
 - Configuracion persistente corrupta o incompleta no debe reutilizarse ni degradar a AP abierto; debe entrar en setup fisico con credenciales nuevas.
+- El AP debe limitar su ventana de exposicion; el firmware de base lo apaga tras 10 minutos sin clientes WiFi ni WebSocket.
 - Los logs de RAM deben redactar eventos sensibles antes de exponerse por web.
 
 ## Superficie USB

@@ -78,6 +78,17 @@ target_include_directories(test_web_terminal_contract PRIVATE
 
 add_test(NAME web_terminal_contract COMMAND test_web_terminal_contract)
 
+add_executable(test_ap_exposure_policy
+    test_ap_exposure_policy.c
+    ../../components/web_server/src/ap_exposure_policy.c
+)
+
+target_include_directories(test_ap_exposure_policy PRIVATE
+    ../../components/web_server/include
+)
+
+add_test(NAME ap_exposure_policy COMMAND test_ap_exposure_policy)
+
 add_executable(test_http_route_policy
     test_http_route_policy.c
     ../../components/web_server/src/http_route_policy.c

@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS
+        "src/ap_exposure_policy.c"
         "src/http_route_policy.c"
         "src/http_rate_limit.c"
         "src/web_server.c"

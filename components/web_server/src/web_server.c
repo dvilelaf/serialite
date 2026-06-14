@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 
+#include "ap_exposure_policy.h"
 #include "app_watchdog.h"
 #include "diagnostics_export.h"
 #include "event_log.h"
@@ -39,6 +40,9 @@ static const char *TAG = "web_server";
 #define WEB_DIAG_EVENT_LIMIT 16
 #define WEB_PASTE_CONFIRM_BYTES 64
 #define WEB_PASTE_MAX_BYTES 2048
+#define WEB_AP_GUARD_TASK_STACK 3072
+#define WEB_AP_GUARD_TASK_PRIORITY 2
+#define WEB_AP_GUARD_INTERVAL_MS 30000
 
 typedef struct {
     size_t len;
@@ -49,8 +53,10 @@ static httpd_handle_t s_server;
 static int s_ws_fds[WEB_MAX_WS_CLIENTS];
 static QueueHandle_t s_tx_queue;
 static TaskHandle_t s_web_tx_task;
+static TaskHandle_t s_ap_guard_task;
 static web_security_state_t s_security;
 static web_input_policy_state_t s_input_policy;
+static ap_exposure_policy_state_t s_ap_exposure_policy;
 static http_rate_limit_state_t s_http_rate_limit;
 static SemaphoreHandle_t s_http_rate_limit_lock;
 static StaticSemaphore_t s_http_rate_limit_lock_storage;
@@ -456,6 +462,35 @@ static void web_tx_task(void *arg)
     }
 }
 
+static void ap_guard_task(void *arg)
+{
+    (void)arg;
+    app_watchdog_register_current_task("ap_guard");
+    while (true) {
+        app_watchdog_reset_current_task();
+        const wifi_ap_status_t wifi = wifi_ap_get_status();
+        const terminal_bridge_status_t bridge = terminal_bridge_get_status();
+        const ap_exposure_policy_result_t result = ap_exposure_policy_evaluate(
+            &s_ap_exposure_policy,
+            wifi.started,
+            wifi.connected_clients,
+            bridge.subscriber_count,
+            now_ms());
+        if (result == AP_EXPOSURE_STOP_AP) {
+            event_log_append(EVENT_LOG_SECURITY, now_ms(), "AP idle timeout; stopping AP");
+            const esp_err_t err = wifi_ap_stop();
+            runtime_status_set_started(false);
+            runtime_status_set_writer_active(false);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "AP idle timeout stop failed: %s; restarting", esp_err_to_name(err));
+                event_log_append(EVENT_LOG_ERROR, now_ms(), "AP idle timeout stop failed; restarting");
+                esp_restart();
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(WEB_AP_GUARD_INTERVAL_MS));
+    }
+}
+
 static void bridge_output_cb(const uint8_t *data, size_t len, void *ctx)
 {
     (void)ctx;
@@ -485,6 +520,10 @@ static void cleanup_failed_start(httpd_handle_t server)
     if (s_web_tx_task != NULL) {
         vTaskDelete(s_web_tx_task);
         s_web_tx_task = NULL;
+    }
+    if (s_ap_guard_task != NULL) {
+        vTaskDelete(s_ap_guard_task);
+        s_ap_guard_task = NULL;
     }
     if (s_tx_queue != NULL) {
         vQueueDelete(s_tx_queue);
@@ -1184,6 +1223,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         TAG,
         "invalid web auth config");
     web_input_policy_init(&s_input_policy);
+    ap_exposure_policy_init(&s_ap_exposure_policy);
     http_rate_limit_init(&s_http_rate_limit);
     s_http_rate_limit_lock = xSemaphoreCreateMutexStatic(&s_http_rate_limit_lock_storage);
     ESP_RETURN_ON_FALSE(s_http_rate_limit_lock != NULL, ESP_ERR_NO_MEM, TAG, "http rate lock failed");
@@ -1313,6 +1353,8 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_GOTO_ON_ERROR(httpd_register_err_handler(server, HTTPD_405_METHOD_NOT_ALLOWED, http_error_handler), fail, TAG, "405 handler failed");
     BaseType_t task_ok = xTaskCreate(web_tx_task, "web_tx", 4096, NULL, 3, &s_web_tx_task);
     ESP_GOTO_ON_FALSE(task_ok == pdPASS, ESP_ERR_NO_MEM, fail, TAG, "web tx task failed");
+    task_ok = xTaskCreate(ap_guard_task, "ap_guard", WEB_AP_GUARD_TASK_STACK, NULL, WEB_AP_GUARD_TASK_PRIORITY, &s_ap_guard_task);
+    ESP_GOTO_ON_FALSE(task_ok == pdPASS, ESP_ERR_NO_MEM, fail, TAG, "ap guard task failed");
     ESP_GOTO_ON_ERROR(terminal_bridge_register_output_callback(bridge_output_cb, NULL), fail, TAG, "bridge callback failed");
 
     ESP_LOGI(TAG, "HTTP server started");

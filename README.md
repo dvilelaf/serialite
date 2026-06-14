@@ -13,6 +13,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - UI local apaisada, oscura y solo informativa con batería, estado AP, SSID, passwords ocultas por defecto y URL.
 - La pantalla local muestra estado USB, clientes WiFi/web, modo web (`read-only`, escritura activa o locked) y drops del bridge sin renderizar logs.
 - La pantalla se apaga tras 3 minutos y se reactiva con el botón BOOT/GPIO0.
+- El AP se apaga automáticamente tras 10 minutos sin clientes WiFi ni clientes web.
 - Mantener `BOOT` durante 3 segundos invalida sesiones web, libera escritura activa y cierra WebSockets.
 - Mantener `BOOT` durante 10 segundos borra la configuración NVS del proyecto y reinicia con credenciales efímeras nuevas.
 - Servidor HTTP con página de estado y terminal web en `/terminal`.
