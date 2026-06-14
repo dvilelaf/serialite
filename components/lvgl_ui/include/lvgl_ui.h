@@ -1,5 +1,13 @@
 #pragma once
 
 #include "esp_err.h"
+#include <stdbool.h>
 
-esp_err_t lvgl_ui_start(void);
+typedef struct {
+    const char *ssid;
+    const char *password;
+    const char *ip_addr;
+    bool usb_connected;
+} lvgl_ui_boot_status_t;
+
+esp_err_t lvgl_ui_start(const lvgl_ui_boot_status_t *status);

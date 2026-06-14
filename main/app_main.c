@@ -10,6 +10,7 @@
 
 #include "lvgl_ui.h"
 #include "storage.h"
+#include "terminal_bridge.h"
 #include "usb_console.h"
 #include "web_server.h"
 #include "wifi_ap.h"
@@ -87,6 +88,7 @@ void app_main(void)
 
     storage_config_t config;
     log_init_result("storage", storage_init());
+    log_init_result("terminal_bridge", terminal_bridge_start());
     ESP_ERROR_CHECK(storage_load_config(&config));
 
     kvm_wifi_ap_config_t mapped_wifi_config = {
@@ -96,14 +98,29 @@ void app_main(void)
     strlcpy(mapped_wifi_config.ssid, config.wifi.ssid, sizeof(mapped_wifi_config.ssid));
     strlcpy(mapped_wifi_config.password, config.wifi.password, sizeof(mapped_wifi_config.password));
 
+    bool ephemeral_credentials = false;
     if (nvs_recovered || !storage_wifi_config_is_valid(&config.wifi)) {
         ESP_ERROR_CHECK(generate_ephemeral_wifi_config(&mapped_wifi_config));
+        ephemeral_credentials = true;
+    }
+
+    const lvgl_ui_boot_status_t ui_status = {
+        .ssid = mapped_wifi_config.ssid,
+        .password = mapped_wifi_config.password,
+        .ip_addr = "192.168.4.1",
+        .usb_connected = false,
+    };
+    const esp_err_t ui_err = lvgl_ui_start(&ui_status);
+    log_init_result("lvgl_ui", ui_err);
+    if (ui_err != ESP_OK && ephemeral_credentials) {
+        ESP_LOGE(TAG, "AP skipped: ephemeral password cannot be safely exposed without local display");
+        log_init_result("usb_console", usb_console_start());
+        return;
     }
 
     esp_err_t wifi_err = wifi_ap_start(&mapped_wifi_config);
     log_init_result("wifi_ap", wifi_err);
     log_init_result("usb_console", usb_console_start());
-    log_init_result("lvgl_ui", lvgl_ui_start());
     if (wifi_err == ESP_OK) {
         log_init_result("web_server", web_server_start());
     } else {

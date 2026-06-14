@@ -1,57 +1,59 @@
 # esp32-kvm
 
-Consola de rescate para servidores Linux headless sobre ESP32-S3, ESP-IDF 5.x, LVGL 9.x, TinyUSB, `esp_http_server` y FreeRTOS.
-
-Este repositorio empieza con una fase de diseño y scaffold mínimo. No contiene todavía la implementación del firmware.
+Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch AMOLED, ESP-IDF 5.x y LVGL 9.x.
 
 ## Estado actual
 
-- Repo creado.
-- Estructura base preparada para los módulos del firmware.
-- Documento de arquitectura y plan en `docs/architecture-and-plan.md`.
-- Scaffold ESP-IDF compilable para `esp32s3`.
-- Pruebas host para validación de configuración y ring buffer.
+- AP WiFi propio con DHCP en `192.168.4.1`.
+- Credenciales AP efímeras si NVS no contiene configuración válida.
+- Pantalla SH8601 inicializada con LVGL 9.5.
+- Táctil FT5x06 inicializado con gating por `INT`.
+- UI local con estado, password local, terminal, teclado virtual y botones rápidos.
+- Servidor HTTP con página de estado y terminal web en `/terminal`.
+- WebSocket en `/ws`.
+- `terminal_bridge` para fan-in/fan-out entre USB, UI local y web.
+- USB implementado con el transporte oficial USB-Serial/JTAG del ESP32-S3.
+- Host tests para configuración y ring buffer.
 
-## Alcance de la fase 1
+## Seguridad
 
-- Crear un punto de acceso WiFi propio.
-- Exponer una interfaz web local con estado.
-- Leer y escribir por USB CDC ACM sin bloquear.
-- Mostrar estado y últimas líneas en la pantalla LVGL.
-- Mantener toda la comunicación asíncrona mediante colas FreeRTOS.
+- No hay password AP fija de fábrica.
+- La password efímera no se escribe en logs.
+- La password se muestra solo en pantalla local.
+- Si la password es efímera y la pantalla no inicializa, el AP no arranca.
+- `storage_save_config()` rechaza guardar credenciales WiFi si `CONFIG_NVS_ENCRYPTION` no está activo.
 
-## Siguiente paso
-
-Revisar y aprobar el plan antes de empezar el scaffold de firmware.
-
-## Verificacion
-
-Con ESP-IDF en el entorno:
+## Verificación
 
 ```bash
-source /path/to/esp-idf/export.sh
+source /home/david/esp-idf/export.sh
 ./scripts/verify.sh
 ```
 
-Comandos equivalentes:
+Esto ejecuta pruebas host y `idf.py build`.
+
+## Flasheo
 
 ```bash
-cmake -S tests/host -B build-host-tests -G Ninja
-cmake --build build-host-tests
-ctest --test-dir build-host-tests --output-on-failure
-idf.py build
-```
-
-Para flashear:
-
-```bash
-source /path/to/esp-idf/export.sh
+source /home/david/esp-idf/export.sh
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-## Seguridad actual
+Si `idf_monitor` no tiene TTY:
 
-- No hay credenciales AP compartidas por defecto.
-- Si no hay configuracion valida en NVS, el firmware genera SSID/PSK efimeros por arranque.
-- `storage_save_config()` rechaza guardar credenciales WiFi si `CONFIG_NVS_ENCRYPTION` no esta activo.
-- El servidor HTTP solo arranca si el AP arranco correctamente.
+```bash
+idf.py -p /dev/ttyACM0 flash
+idf.py -p /dev/ttyACM0 monitor
+```
+
+## Uso
+
+1. Flashea la placa.
+2. Lee en la AMOLED el SSID `ESP32-KVM-...` y la password.
+3. Conéctate al AP desde móvil o portátil.
+4. Abre `http://192.168.4.1`.
+5. Usa `/terminal` para la terminal web.
+
+## Nota USB
+
+La implementación actual usa USB-Serial/JTAG como CDC device. Es la ruta que hace que el servidor Linux vea un `/dev/ttyACM*` al conectar el ESP32-S3. En producción conviene reducir o redirigir logs para que no se mezclen con la consola de rescate.

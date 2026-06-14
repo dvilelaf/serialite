@@ -199,19 +199,31 @@ Requisitos de diseño:
 - logging detallado;
 - no perder el control de la UI aunque falle el USB o la red.
 
-## Decisiones de plataforma
+## Decisiones de plataforma actuales
 
 ### USB
 
-Se usará TinyUSB como contrato de runtime.
+La implementación actual usa el periférico oficial USB-Serial/JTAG del ESP32-S3 como CDC device.
 
-No se debe mezclar la consola ROM de USB con TinyUSB en el mismo contrato de producción.
+Motivo:
+
+- el caso `/dev/ttyACM0` en el servidor Linux implica que el ESP actúa como dispositivo USB;
+- la placa ya expone este puerto para flasheo y monitor;
+- evita requerir que el servidor Linux actúe como USB gadget.
+
+Riesgo:
+
+- los logs por USB pueden mezclarse con la consola de rescate.
+- antes de producción debe bajarse el nivel de logs o redirigirlos si se usa el mismo CDC como consola.
 
 ### RAM
 
-La placa deberá asumir PSRAM para la UI y buffers de terminal.
+PSRAM queda desactivada por defecto.
 
-La UI se diseñará con buffer pequeño, no con framebuffer completo.
+Motivo:
+
+- el hardware probado reiniciaba con `PSRAM ID read error`;
+- LVGL usa buffers parciales DMA en RAM interna, no framebuffer completo.
 
 ### Web
 
@@ -253,11 +265,12 @@ Mientras NVS encryption no este activa, el firmware puede generar credenciales W
 
 ### Fase 1
 
-- crear AP WiFi;
-- servidor web con estado;
-- preparar la frontera para WebSocket terminal sin exponerlo hasta implementarlo;
-- bridge USB CDC ACM;
-- pantalla LVGL de monitor;
+- crear AP WiFi: implementado;
+- servidor web con estado: implementado;
+- WebSocket terminal: implementado;
+- bridge USB CDC ACM via USB-Serial/JTAG: implementado;
+- pantalla LVGL de monitor: implementado;
+- terminal local LVGL básica: implementado;
 - persistencia básica en NVS.
 
 ### Fase 2

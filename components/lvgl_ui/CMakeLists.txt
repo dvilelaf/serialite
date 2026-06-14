@@ -3,4 +3,11 @@ idf_component_register(
         "src/lvgl_ui.c"
     INCLUDE_DIRS
         "include"
+    REQUIRES
+        board
+        esp_timer
+        esp_lcd
+        esp_lcd_touch
+        lvgl
+        terminal_bridge
 )

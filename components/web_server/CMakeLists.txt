@@ -7,4 +7,5 @@ idf_component_register(
         esp_http_server
         wifi_ap
         usb_console
+        terminal_bridge
 )
