@@ -8,40 +8,36 @@ bool ui_status_format(const ui_status_format_input_t *input, ui_status_format_ou
         return false;
     }
 
-    if (input->usb_connected) {
+    (void)input->usb_rx_bytes;
+    (void)input->usb_tx_bytes;
+    snprintf(output->usb_line, sizeof(output->usb_line), "%s", input->usb_connected ? "USB OK" : "USB LOST");
+
+    if (input->ap_started) {
         snprintf(
-            output->usb_line,
-            sizeof(output->usb_line),
-            "USB connected  RX %llu  TX %llu",
-            (unsigned long long)input->usb_rx_bytes,
-            (unsigned long long)input->usb_tx_bytes);
+            output->client_line,
+            sizeof(output->client_line),
+            "%u WiFi  %u Web",
+            (unsigned)input->wifi_clients,
+            (unsigned)input->web_clients);
     } else {
-        snprintf(output->usb_line, sizeof(output->usb_line), "USB disconnected");
+        snprintf(output->client_line, sizeof(output->client_line), "AP OFF");
     }
 
-    snprintf(
-        output->client_line,
-        sizeof(output->client_line),
-        "AP %s  WiFi %u  Web %u",
-        input->ap_started ? "active" : "inactive",
-        (unsigned)input->wifi_clients,
-        (unsigned)input->web_clients);
-
     if (input->web_locked) {
-        snprintf(output->audit_line, sizeof(output->audit_line), "Web locked");
+        snprintf(output->audit_line, sizeof(output->audit_line), "Locked");
     } else if (input->web_writer_active) {
-        snprintf(output->audit_line, sizeof(output->audit_line), "Web write active");
+        snprintf(output->audit_line, sizeof(output->audit_line), "Input active");
     } else {
-        snprintf(output->audit_line, sizeof(output->audit_line), "Web read-only");
+        snprintf(output->audit_line, sizeof(output->audit_line), "Input idle");
     }
 
     if (input->bridge_drops == 0) {
-        snprintf(output->error_line, sizeof(output->error_line), "No bridge drops");
+        output->error_line[0] = '\0';
     } else {
         snprintf(
             output->error_line,
             sizeof(output->error_line),
-            "Bridge drops %llu",
+            "Drops %llu",
             (unsigned long long)input->bridge_drops);
     }
 

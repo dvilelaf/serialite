@@ -33,16 +33,35 @@ static const char *TAG = "lvgl_ui";
 #define LVGL_DRAW_BUF_WIDTH ((BOARD_LCD_H_RES > BOARD_LCD_V_RES) ? BOARD_LCD_H_RES : BOARD_LCD_V_RES)
 #define UI_LANDSCAPE_W BOARD_LCD_V_RES
 #define UI_LANDSCAPE_H BOARD_LCD_H_RES
-#define UI_SCREEN_PAD 14
-#define UI_LEFT_W 132
-#define UI_GAP 14
-#define UI_CARD_W (UI_LANDSCAPE_W - (UI_SCREEN_PAD * 2) - UI_LEFT_W - UI_GAP)
-#define UI_CONTENT_W (UI_CARD_W - 28)
+#define UI_SCREEN_PAD 18
+#define UI_GAP 8
+#define UI_TOP_H 28
+#define UI_MAIN_Y (UI_SCREEN_PAD + UI_TOP_H + UI_GAP)
+#define UI_MAIN_H 144
+#define UI_ACCESS_W 170
+#define UI_STATUS_W (UI_LANDSCAPE_W - (UI_SCREEN_PAD * 2) - UI_ACCESS_W - UI_GAP)
+#define UI_BOTTOM_Y (UI_MAIN_Y + UI_MAIN_H + UI_GAP)
+#define UI_BOTTOM_H (UI_LANDSCAPE_H - UI_BOTTOM_Y - UI_SCREEN_PAD)
+#define UI_CARD_PAD 12
+#define UI_ACCESS_CONTENT_W (UI_ACCESS_W - (UI_CARD_PAD * 2))
+#define UI_STATUS_CONTENT_W (UI_STATUS_W - (UI_CARD_PAD * 2))
+#define UI_BOTTOM_CONTENT_W (UI_LANDSCAPE_W - (UI_SCREEN_PAD * 2) - (UI_CARD_PAD * 2))
 #define DISPLAY_IDLE_TIMEOUT_US (180LL * 1000LL * 1000LL)
 #define WAKE_BUTTON_DEBOUNCE_US (50LL * 1000LL)
 #define BATTERY_UPDATE_PERIOD_MS 10000
 #define STATUS_UPDATE_PERIOD_MS 2000
 #define SECRET_REVEAL_TIMEOUT_US (30LL * 1000LL * 1000LL)
+
+#define UI_COLOR_BG 0x000000
+#define UI_COLOR_BG_2 0x03110d
+#define UI_COLOR_SURFACE 0x030807
+#define UI_COLOR_SURFACE_2 0x071b16
+#define UI_COLOR_LINE 0x12362d
+#define UI_COLOR_TEXT 0xf2fff9
+#define UI_COLOR_MUTED 0x6b8f85
+#define UI_COLOR_OK 0x7dffe1
+#define UI_COLOR_WARN 0xffd37a
+#define UI_COLOR_BAD 0xff875c
 
 typedef struct {
     lv_display_t *display;
@@ -139,15 +158,15 @@ static void update_status_labels(lv_timer_t *timer)
     lv_label_set_text(s_ctx.error_status_label, output.error_line);
     lv_obj_set_style_text_color(
         s_ctx.usb_status_label,
-        usb.connected ? lv_color_hex(0x7dffe1) : lv_color_hex(0xff875c),
+        usb.connected ? lv_color_hex(UI_COLOR_OK) : lv_color_hex(UI_COLOR_BAD),
         0);
     lv_obj_set_style_text_color(
         s_ctx.audit_status_label,
-        web.locked ? lv_color_hex(0xff875c) : (web.writer_active ? lv_color_hex(0xffd37a) : lv_color_hex(0x6b8f85)),
+        web.locked ? lv_color_hex(UI_COLOR_BAD) : (web.writer_active ? lv_color_hex(UI_COLOR_WARN) : lv_color_hex(UI_COLOR_OK)),
         0);
     lv_obj_set_style_text_color(
         s_ctx.error_status_label,
-        input.bridge_drops == 0 ? lv_color_hex(0x6b8f85) : lv_color_hex(0xffd37a),
+        input.bridge_drops == 0 ? lv_color_hex(UI_COLOR_MUTED) : lv_color_hex(UI_COLOR_WARN),
         0);
 }
 
@@ -286,10 +305,10 @@ static void set_secret_labels(bool reveal)
     if (s_ctx.secret_hint_label != NULL) {
         lv_label_set_text(
             s_ctx.secret_hint_label,
-            reveal ? "Secrets visible for 30s" : "BOOT reveal. Hold 3s lock web. Hold 10s reset.");
+            reveal ? "Visible for 30s" : "Press BOOT to reveal");
         lv_obj_set_style_text_color(
             s_ctx.secret_hint_label,
-            reveal ? lv_color_hex(0xffd37a) : lv_color_hex(0x6b8f85),
+            reveal ? lv_color_hex(UI_COLOR_WARN) : lv_color_hex(UI_COLOR_MUTED),
             0);
     }
     s_ctx.secrets_visible = reveal;
@@ -369,6 +388,44 @@ static lv_obj_t *add_label(lv_obj_t *parent, const char *text, const lv_font_t *
     return label;
 }
 
+static lv_obj_t *add_label_single_line(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_color_t color, int32_t width)
+{
+    lv_obj_t *label = add_label(parent, text, font, color, width);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+    return label;
+}
+
+static lv_obj_t *add_card(lv_obj_t *parent, int32_t x, int32_t y, int32_t w, int32_t h)
+{
+    lv_obj_t *card = lv_obj_create(parent);
+    lv_obj_set_size(card, w, h);
+    lv_obj_set_pos(card, x, y);
+    lv_obj_set_style_bg_color(card, lv_color_hex(UI_COLOR_SURFACE), 0);
+    lv_obj_set_style_bg_grad_color(card, lv_color_hex(UI_COLOR_SURFACE_2), 0);
+    lv_obj_set_style_bg_grad_dir(card, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(UI_COLOR_LINE), 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_radius(card, 18, 0);
+    lv_obj_set_style_pad_all(card, UI_CARD_PAD, 0);
+    lv_obj_set_scrollbar_mode(card, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    return card;
+}
+
+static lv_obj_t *add_kicker(lv_obj_t *parent, const char *text, int32_t y, int32_t width)
+{
+    lv_obj_t *label = add_label(parent, text, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), width);
+    lv_obj_set_pos(label, UI_CARD_PAD, y);
+    return label;
+}
+
+static lv_obj_t *add_value(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_color_t color, int32_t y, int32_t width)
+{
+    lv_obj_t *label = add_label(parent, text, font, color, width);
+    lv_obj_set_pos(label, UI_CARD_PAD, y);
+    return label;
+}
+
 static void build_boot_screen(const lvgl_ui_boot_status_t *status)
 {
     const char *ssid = status->ssid != NULL ? status->ssid : "(sin ssid)";
@@ -380,110 +437,69 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     const char *ip_addr = status->ip_addr != NULL ? status->ip_addr : "192.168.4.1";
     char line[128];
     char url[64];
+    char display_url[32];
     if (web_url[0] != '\0') {
         snprintf(url, sizeof(url), "%s", web_url);
     } else {
         snprintf(url, sizeof(url), "http://%s", ip_addr);
     }
+    snprintf(display_url, sizeof(display_url), "%s", ip_addr);
 
     lv_obj_t *screen = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_grad_color(screen, lv_color_hex(0x04110d), 0);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(UI_COLOR_BG), 0);
+    lv_obj_set_style_bg_grad_color(screen, lv_color_hex(UI_COLOR_BG_2), 0);
     lv_obj_set_style_bg_grad_dir(screen, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_pad_all(screen, UI_SCREEN_PAD, 0);
     lv_obj_set_scrollbar_mode(screen, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *battery_label = lv_label_create(screen);
     lv_label_set_text(battery_label, LV_SYMBOL_BATTERY_FULL " --%");
     lv_obj_set_style_text_font(battery_label, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(battery_label, lv_color_hex(0x7dffe1), 0);
-    lv_obj_align(battery_label, LV_ALIGN_TOP_LEFT, 0, -2);
+    lv_obj_set_style_text_color(battery_label, lv_color_hex(UI_COLOR_OK), 0);
+    lv_obj_align(battery_label, LV_ALIGN_TOP_RIGHT, -UI_SCREEN_PAD, UI_SCREEN_PAD + 1);
     s_ctx.battery_label = battery_label;
 
-    lv_obj_t *left = lv_obj_create(screen);
-    lv_obj_set_size(left, UI_LEFT_W, UI_LANDSCAPE_H - (UI_SCREEN_PAD * 2));
-    lv_obj_align(left, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_set_style_bg_opa(left, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(left, 0, 0);
-    lv_obj_set_style_pad_all(left, 0, 0);
-    lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(left, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    s_ctx.usb_status_label = add_label_single_line(
+        screen,
+        status->usb_connected ? "USB OK" : "USB LOST",
+        &lv_font_montserrat_20,
+        status->usb_connected ? lv_color_hex(UI_COLOR_OK) : lv_color_hex(UI_COLOR_BAD),
+        150);
+    lv_obj_set_pos(s_ctx.usb_status_label, UI_SCREEN_PAD, UI_SCREEN_PAD + 2);
 
-    add_label(left, "KVM", &lv_font_montserrat_28, lv_color_hex(0x7dffe1), UI_LEFT_W);
-    add_label(left, "Rescue console", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_LEFT_W);
-
-    lv_obj_t *ready_pill = lv_obj_create(left);
-    lv_obj_set_width(ready_pill, 116);
-    lv_obj_set_height(ready_pill, 38);
-    lv_obj_set_style_margin_top(ready_pill, 24, 0);
-    lv_obj_set_style_radius(ready_pill, 19, 0);
-    lv_obj_set_style_bg_color(ready_pill, lv_color_hex(0x08291f), 0);
-    lv_obj_set_style_border_color(ready_pill, lv_color_hex(0x2ee6b8), 0);
-    lv_obj_set_style_border_width(ready_pill, 1, 0);
-    lv_obj_set_style_pad_all(ready_pill, 0, 0);
-
-    lv_obj_t *ready_label = lv_label_create(ready_pill);
-    lv_label_set_text(ready_label, "AP READY");
-    lv_obj_set_style_text_font(ready_label, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(ready_label, lv_color_hex(0x7dffe1), 0);
-    lv_obj_center(ready_label);
-
-    add_label(left, "Scan URL", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_LEFT_W);
-    lv_obj_t *qr = lv_qrcode_create(left);
-    lv_qrcode_set_size(qr, 104);
-    lv_qrcode_set_dark_color(qr, lv_color_hex(0x000000));
-    lv_qrcode_set_light_color(qr, lv_color_hex(0xffffff));
-    lv_qrcode_set_quiet_zone(qr, true);
-    lv_qrcode_update(qr, url, strlen(url));
-    lv_obj_set_style_margin_top(qr, 4, 0);
-    lv_obj_set_style_margin_bottom(qr, 10, 0);
-
-    lv_obj_t *card = lv_obj_create(screen);
-    lv_obj_set_size(card, UI_CARD_W, UI_LANDSCAPE_H - (UI_SCREEN_PAD * 2));
-    lv_obj_align(card, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_set_style_bg_color(card, lv_color_hex(0x030807), 0);
-    lv_obj_set_style_border_color(card, lv_color_hex(0x12362d), 0);
-    lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_radius(card, 18, 0);
-    lv_obj_set_style_pad_all(card, 14, 0);
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-
-    add_label(card, "1  Join WiFi", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
+    lv_obj_t *access = add_card(screen, UI_SCREEN_PAD, UI_MAIN_Y, UI_ACCESS_W, UI_MAIN_H);
+    add_kicker(access, "AP", 0, UI_ACCESS_CONTENT_W);
     snprintf(line, sizeof(line), "%s", ssid);
-    lv_obj_t *ssid_label = add_label(card, line, &lv_font_montserrat_28, lv_color_hex(0xffffff), UI_CONTENT_W);
-    lv_obj_set_style_margin_bottom(ssid_label, 8, 0);
+    lv_obj_t *ssid_label = add_value(access, line, &lv_font_montserrat_28, lv_color_hex(UI_COLOR_OK), 22, UI_ACCESS_CONTENT_W);
     s_ctx.ssid_label = ssid_label;
 
-    add_label(card, "2  WiFi password", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
-    lv_obj_t *password_label = add_label(card, password, &lv_font_montserrat_16, lv_color_hex(0xffffff), UI_CONTENT_W);
-    lv_obj_set_style_margin_bottom(password_label, 4, 0);
-    s_ctx.wifi_password_label = password_label;
-
-    add_label(card, "3  Web password", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
-    lv_obj_t *web_password_label = add_label(card, web_password, &lv_font_montserrat_16, lv_color_hex(0xffffff), UI_CONTENT_W);
-    lv_obj_set_style_margin_bottom(web_password_label, 4, 0);
-    s_ctx.web_password_label = web_password_label;
-
-    add_label(card, "4  Pair code (BOOT reveal, first login)", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
-    lv_obj_t *pairing_code_label = add_label(card, pairing_code, &lv_font_montserrat_16, lv_color_hex(0xffffff), UI_CONTENT_W);
-    lv_obj_set_style_margin_bottom(pairing_code_label, 4, 0);
-    s_ctx.pairing_code_label = pairing_code_label;
-
-    add_label(card, "5  Open", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
-    add_label(card, url, &lv_font_montserrat_20, lv_color_hex(0x7dffe1), UI_CONTENT_W);
+    add_kicker(access, "OPEN", 66, UI_ACCESS_CONTENT_W);
+    add_value(access, display_url, &lv_font_montserrat_28, lv_color_hex(UI_COLOR_TEXT), 88, UI_ACCESS_CONTENT_W);
     if (https_fingerprint[0] != '\0') {
-        add_label(card, "TLS fingerprint SHA-256", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
-        add_label(card, https_fingerprint, &lv_font_montserrat_16, lv_color_hex(0xffffff), UI_CONTENT_W);
+        add_value(access, "HTTPS fingerprint on web", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_WARN), 134, UI_ACCESS_CONTENT_W);
     }
 
-    add_label(card, "Status", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
-    s_ctx.usb_status_label = add_label(card, status->usb_connected ? "USB connected" : "USB disconnected", &lv_font_montserrat_16, lv_color_hex(0xff875c), UI_CONTENT_W);
-    s_ctx.client_status_label = add_label(card, "AP starting  WiFi 0  Web 0", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
-    s_ctx.audit_status_label = add_label(card, "Web read-only", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
-    s_ctx.error_status_label = add_label(card, "No bridge drops", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
+    lv_obj_t *status_card = add_card(screen, UI_SCREEN_PAD + UI_ACCESS_W + UI_GAP, UI_MAIN_Y, UI_STATUS_W, UI_MAIN_H);
+    add_kicker(status_card, "CLIENTS", 0, UI_STATUS_CONTENT_W);
+    s_ctx.client_status_label = add_value(status_card, "0 WiFi  0 Web", &lv_font_montserrat_20, lv_color_hex(UI_COLOR_TEXT), 24, UI_STATUS_CONTENT_W);
+    add_kicker(status_card, "INPUT", 64, UI_STATUS_CONTENT_W);
+    s_ctx.audit_status_label = add_value(status_card, "Input idle", &lv_font_montserrat_20, lv_color_hex(UI_COLOR_OK), 88, UI_STATUS_CONTENT_W);
+    s_ctx.error_status_label = add_value(status_card, "", &lv_font_montserrat_20, lv_color_hex(UI_COLOR_WARN), 116, UI_STATUS_CONTENT_W);
 
-    s_ctx.secret_hint_label = add_label(card, "BOOT: reveal. Hold 3s: lock web. Hold 10s: reset.", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
+    lv_obj_t *secrets = add_card(screen, UI_SCREEN_PAD, UI_BOTTOM_Y, UI_LANDSCAPE_W - (UI_SCREEN_PAD * 2), UI_BOTTOM_H);
+    s_ctx.secret_hint_label = add_value(secrets, "Press BOOT: reveal 30s", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 0, UI_BOTTOM_CONTENT_W);
+
+    add_value(secrets, "WiFi", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 28, 44);
+    s_ctx.wifi_password_label = add_label(secrets, password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_BOTTOM_CONTENT_W - 58);
+    lv_obj_set_pos(s_ctx.wifi_password_label, 58, 28);
+
+    add_value(secrets, "Web", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 62, 44);
+    s_ctx.web_password_label = add_label(secrets, web_password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_BOTTOM_CONTENT_W - 58);
+    lv_obj_set_pos(s_ctx.web_password_label, 58, 62);
+
+    add_value(secrets, "Pair", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 96, 44);
+    s_ctx.pairing_code_label = add_label(secrets, pairing_code, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_BOTTOM_CONTENT_W - 58);
+    lv_obj_set_pos(s_ctx.pairing_code_label, 58, 96);
     strlcpy(s_ctx.wifi_password, password, sizeof(s_ctx.wifi_password));
     strlcpy(s_ctx.web_password, web_password, sizeof(s_ctx.web_password));
     strlcpy(s_ctx.pairing_code, pairing_code, sizeof(s_ctx.pairing_code));

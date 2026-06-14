@@ -63,15 +63,11 @@ credentials_result_t credentials_generate_human_password(
     const int password_len = snprintf(
         out,
         out_size,
-        "%s-%s-%s-%s-%s-%s-%s-%s",
+        "%s-%s-%s-%s",
         PASSWORD_WORDS[word_indexes[0] % PASSWORD_WORD_COUNT],
         PASSWORD_WORDS[word_indexes[1] % PASSWORD_WORD_COUNT],
         PASSWORD_WORDS[word_indexes[2] % PASSWORD_WORD_COUNT],
-        PASSWORD_WORDS[word_indexes[3] % PASSWORD_WORD_COUNT],
-        PASSWORD_WORDS[word_indexes[4] % PASSWORD_WORD_COUNT],
-        PASSWORD_WORDS[word_indexes[5] % PASSWORD_WORD_COUNT],
-        PASSWORD_WORDS[word_indexes[6] % PASSWORD_WORD_COUNT],
-        PASSWORD_WORDS[word_indexes[7] % PASSWORD_WORD_COUNT]);
+        PASSWORD_WORDS[word_indexes[3] % PASSWORD_WORD_COUNT]);
     if (password_len < 0 || password_len >= (int)out_size) {
         return CREDENTIALS_ERR_OUTPUT_TOO_SMALL;
     }

@@ -72,7 +72,7 @@ La ruta de la clave debe estar fuera del checkout y gestionada por la infraestru
 ## Politica de secretos
 
 - La password WiFi y la password web deben ser distintas.
-- La password WiFi persistente debe tener al menos 8 palabras human-readable, 20 bytes o mas, y ser unica por dispositivo.
+- La password WiFi persistente debe ser mas fuerte que la credencial temporal mostrada en pantalla: al menos 8 palabras human-readable, 20 bytes o mas, y unica por dispositivo.
 - No debe existir password maestra, recovery password universal ni backdoor.
 - Las passwords efimeras solo se muestran en pantalla local tras presencia fisica.
 - El primer login web debe exigir pairing local de un solo uso mostrado en pantalla o equivalente de presencia fisica.

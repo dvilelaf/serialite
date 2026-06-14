@@ -20,7 +20,7 @@ static bool deterministic_random(uint8_t *buf, size_t len, void *ctx)
     return true;
 }
 
-static void test_human_password_uses_eight_words(void)
+static void test_human_password_uses_four_words(void)
 {
     char password[64];
     uint8_t counter = 0;
@@ -34,7 +34,8 @@ static void test_human_password_uses_eight_words(void)
         }
     }
     CHECK(separators == CREDENTIALS_PASSWORD_WORD_COUNT - 1);
-    CHECK(strlen(password) >= 40);
+    CHECK(strlen(password) >= 20);
+    CHECK(strlen(password) <= 32);
 }
 
 static void test_rotation_requires_local_display_and_safe_persistence(void)
@@ -54,7 +55,7 @@ static void test_rotation_policy_names_are_stable(void)
 
 int main(void)
 {
-    test_human_password_uses_eight_words();
+    test_human_password_uses_four_words();
     test_rotation_requires_local_display_and_safe_persistence();
     test_rotation_policy_names_are_stable();
     return 0;
