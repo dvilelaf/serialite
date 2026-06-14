@@ -12,6 +12,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - Pantalla SH8601 inicializada con LVGL 9.5.
 - Táctil FT5x06 no se inicializa en la UI actual porque la pantalla local es solo informativa.
 - UI local apaisada, oscura y solo informativa con batería, estado AP, SSID, passwords ocultas por defecto y URL.
+- QR local en pantalla para abrir la URL del portal; no contiene passwords ni tokens.
 - La pantalla local muestra estado USB, clientes WiFi/web, modo web (`read-only`, escritura activa o locked) y drops del bridge sin renderizar logs.
 - La pantalla se apaga tras 3 minutos y se reactiva con el botón BOOT/GPIO0.
 - El AP se apaga automáticamente tras 10 minutos sin clientes WiFi ni clientes web.
@@ -57,6 +58,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - El paste web grande o multilínea requiere confirmación y se trocea antes de enviarse.
 - Los logs internos no almacenan passwords ni transcripción serial completa.
 - Las passwords se muestran solo en pantalla local tras presencia física y durante una ventana temporal.
+- El QR de pantalla contiene solo la URL local, nunca credenciales.
 - Si la password es efímera y la pantalla no inicializa, el AP no arranca.
 - `storage_save_config()` rechaza guardar credenciales WiFi si `CONFIG_NVS_ENCRYPTION` no está activo.
 - Los buffers temporales de credenciales se borran explícitamente tras ser copiados por WiFi, UI o autenticación web.
@@ -93,7 +95,7 @@ idf.py -p /dev/ttyACM0 monitor
 2. Lee en la AMOLED el SSID `KVM`.
 3. Pulsa `BOOT` con la pantalla encendida para revelar durante 30 segundos la password WiFi y la password web temporal.
 4. Conéctate al AP desde móvil o portátil.
-5. Abre `http://kvm.local` si tu sistema soporta mDNS, o `http://192.168.4.1`.
+5. Escanea el QR de pantalla o abre `http://kvm.local` si tu sistema soporta mDNS, o `http://192.168.4.1`.
 6. Autentica con la password web y el código `Pair code` mostrado en la AMOLED. El código es de un solo uso para confirmar presencia física local.
 7. Usa `/terminal`; por defecto es solo lectura hasta pulsar `Request write`. La barra superior muestra si puedes escribir, si otro cliente tiene el lock o si USB está desconectado.
 8. Usa `/diagnostics` para estado técnico y eventos recientes sin secretos.

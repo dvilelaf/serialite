@@ -134,7 +134,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
 
 ## Nice-To-Have
 
-- [ ] QR en pantalla.
+- [x] QR en pantalla.
   Criterio: facilita abrir URL/AP desde móvil sin escribir datos largos.
 - [ ] Modo demo/simulador serial.
   Criterio: permite probar la web sin servidor conectado.

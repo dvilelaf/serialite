@@ -37,6 +37,7 @@ source /home/david/esp-idf/export.sh
 - Credential rotation shows new secrets on the AMOLED only, not in the HTTP response.
 - First web login rejects missing or incorrect local pair code, then accepts the one-time code shown on the AMOLED.
 - `/config.json` must not contain WiFi password, web password hash, salts or serial transcript data.
+- The on-screen QR opens only the local URL and does not encode WiFi/web passwords, pairing code or session token.
 - Old web sessions are rejected after credential rotation.
 - After credential rotation and reboot, the AP requires the rotated WiFi password and web login accepts the rotated web password.
 - BOOT long-press behavior must be smoke-tested on the physical board after firmware changes touching reset or lock flows.

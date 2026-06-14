@@ -378,6 +378,9 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     const char *web_password = status->web_password != NULL ? status->web_password : "(sin web password)";
     const char *pairing_code = status->pairing_code != NULL ? status->pairing_code : "(sin pairing)";
     const char *ip_addr = status->ip_addr != NULL ? status->ip_addr : "192.168.4.1";
+    char line[128];
+    char url[64];
+    snprintf(url, sizeof(url), "http://%s", ip_addr);
 
     lv_obj_t *screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
@@ -421,6 +424,16 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     lv_obj_set_style_text_color(ready_label, lv_color_hex(0x7dffe1), 0);
     lv_obj_center(ready_label);
 
+    add_label(left, "Scan URL", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_LEFT_W);
+    lv_obj_t *qr = lv_qrcode_create(left);
+    lv_qrcode_set_size(qr, 104);
+    lv_qrcode_set_dark_color(qr, lv_color_hex(0x000000));
+    lv_qrcode_set_light_color(qr, lv_color_hex(0xffffff));
+    lv_qrcode_set_quiet_zone(qr, true);
+    lv_qrcode_update(qr, url, strlen(url));
+    lv_obj_set_style_margin_top(qr, 4, 0);
+    lv_obj_set_style_margin_bottom(qr, 10, 0);
+
     lv_obj_t *card = lv_obj_create(screen);
     lv_obj_set_size(card, UI_CARD_W, UI_LANDSCAPE_H - (UI_SCREEN_PAD * 2));
     lv_obj_align(card, LV_ALIGN_RIGHT_MID, 0, 0);
@@ -432,7 +445,6 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
-    char line[128];
     add_label(card, "1  Join WiFi", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
     snprintf(line, sizeof(line), "%s", ssid);
     lv_obj_t *ssid_label = add_label(card, line, &lv_font_montserrat_28, lv_color_hex(0xffffff), UI_CONTENT_W);
@@ -455,8 +467,7 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     s_ctx.pairing_code_label = pairing_code_label;
 
     add_label(card, "5  Open", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
-    snprintf(line, sizeof(line), "http://%s", ip_addr);
-    add_label(card, line, &lv_font_montserrat_20, lv_color_hex(0x7dffe1), UI_CONTENT_W);
+    add_label(card, url, &lv_font_montserrat_20, lv_color_hex(0x7dffe1), UI_CONTENT_W);
 
     add_label(card, "Status", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
     s_ctx.usb_status_label = add_label(card, status->usb_connected ? "USB connected" : "USB disconnected", &lv_font_montserrat_16, lv_color_hex(0xff875c), UI_CONTENT_W);

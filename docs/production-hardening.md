@@ -82,6 +82,7 @@ La ruta de la clave debe estar fuera del checkout y gestionada por la infraestru
 - La password web rotada debe persistir como hash+sal en NVS cifrado, nunca como plaintext.
 - Credenciales persistentes solo son aceptables con NVS Encryption activo.
 - Export/import de configuracion solo puede transportar campos no secretos con schema/checksum; passwords, hashes y salts no deben exportarse.
+- El QR visible en pantalla solo debe codificar la URL local; no debe incluir passwords, pair code, tokens ni configuracion sensible.
 - Los buffers temporales con passwords deben limpiarse cuando WiFi, UI o auth ya hayan tomado su propia copia.
 - Configuracion persistente corrupta o incompleta no debe reutilizarse ni degradar a AP abierto; debe entrar en setup fisico con credenciales nuevas.
 - El AP debe limitar su ventana de exposicion; el firmware de base lo apaga tras 10 minutos sin clientes WiFi ni WebSocket.
