@@ -57,6 +57,7 @@ static const char *TAG = "web_server";
 #define WEB_AP_GUARD_INTERVAL_MS 30000
 #define WEB_OTA_RECV_CHUNK 2048
 #define WEB_HTTPD_STACK_SIZE (16 * 1024)
+#define WEB_HTTPD_MAX_URI_HANDLERS 32
 #define WEB_ROUTE_TRACE_MAGIC 0x4b565754U
 #define WEB_ROUTE_TRACE_VERSION 1U
 
@@ -2056,7 +2057,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         if (https_result == HTTPS_FINGERPRINT_POLICY_ALLOW) {
             httpd_ssl_config_t https_config = HTTPD_SSL_CONFIG_DEFAULT();
             https_config.httpd.lru_purge_enable = true;
-            https_config.httpd.max_uri_handlers = 25;
+            https_config.httpd.max_uri_handlers = WEB_HTTPD_MAX_URI_HANDLERS;
             https_config.httpd.stack_size = WEB_HTTPD_STACK_SIZE;
             https_config.servercert = (const uint8_t *)server_config->tls_identity->cert_pem;
             https_config.servercert_len = server_config->tls_identity->cert_pem_len + 1U;
@@ -2079,7 +2080,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     if (server == NULL) {
         httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
         http_config.lru_purge_enable = true;
-        http_config.max_uri_handlers = 25;
+        http_config.max_uri_handlers = WEB_HTTPD_MAX_URI_HANDLERS;
         http_config.stack_size = WEB_HTTPD_STACK_SIZE;
         ESP_RETURN_ON_ERROR(httpd_start(&server, &http_config), TAG, "httpd_start failed");
     }
