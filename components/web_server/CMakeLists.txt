@@ -7,6 +7,7 @@ idf_component_register(
         "src/web_terminal_ansi.c"
         "src/web_terminal_contract.c"
         "src/web_input_policy.c"
+        "src/web_demo_policy.c"
         "src/web_password_hash.c"
         "src/web_security.c"
     INCLUDE_DIRS
@@ -14,6 +15,7 @@ idf_component_register(
     REQUIRES
         app_watchdog
         credentials
+        demo_serial
         local_pairing
         diagnostics_export
         event_log

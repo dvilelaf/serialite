@@ -136,8 +136,8 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
 
 - [x] QR en pantalla.
   Criterio: facilita abrir URL/AP desde móvil sin escribir datos largos.
-- [ ] Modo demo/simulador serial.
-  Criterio: permite probar la web sin servidor conectado.
+- [x] Modo demo/simulador serial.
+  Criterio: permite probar la web sin servidor conectado; no escribe al USB real y se auto-detiene si aparece USB.
 - [x] mDNS local.
   Criterio: nombre local opcional sin depender de DNS externo.
 - [ ] HTTPS local con fingerprint.

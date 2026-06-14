@@ -4,6 +4,7 @@
 
 #include "ap_exposure_policy.h"
 #include "app_watchdog.h"
+#include "demo_serial_runtime.h"
 #include "diagnostics_export.h"
 #include "event_log.h"
 #include "credentials.h"
@@ -27,6 +28,7 @@
 #include "terminal_bridge.h"
 #include "usb_console.h"
 #include "web_input_policy.h"
+#include "web_demo_policy.h"
 #include "web_security.h"
 #include "web_terminal_ansi.h"
 #include "web_terminal_contract.h"
@@ -69,6 +71,8 @@ static SemaphoreHandle_t s_http_rate_limit_lock;
 static StaticSemaphore_t s_http_rate_limit_lock_storage;
 static SemaphoreHandle_t s_ws_fds_lock;
 static StaticSemaphore_t s_ws_fds_lock_storage;
+static SemaphoreHandle_t s_demo_writer_lock;
+static StaticSemaphore_t s_demo_writer_lock_storage;
 static portMUX_TYPE s_runtime_status_lock = portMUX_INITIALIZER_UNLOCKED;
 static web_server_status_t s_runtime_status;
 static web_server_rotate_credentials_fn_t s_rotate_credentials;
@@ -625,8 +629,9 @@ static esp_err_t index_handler(httpd_req_t *req)
     const usb_console_status_t usb = usb_console_get_status();
     const wifi_ap_status_t wifi = wifi_ap_get_status();
     const terminal_bridge_status_t bridge = terminal_bridge_get_status();
+    const demo_serial_runtime_status_t demo = demo_serial_runtime_get_status();
 
-    char body[1200];
+    char body[1600];
     const int written = snprintf(
         body,
         sizeof(body),
@@ -640,6 +645,7 @@ static esp_err_t index_handler(httpd_req_t *req)
         "<p>IP: %s</p>"
         "<p>Clientes: %u</p>"
         "<p>USB: %s</p>"
+        "<p>Demo serial: %s, bytes=%llu</p>"
         "<p>RX bytes: %llu</p>"
         "<p>TX bytes: %llu</p>"
         "<p>Bridge USB RX: %llu</p>"
@@ -654,6 +660,8 @@ static esp_err_t index_handler(httpd_req_t *req)
         wifi.ip_addr,
         wifi.connected_clients,
         usb.connected ? "conectado" : "desconectado",
+        demo.active ? "activo" : "inactivo",
+        (unsigned long long)demo.bytes_emitted,
         (unsigned long long)usb.bytes_received,
         (unsigned long long)usb.bytes_sent,
         (unsigned long long)bridge.bytes_from_usb,
@@ -886,8 +894,9 @@ static esp_err_t terminal_handler(httpd_req_t *req)
     }
 
     const usb_console_status_t usb = usb_console_get_status();
+    const demo_serial_runtime_status_t demo = demo_serial_runtime_get_status();
 
-    char terminal_page[9000];
+    char terminal_page[9600];
     const int written = snprintf(
         terminal_page,
         sizeof(terminal_page),
@@ -909,20 +918,21 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "</style></head><body><div id=\"bar\"><div id=\"top\"><span id=\"brand\">ESP32-KVM</span><span id=\"mode\" class=\"pill\">%s</span>"
         "<span id=\"state\" class=\"pill\">Connecting</span><a href=\"/runbook\">Runbook</a></div>"
         "<div id=\"actions\"><button class=\"primary\" id=\"write\">Request write</button><button id=\"release\">Release</button>"
-        "<button class=\"danger\" id=\"logout\">Logout</button></div>"
+        "<button id=\"demoStart\">Start demo</button><button id=\"demoStop\">Stop demo</button><button class=\"danger\" id=\"logout\">Logout</button></div>"
         "<div id=\"keys\"><button data-k=\"\\u0003\">%s</button><button data-k=\"\\u0004\">%s</button>"
         "<button data-k=\"\\r\">%s</button><button data-k=\"\\u001b\">%s</button><button data-k=\"\\t\">%s</button>"
         "<button data-k=\"\\u001b[A\">%s</button><button data-k=\"\\u001b[B\">%s</button>"
         "<button data-k=\"\\u001b[D\">%s</button><button data-k=\"\\u001b[C\">%s</button></div>"
         "</div><div id=\"term\"></div><input id=\"input\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"Read-only until write control is active\" autofocus>"
         "<script>"
-        "const CSRF='%s';let canWrite=false,usbConnected=%s,writerState='read-only',locked=false,connected=false;"
+        "const CSRF='%s';let canWrite=false,usbConnected=%s,demoActive=%s,writerState='read-only',locked=false,connected=false;"
         "const CHUNK=%u,PASTE_CONFIRM=%u,PASTE_MAX=%u;"
         "const term=document.getElementById('term'),input=document.getElementById('input'),state=document.getElementById('state');"
-        "const mode=document.getElementById('mode'),writeBtn=document.getElementById('write'),releaseBtn=document.getElementById('release');"
-        "function modeLabel(){if(locked)return'%s';if(!usbConnected)return'%s';if(writerState==='write-active')return'%s';if(writerState==='writer-busy')return'%s';return'%s'}"
+        "const mode=document.getElementById('mode'),writeBtn=document.getElementById('write'),releaseBtn=document.getElementById('release'),demoStart=document.getElementById('demoStart'),demoStop=document.getElementById('demoStop');"
+        "function modeLabel(){if(locked)return'%s';if(demoActive)return'DEMO';if(!usbConnected)return'%s';if(writerState==='write-active')return'%s';if(writerState==='writer-busy')return'%s';return'%s'}"
         "function render(){const label=modeLabel();mode.textContent=label;mode.className='pill '+(label==='%s'?'write':label==='%s'?'busy':label==='%s'?'usb':label==='%s'?'locked':'');"
         "canWrite=connected&&usbConnected&&writerState==='write-active'&&!locked;input.disabled=!canWrite;writeBtn.disabled=locked||!connected||writerState==='write-active';releaseBtn.disabled=!canWrite;"
+        "demoStart.disabled=locked||usbConnected||demoActive||writerState!=='read-only';demoStop.disabled=locked||!demoActive;"
         "input.placeholder=canWrite?'Type command, Enter sends CR':'Read-only until write control is active'}"
         "let ws,backoff=500;function add(t){term.textContent+=t;term.scrollTop=term.scrollHeight;if(term.textContent.length>65536)term.textContent=term.textContent.slice(-49152)}"
         "function connect(){state.textContent='Connecting';connected=false;render();ws=new WebSocket(`ws://${location.host}/ws`);ws.binaryType='arraybuffer';"
@@ -930,8 +940,8 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "ws.onmessage=e=>{if(e.data instanceof ArrayBuffer)add(new TextDecoder().decode(e.data));else add(e.data)};"
         "ws.onclose=()=>{connected=false;state.textContent='Reconnecting';render();setTimeout(connect,backoff);backoff=Math.min(backoff*2,5000)};"
         "ws.onerror=()=>ws.close()}"
-        "async function refreshStatus(){try{const r=await fetch('/terminal-status.json',{cache:'no-store'});if(r.status===401||r.redirected){locked=true;render();return}if(!r.ok)return;const s=await r.json();usbConnected=!!s.usb_connected;writerState=s.writer_state||'read-only';locked=writerState==='locked';render()}catch(e){}}"
-        "async function post(u){const r=await fetch(u,{method:'POST',headers:{'X-CSRF-Token':CSRF}});await refreshStatus();return r.ok}"
+        "async function refreshStatus(){try{const r=await fetch('/terminal-status.json',{cache:'no-store'});if(r.status===401||r.redirected){locked=true;render();return}if(!r.ok)return;const s=await r.json();usbConnected=!!s.usb_connected;demoActive=!!s.demo_active;writerState=s.writer_state||'read-only';locked=writerState==='locked';render()}catch(e){}}"
+        "async function post(u){const r=await fetch(u,{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();await refreshStatus();if(!r.ok&&u.includes('/api/demo/'))alert(t||('Request failed: '+r.status));return r.ok}"
         "function send(s){if(!(canWrite&&ws&&ws.readyState===1))return;for(let i=0;i<s.length;i+=CHUNK)ws.send(s.slice(i,i+CHUNK))}"
         "function safePaste(t){if(!canWrite)return;if(t.length>PASTE_MAX){alert('Paste too large; max '+PASTE_MAX+' bytes');return}"
         "if((t.length>PASTE_CONFIRM||t.includes('\\n'))&&!confirm('Send '+t.length+' bytes to the physical console?'))return;send(t)}"
@@ -940,6 +950,8 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "document.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>send(b.dataset.k));"
         "writeBtn.onclick=async()=>{if(confirm('Writing here is equivalent to privileged physical console access. Continue?')){const ok=await post('/api/write/acquire');if(!ok&&writerState==='read-only')writerState='writer-busy';render()}};"
         "releaseBtn.onclick=async()=>{await post('/api/write/release');writerState='read-only';render()};"
+        "demoStart.onclick=async()=>{if(confirm('Start local demo output? This never writes to USB.'))await post('/api/demo/start')};"
+        "demoStop.onclick=async()=>{await post('/api/demo/stop')};"
         "document.getElementById('logout').onclick=async()=>{await post('/logout');location='/login'};"
         "render();refreshStatus();setInterval(refreshStatus,2000);connect();"
         "</script></body></html>",
@@ -955,6 +967,7 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         WEB_TERMINAL_KEY_RIGHT,
         csrf,
         usb.connected ? "true" : "false",
+        demo.active ? "true" : "false",
         (unsigned)WEB_INPUT_POLICY_FRAME_MAX,
         (unsigned)WEB_PASTE_CONFIRM_BYTES,
         (unsigned)WEB_PASTE_MAX_BYTES,
@@ -987,6 +1000,7 @@ static esp_err_t terminal_status_handler(httpd_req_t *req)
     }
 
     const usb_console_status_t usb = usb_console_get_status();
+    const demo_serial_runtime_status_t demo = demo_serial_runtime_get_status();
     const web_security_writer_state_t writer = web_security_writer_state(&s_security, session_token, now_ms());
     runtime_status_set_writer_active(writer == WEB_SECURITY_WRITER_ACTIVE);
 
@@ -994,8 +1008,10 @@ static esp_err_t terminal_status_handler(httpd_req_t *req)
     const int written = snprintf(
         body,
         sizeof(body),
-        "{\"usb_connected\":%s,\"writer_state\":\"%s\"}",
+        "{\"usb_connected\":%s,\"demo_active\":%s,\"demo_bytes\":%llu,\"writer_state\":\"%s\"}",
         usb.connected ? "true" : "false",
+        demo.active ? "true" : "false",
+        (unsigned long long)demo.bytes_emitted,
         writer_state_name(writer));
     if (written < 0 || written >= (int)sizeof(body)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "terminal status overflow");
@@ -1004,6 +1020,50 @@ static esp_err_t terminal_status_handler(httpd_req_t *req)
     send_no_store_headers(req);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t demo_start_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(
+        require_mutating_auth_csrf_origin(req, "demo start rejected: origin", "demo start rejected: csrf", session_token),
+        TAG,
+        "demo start auth failed");
+
+    xSemaphoreTake(s_demo_writer_lock, portMAX_DELAY);
+    const usb_console_status_t usb = usb_console_get_status();
+    const web_security_writer_state_t writer = web_security_writer_state(&s_security, session_token, now_ms());
+    if (!web_demo_policy_can_start(usb.connected, writer)) {
+        xSemaphoreGive(s_demo_writer_lock);
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "demo serial start rejected: unsafe state");
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_send(req, "demo unavailable while USB or writer is active", HTTPD_RESP_USE_STRLEN);
+    }
+    const esp_err_t err = demo_serial_runtime_enable(false);
+    xSemaphoreGive(s_demo_writer_lock);
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_send(req, "demo unavailable while USB or writer is active", HTTPD_RESP_USE_STRLEN);
+    }
+    return httpd_resp_sendstr(req, "ok");
+}
+
+static esp_err_t demo_stop_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(
+        require_mutating_auth_csrf_origin(req, "demo stop rejected: origin", "demo stop rejected: csrf", session_token),
+        TAG,
+        "demo stop auth failed");
+
+    demo_serial_runtime_disable();
+    return httpd_resp_sendstr(req, "ok");
 }
 
 static esp_err_t write_acquire_handler(httpd_req_t *req)
@@ -1016,11 +1076,20 @@ static esp_err_t write_acquire_handler(httpd_req_t *req)
         require_mutating_auth_csrf_origin(req, "write acquire rejected: origin", "write acquire rejected: csrf", session_token),
         TAG,
         "write acquire auth failed");
+    xSemaphoreTake(s_demo_writer_lock, portMAX_DELAY);
+    if (!web_demo_policy_can_acquire_writer(demo_serial_runtime_get_status().active)) {
+        xSemaphoreGive(s_demo_writer_lock);
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "write acquire rejected: demo active");
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_send(req, "demo active", HTTPD_RESP_USE_STRLEN);
+    }
     if (!web_security_acquire_writer(&s_security, session_token, now_ms())) {
+        xSemaphoreGive(s_demo_writer_lock);
         event_log_append(EVENT_LOG_SECURITY, now_ms(), "write acquire rejected: busy");
         httpd_resp_set_status(req, "409 Conflict");
         return httpd_resp_send(req, "writer busy", HTTPD_RESP_USE_STRLEN);
     }
+    xSemaphoreGive(s_demo_writer_lock);
     runtime_status_set_writer_active(true);
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "write control acquired");
     return httpd_resp_sendstr(req, "ok");
@@ -1633,6 +1702,11 @@ static esp_err_t websocket_handler(httpd_req_t *req)
         event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input dropped: read-only");
         return ESP_OK;
     }
+    if (demo_serial_runtime_get_status().active) {
+        ESP_LOGW(TAG, "dropping websocket input while demo is active");
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input dropped: demo active");
+        return ESP_OK;
+    }
 
     const web_input_policy_result_t policy = web_input_policy_evaluate(&s_input_policy, frame.len, now_ms());
     if (policy != WEB_INPUT_POLICY_ACCEPT) {
@@ -1680,6 +1754,8 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_RETURN_ON_FALSE(s_http_rate_limit_lock != NULL, ESP_ERR_NO_MEM, TAG, "http rate lock failed");
     s_ws_fds_lock = xSemaphoreCreateMutexStatic(&s_ws_fds_lock_storage);
     ESP_RETURN_ON_FALSE(s_ws_fds_lock != NULL, ESP_ERR_NO_MEM, TAG, "websocket fd lock failed");
+    s_demo_writer_lock = xSemaphoreCreateMutexStatic(&s_demo_writer_lock_storage);
+    ESP_RETURN_ON_FALSE(s_demo_writer_lock != NULL, ESP_ERR_NO_MEM, TAG, "demo writer lock failed");
     event_log_init();
     event_log_append(EVENT_LOG_INFO, now_ms(), "web server starting");
     s_rotate_credentials = server_config->rotate_credentials;
@@ -1697,7 +1773,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
 
     httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
     http_config.lru_purge_enable = true;
-    http_config.max_uri_handlers = 21;
+    http_config.max_uri_handlers = 23;
 
     httpd_handle_t server = NULL;
     ESP_RETURN_ON_ERROR(httpd_start(&server, &http_config), TAG, "httpd_start failed");
@@ -1834,6 +1910,18 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         .handler = write_release_handler,
         .user_ctx = NULL,
     };
+    const httpd_uri_t demo_start_uri = {
+        .uri = "/api/demo/start",
+        .method = HTTP_POST,
+        .handler = demo_start_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t demo_stop_uri = {
+        .uri = "/api/demo/stop",
+        .method = HTTP_POST,
+        .handler = demo_stop_handler,
+        .user_ctx = NULL,
+    };
     const httpd_uri_t ws_uri = {
         .uri = "/ws",
         .method = HTTP_GET,
@@ -1859,6 +1947,8 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_json_uri), fail, TAG, "diagnostics json handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &write_acquire_uri), fail, TAG, "write acquire handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &write_release_uri), fail, TAG, "write release handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &demo_start_uri), fail, TAG, "demo start handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &demo_stop_uri), fail, TAG, "demo stop handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ota_upload_uri), fail, TAG, "ota upload handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &reboot_uri), fail, TAG, "reboot handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &credentials_rotate_uri), fail, TAG, "credentials rotate handler failed");
@@ -1871,6 +1961,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     task_ok = xTaskCreate(ap_guard_task, "ap_guard", WEB_AP_GUARD_TASK_STACK, NULL, WEB_AP_GUARD_TASK_PRIORITY, &s_ap_guard_task);
     ESP_GOTO_ON_FALSE(task_ok == pdPASS, ESP_ERR_NO_MEM, fail, TAG, "ap guard task failed");
     ESP_GOTO_ON_ERROR(terminal_bridge_register_output_callback(bridge_output_cb, NULL), fail, TAG, "bridge callback failed");
+    ESP_GOTO_ON_ERROR(demo_serial_runtime_start(), fail, TAG, "demo serial runtime failed");
 
     ESP_LOGI(TAG, "HTTP server started");
     return ESP_OK;
@@ -1887,6 +1978,7 @@ esp_err_t web_server_emergency_lock(void)
         return ESP_OK;
     }
 
+    demo_serial_runtime_disable();
     const esp_err_t err = httpd_queue_work(s_server, emergency_lock_work, NULL);
     if (err != ESP_OK) {
         event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock queue failed; stopping AP");

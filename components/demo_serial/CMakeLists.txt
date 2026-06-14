@@ -1,0 +1,14 @@
+idf_component_register(
+    SRCS
+        "src/demo_serial.c"
+        "src/demo_serial_runtime.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        app_watchdog
+        event_log
+        terminal_bridge
+        usb_console
+        esp_timer
+        freertos
+)

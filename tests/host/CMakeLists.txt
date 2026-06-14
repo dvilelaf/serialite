@@ -65,6 +65,17 @@ target_include_directories(test_config_transfer PRIVATE
 
 add_test(NAME config_transfer COMMAND test_config_transfer)
 
+add_executable(test_demo_serial
+    test_demo_serial.c
+    ../../components/demo_serial/src/demo_serial.c
+)
+
+target_include_directories(test_demo_serial PRIVATE
+    ../../components/demo_serial/include
+)
+
+add_test(NAME demo_serial COMMAND test_demo_serial)
+
 add_executable(test_storage_config
     test_storage_config.c
     ../../components/storage/src/storage_config.c
@@ -89,6 +100,17 @@ target_include_directories(test_web_security PRIVATE
 target_link_libraries(test_web_security PRIVATE OpenSSL::Crypto)
 
 add_test(NAME web_security COMMAND test_web_security)
+
+add_executable(test_web_demo_policy
+    test_web_demo_policy.c
+    ../../components/web_server/src/web_demo_policy.c
+)
+
+target_include_directories(test_web_demo_policy PRIVATE
+    ../../components/web_server/include
+)
+
+add_test(NAME web_demo_policy COMMAND test_web_demo_policy)
 
 add_executable(test_web_input_policy
     test_web_input_policy.c
