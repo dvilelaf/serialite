@@ -7841,7 +7841,7 @@ static credentials_result_t credentials_append_word(
     const int written = snprintf(
         out + *used,
         out_size - *used,
-        prepend_separator ? "-%s" : "%s",
+        prepend_separator ? " %s" : "%s",
         word);
     if (written < 0 || (size_t)written >= out_size - *used) {
         return CREDENTIALS_ERR_OUTPUT_TOO_SMALL;
@@ -7850,18 +7850,23 @@ static credentials_result_t credentials_append_word(
     return CREDENTIALS_OK;
 }
 
-credentials_result_t credentials_generate_human_password(
+static credentials_result_t credentials_generate_human_password_with_word_count(
     char *out,
     size_t out_size,
+    size_t word_count,
     credentials_random_fn_t random_fn,
     void *random_ctx)
 {
-    if (out == NULL || out_size == 0 || random_fn == NULL) {
+    if (out == NULL || out_size == 0 || word_count == 0 || random_fn == NULL) {
         return CREDENTIALS_ERR_INVALID_ARG;
     }
 
-    const char *selected_words[CREDENTIALS_PASSWORD_WORD_COUNT] = {0};
-    for (size_t i = 0; i < CREDENTIALS_PASSWORD_WORD_COUNT; ++i) {
+    const char *selected_words[CREDENTIALS_WIFI_PASSWORD_WORD_COUNT] = {0};
+    if (word_count > CREDENTIALS_WIFI_PASSWORD_WORD_COUNT) {
+        return CREDENTIALS_ERR_INVALID_ARG;
+    }
+
+    for (size_t i = 0; i < word_count; ++i) {
         size_t word_index = 0;
         const credentials_result_t result = credentials_select_word_index(random_fn, random_ctx, &word_index);
         if (result != CREDENTIALS_OK) {
@@ -7871,7 +7876,7 @@ credentials_result_t credentials_generate_human_password(
     }
 
     size_t used = 0;
-    for (size_t i = 0; i < CREDENTIALS_PASSWORD_WORD_COUNT; ++i) {
+    for (size_t i = 0; i < word_count; ++i) {
         const credentials_result_t result = credentials_append_word(
             out,
             out_size,
@@ -7883,6 +7888,55 @@ credentials_result_t credentials_generate_human_password(
         }
     }
     return CREDENTIALS_OK;
+}
+
+credentials_result_t credentials_generate_human_password(
+    char *out,
+    size_t out_size,
+    credentials_random_fn_t random_fn,
+    void *random_ctx)
+{
+    return credentials_generate_human_password_with_word_count(
+        out,
+        out_size,
+        CREDENTIALS_WIFI_PASSWORD_WORD_COUNT,
+        random_fn,
+        random_ctx);
+}
+
+credentials_result_t credentials_generate_human_web_password(
+    char *out,
+    size_t out_size,
+    credentials_random_fn_t random_fn,
+    void *random_ctx)
+{
+    return credentials_generate_human_password_with_word_count(
+        out,
+        out_size,
+        CREDENTIALS_WEB_PASSWORD_WORD_COUNT,
+        random_fn,
+        random_ctx);
+}
+
+bool credentials_web_auth_boot_decide(
+    const credentials_web_auth_boot_input_t *input,
+    credentials_web_auth_boot_decision_t *decision)
+{
+    if (input == NULL || decision == NULL) {
+        return false;
+    }
+
+    decision->use_persisted_hash = false;
+    decision->use_rtc_password = input->rtc_password_available;
+    decision->generate_runtime_password = !input->rtc_password_available;
+
+    /*
+     * The AMOLED is the physical trust anchor for initial access. A persisted
+     * hash without displayable plaintext is not usable during field recovery,
+     * so the boot flow must prefer a visible runtime password.
+     */
+    (void)input->persisted_hash_configured;
+    return true;
 }
 
 credential_rotation_policy_result_t credential_rotation_policy_evaluate(

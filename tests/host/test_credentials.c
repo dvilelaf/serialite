@@ -59,12 +59,13 @@ static void test_human_password_uses_six_words(void)
 
     unsigned separators = 0;
     for (const char *p = password; *p != '\0'; ++p) {
-        if (*p == '-') {
+        CHECK(*p != '-');
+        if (*p == ' ') {
             separators++;
         }
     }
-    CHECK(separators == CREDENTIALS_PASSWORD_WORD_COUNT - 1);
-    CHECK(CREDENTIALS_PASSWORD_WORD_COUNT == 6U);
+    CHECK(separators == CREDENTIALS_WIFI_PASSWORD_WORD_COUNT - 1);
+    CHECK(CREDENTIALS_WIFI_PASSWORD_WORD_COUNT == 6U);
 }
 
 static void test_human_password_uses_eff_large_wordlist_endpoints(void)
@@ -77,7 +78,21 @@ static void test_human_password_uses_eff_large_wordlist_endpoints(void)
     };
 
     CHECK(credentials_generate_human_password(password, sizeof(password), u32_sequence_random, &sequence) == CREDENTIALS_OK);
-    CHECK(strncmp(password, "abacus-zoom-abacus-", strlen("abacus-zoom-abacus-")) == 0);
+    CHECK(strncmp(password, "abacus zoom abacus ", strlen("abacus zoom abacus ")) == 0);
+}
+
+static void test_web_password_uses_two_words_without_hyphens(void)
+{
+    char password[128];
+    const uint32_t values[] = {0U, 7775U};
+    struct u32_sequence sequence = {
+        .values = values,
+        .count = sizeof(values) / sizeof(values[0]),
+    };
+
+    CHECK(credentials_generate_human_web_password(password, sizeof(password), u32_sequence_random, &sequence) == CREDENTIALS_OK);
+    CHECK(strcmp(password, "abacus zoom") == 0);
+    CHECK(CREDENTIALS_WEB_PASSWORD_WORD_COUNT == 2U);
 }
 
 static void test_human_password_rejects_out_of_range_random_values(void)
@@ -97,7 +112,7 @@ static void test_human_password_rejects_out_of_range_random_values(void)
     };
 
     CHECK(credentials_generate_human_password(password, sizeof(password), u32_sequence_random, &sequence) == CREDENTIALS_OK);
-    CHECK(strcmp(password, "abacus-abacus-abacus-abacus-abacus-abacus") == 0);
+    CHECK(strcmp(password, "abacus abacus abacus abacus abacus abacus") == 0);
     CHECK(sequence.calls == 12U);
 }
 
@@ -139,6 +154,7 @@ int main(void)
 {
     test_human_password_uses_six_words();
     test_human_password_uses_eff_large_wordlist_endpoints();
+    test_web_password_uses_two_words_without_hyphens();
     test_human_password_rejects_out_of_range_random_values();
     test_human_password_random_failure_propagates();
     test_human_password_output_too_small_fails();

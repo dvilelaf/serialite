@@ -501,13 +501,13 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     lv_obj_t *secrets = add_card(screen, UI_SCREEN_PAD, UI_BOTTOM_Y, UI_LANDSCAPE_W - (UI_SCREEN_PAD * 2), UI_BOTTOM_H);
     s_ctx.secret_hint_label = add_value(secrets, "Press BOOT: reveal 30s", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 0, UI_BOTTOM_CONTENT_W);
 
-    add_value(secrets, "WiFi", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 28, 44);
-    s_ctx.wifi_password_label = add_label(secrets, password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_BOTTOM_CONTENT_W - 58);
-    lv_obj_set_pos(s_ctx.wifi_password_label, 58, 28);
+    add_value(secrets, "WiFi", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 26, UI_BOTTOM_CONTENT_W);
+    s_ctx.wifi_password_label = add_label(secrets, password, &lv_font_montserrat_14, lv_color_hex(UI_COLOR_TEXT), UI_BOTTOM_CONTENT_W);
+    lv_obj_set_pos(s_ctx.wifi_password_label, UI_CARD_PAD, 46);
 
-    add_value(secrets, "Web", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 62, 44);
-    s_ctx.web_password_label = add_label(secrets, web_password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_BOTTOM_CONTENT_W - 58);
-    lv_obj_set_pos(s_ctx.web_password_label, 58, 62);
+    add_value(secrets, "Web", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 84, UI_BOTTOM_CONTENT_W);
+    s_ctx.web_password_label = add_label(secrets, web_password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_BOTTOM_CONTENT_W);
+    lv_obj_set_pos(s_ctx.web_password_label, UI_CARD_PAD, 104);
 
     strlcpy(s_ctx.wifi_password, password, sizeof(s_ctx.wifi_password));
     strlcpy(s_ctx.web_password, web_password, sizeof(s_ctx.web_password));

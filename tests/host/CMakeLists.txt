@@ -42,6 +42,17 @@ target_include_directories(test_credentials PRIVATE
 
 add_test(NAME credentials COMMAND test_credentials)
 
+add_executable(test_credentials_boot_policy
+    test_credentials_boot_policy.c
+    ../../components/credentials/src/credentials.c
+)
+
+target_include_directories(test_credentials_boot_policy PRIVATE
+    ../../components/credentials/include
+)
+
+add_test(NAME credentials_boot_policy COMMAND test_credentials_boot_policy)
+
 add_executable(test_local_pairing
     test_local_pairing.c
     ../../components/local_pairing/src/local_pairing.c

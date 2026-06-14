@@ -1402,7 +1402,7 @@ static esp_err_t credentials_rotate_handler(httpd_req_t *req)
     uint8_t web_salt[WEB_PASSWORD_SALT_LEN];
     uint8_t web_hash[WEB_PASSWORD_HASH_LEN];
     if (credentials_generate_human_password(wifi_password, sizeof(wifi_password), security_random, NULL) != CREDENTIALS_OK ||
-        credentials_generate_human_password(web_password, sizeof(web_password), security_random, NULL) != CREDENTIALS_OK) {
+        credentials_generate_human_web_password(web_password, sizeof(web_password), security_random, NULL) != CREDENTIALS_OK) {
         secure_zero(wifi_password, sizeof(wifi_password));
         secure_zero(web_password, sizeof(web_password));
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "password generation failed");

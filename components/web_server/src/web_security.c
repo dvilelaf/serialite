@@ -5,7 +5,7 @@
 #define SESSION_TTL_MS (15ULL * 60ULL * 1000ULL)
 #define LOCKOUT_AFTER_FAILURES 3
 #define LOCKOUT_MS (60ULL * 1000ULL)
-#define MIN_PASSWORD_LEN 8
+#define MIN_PASSWORD_LEN 6
 #define TOKEN_RANDOM_BYTES 16
 
 static bool bounded_strlen(const char *value, size_t max_len, size_t *out_len)

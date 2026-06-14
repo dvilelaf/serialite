@@ -168,6 +168,18 @@ static esp_err_t generate_human_password(char *out, size_t out_size)
     return result == CREDENTIALS_ERR_RANDOM_FAILED ? ESP_FAIL : ESP_ERR_INVALID_ARG;
 }
 
+static esp_err_t generate_human_web_password(char *out, size_t out_size)
+{
+    const credentials_result_t result = credentials_generate_human_web_password(out, out_size, credentials_random, NULL);
+    if (result == CREDENTIALS_OK) {
+        return ESP_OK;
+    }
+    if (result == CREDENTIALS_ERR_OUTPUT_TOO_SMALL) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return result == CREDENTIALS_ERR_RANDOM_FAILED ? ESP_FAIL : ESP_ERR_INVALID_ARG;
+}
+
 #if CONFIG_ESP32_KVM_BLE_PROVISIONING_ENABLE
 static bool ble_radio_not_implemented_start(uint32_t advertising_window_seconds, void *ctx)
 {
@@ -385,23 +397,32 @@ void app_main(void)
     }
     storage_secure_zero(config.wifi.password, sizeof(config.wifi.password));
 
+    if (!ephemeral_cache_valid()) {
+        ephemeral_cache_store_wifi(&mapped_wifi_config);
+    }
+
     char web_password[WIFI_AP_PASSWORD_MAX_LEN] = {0};
     const bool persisted_web_auth = storage_web_auth_config_is_valid(&config);
-    if (!persisted_web_auth) {
-        if (ephemeral_credentials &&
-            ephemeral_cache_valid() &&
-            s_ephemeral_rtc_cache.web_password_valid &&
-            s_ephemeral_rtc_cache.web_password[0] != '\0') {
-            strlcpy(web_password, s_ephemeral_rtc_cache.web_password, sizeof(web_password));
-            ESP_LOGW(TAG, "reusing ephemeral web password from RTC after software reboot");
-        } else {
-            ESP_ERROR_CHECK(generate_human_password(web_password, sizeof(web_password)));
-            if (ephemeral_credentials) {
-                ephemeral_cache_store_web_password(web_password);
-            }
+    const bool rtc_web_password_available = ephemeral_cache_valid() &&
+                                            s_ephemeral_rtc_cache.web_password_valid &&
+                                            s_ephemeral_rtc_cache.web_password[0] != '\0';
+    credentials_web_auth_boot_decision_t web_auth_decision = {0};
+    ESP_ERROR_CHECK(credentials_web_auth_boot_decide(
+        &(credentials_web_auth_boot_input_t){
+            .persisted_hash_configured = persisted_web_auth,
+            .rtc_password_available = rtc_web_password_available,
+        },
+        &web_auth_decision) ? ESP_OK : ESP_ERR_INVALID_STATE);
+
+    if (web_auth_decision.use_rtc_password) {
+        strlcpy(web_password, s_ephemeral_rtc_cache.web_password, sizeof(web_password));
+        ESP_LOGW(TAG, "reusing local-display web password from RTC after software reboot");
+    } else if (web_auth_decision.generate_runtime_password) {
+        ESP_ERROR_CHECK(generate_human_web_password(web_password, sizeof(web_password)));
+        ephemeral_cache_store_web_password(web_password);
+        if (persisted_web_auth) {
+            ESP_LOGW(TAG, "stored web auth exists, but local-display runtime password will be used for this boot");
         }
-    } else {
-        strlcpy(web_password, "stored - use rotated password", sizeof(web_password));
     }
 
     bool tls_ready = false;
@@ -462,10 +483,10 @@ void app_main(void)
     log_init_result("usb_console", usb_err);
     if (wifi_err == ESP_OK) {
         const web_server_config_t web_config = {
-            .web_password = persisted_web_auth ? NULL : web_password,
-            .web_password_salt = persisted_web_auth ? config.web_password_salt : NULL,
-            .web_password_hash = persisted_web_auth ? config.web_password_hash : NULL,
-            .web_password_hash_configured = persisted_web_auth,
+            .web_password = web_auth_decision.use_persisted_hash ? NULL : web_password,
+            .web_password_salt = web_auth_decision.use_persisted_hash ? config.web_password_salt : NULL,
+            .web_password_hash = web_auth_decision.use_persisted_hash ? config.web_password_hash : NULL,
+            .web_password_hash_configured = web_auth_decision.use_persisted_hash,
             .tls_identity =
 #if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
                 tls_ready ? &s_tls_identity : NULL,

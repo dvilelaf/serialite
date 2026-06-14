@@ -57,6 +57,15 @@ static void test_eight_character_password_remains_supported(void)
     CHECK(web_security_login(&state, "eight888", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
 }
 
+static void test_two_word_web_password_is_supported(void)
+{
+    web_security_state_t state;
+    uint8_t counter = 44;
+
+    CHECK(web_security_init(&state, "aim act", deterministic_random, &counter));
+    CHECK(web_security_login(&state, "aim act", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
+}
+
 static void test_login_creates_session_and_csrf_tokens(void)
 {
     web_security_state_t state = valid_state();
@@ -246,6 +255,7 @@ int main(void)
 {
     test_password_is_not_stored_in_plaintext();
     test_eight_character_password_remains_supported();
+    test_two_word_web_password_is_supported();
     test_login_creates_session_and_csrf_tokens();
     test_wrong_password_rate_limits_login();
     test_session_expires_and_logout_invalidates_tokens();
