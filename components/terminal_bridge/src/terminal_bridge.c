@@ -1,5 +1,6 @@
 #include "terminal_bridge.h"
 
+#include "terminal_scrollback.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/semphr.h"
@@ -9,6 +10,7 @@
 static const char *TAG = "terminal_bridge";
 
 #define BRIDGE_TO_USB_BUFFER_SIZE 4096
+#define BRIDGE_SCROLLBACK_SIZE 8192
 #define BRIDGE_MAX_SUBSCRIBERS 4
 
 typedef struct {
@@ -18,6 +20,8 @@ typedef struct {
 
 static StaticStreamBuffer_t s_to_usb_stream_struct;
 static uint8_t s_to_usb_storage[BRIDGE_TO_USB_BUFFER_SIZE];
+static uint8_t s_scrollback_storage[BRIDGE_SCROLLBACK_SIZE];
+static terminal_scrollback_t s_scrollback;
 static StreamBufferHandle_t s_to_usb_stream;
 static SemaphoreHandle_t s_lock;
 static StaticSemaphore_t s_lock_storage;
@@ -43,6 +47,12 @@ esp_err_t terminal_bridge_start(void)
 
     memset(&s_status, 0, sizeof(s_status));
     memset(s_subscribers, 0, sizeof(s_subscribers));
+    ESP_RETURN_ON_FALSE(
+        terminal_scrollback_init(&s_scrollback, s_scrollback_storage, sizeof(s_scrollback_storage)) == TERMINAL_SCROLLBACK_OK,
+        ESP_ERR_NO_MEM,
+        TAG,
+        "scrollback init failed");
+    s_status.scrollback_capacity = sizeof(s_scrollback_storage);
     s_started = true;
     ESP_LOGI(TAG, "terminal bridge started");
     return ESP_OK;
@@ -79,6 +89,9 @@ size_t terminal_bridge_publish_usb_output(const uint8_t *data, size_t len)
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_status.bytes_from_usb += len;
+    terminal_scrollback_write(&s_scrollback, data, len);
+    s_status.scrollback_retained = (uint32_t)terminal_scrollback_available(&s_scrollback);
+    s_status.scrollback_dropped_oldest = terminal_scrollback_dropped_oldest(&s_scrollback);
     for (size_t i = 0; i < BRIDGE_MAX_SUBSCRIBERS; ++i) {
         if (s_subscribers[i].callback != NULL) {
             subscribers[subscriber_count++] = s_subscribers[i];
@@ -117,6 +130,18 @@ size_t terminal_bridge_read_input_for_usb(uint8_t *data, size_t len, TickType_t 
     }
 
     return xStreamBufferReceive(s_to_usb_stream, data, len, timeout_ticks);
+}
+
+size_t terminal_bridge_snapshot_recent_output(uint8_t *data, size_t len)
+{
+    if (data == NULL || len == 0 || terminal_bridge_start() != ESP_OK) {
+        return 0;
+    }
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const size_t copied = terminal_scrollback_snapshot(&s_scrollback, data, len);
+    xSemaphoreGive(s_lock);
+    return copied;
 }
 
 terminal_bridge_status_t terminal_bridge_get_status(void)

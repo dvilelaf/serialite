@@ -2,14 +2,29 @@
 
 #include <stdio.h>
 
+#include "app_watchdog.h"
+#include "diagnostics_export.h"
+#include "event_log.h"
+#include "http_rate_limit.h"
+#include "http_route_policy.h"
+#include "esp_app_desc.h"
 #include "esp_check.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "esp_random.h"
+#include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "terminal_bridge.h"
 #include "usb_console.h"
+#include "web_input_policy.h"
+#include "web_security.h"
 #include "wifi_ap.h"
+#include <stdlib.h>
 #include <string.h>
 
 static const char *TAG = "web_server";
@@ -17,6 +32,12 @@ static const char *TAG = "web_server";
 #define WEB_MAX_WS_CLIENTS 4
 #define WEB_TX_QUEUE_DEPTH 16
 #define WEB_TX_CHUNK_MAX 256
+#define WEB_SCROLLBACK_SEND_CHUNK_MAX 256
+#define WEB_REQUEST_BODY_MAX HTTP_ROUTE_LOGIN_BODY_MAX
+#define WEB_HEADER_VALUE_MAX 160
+#define WEB_DIAG_EVENT_LIMIT 16
+#define WEB_PASTE_CONFIRM_BYTES 64
+#define WEB_PASTE_MAX_BYTES 2048
 
 typedef struct {
     size_t len;
@@ -26,28 +47,288 @@ typedef struct {
 static httpd_handle_t s_server;
 static int s_ws_fds[WEB_MAX_WS_CLIENTS];
 static QueueHandle_t s_tx_queue;
+static TaskHandle_t s_web_tx_task;
+static web_security_state_t s_security;
+static web_input_policy_state_t s_input_policy;
+static http_rate_limit_state_t s_http_rate_limit;
+static SemaphoreHandle_t s_http_rate_limit_lock;
+static StaticSemaphore_t s_http_rate_limit_lock_storage;
+static SemaphoreHandle_t s_ws_fds_lock;
+static StaticSemaphore_t s_ws_fds_lock_storage;
+
+static uint64_t now_ms(void)
+{
+    return (uint64_t)(esp_timer_get_time() / 1000ULL);
+}
+
+static bool security_random(uint8_t *buf, size_t len, void *ctx)
+{
+    (void)ctx;
+    esp_fill_random(buf, len);
+    return true;
+}
+
+static void send_no_store_headers(httpd_req_t *req)
+{
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
+    httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
+    httpd_resp_set_hdr(req, "X-Frame-Options", "DENY");
+    httpd_resp_set_hdr(req, "Content-Security-Policy", "default-src 'self'; connect-src 'self' ws:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'");
+}
+
+static esp_err_t enforce_http_rate_limit(httpd_req_t *req)
+{
+    if (s_http_rate_limit_lock == NULL) {
+        return ESP_OK;
+    }
+
+    xSemaphoreTake(s_http_rate_limit_lock, portMAX_DELAY);
+    const http_rate_limit_result_t result = http_rate_limit_evaluate(&s_http_rate_limit, now_ms());
+    xSemaphoreGive(s_http_rate_limit_lock);
+
+    if (result == HTTP_RATE_LIMIT_ACCEPT) {
+        return ESP_OK;
+    }
+
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), "http rate limit");
+    send_no_store_headers(req);
+    httpd_resp_set_status(req, "429 Too Many Requests");
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    return httpd_resp_send(req, "rate limit", HTTPD_RESP_USE_STRLEN);
+}
+
+static http_route_method_t route_method_from_httpd(httpd_method_t method)
+{
+    switch (method) {
+        case HTTP_GET:
+            return HTTP_ROUTE_METHOD_GET;
+        case HTTP_POST:
+            return HTTP_ROUTE_METHOD_POST;
+        default:
+            return HTTP_ROUTE_METHOD_OTHER;
+    }
+}
+
+static esp_err_t send_route_policy_error(httpd_req_t *req, http_route_policy_result_t result)
+{
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), http_route_policy_result_name(result));
+    switch (result) {
+        case HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE:
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "request body too large");
+        case HTTP_ROUTE_POLICY_REJECT_METHOD:
+            return httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "method not allowed");
+        case HTTP_ROUTE_POLICY_REJECT_NOT_FOUND:
+            return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "not found");
+        case HTTP_ROUTE_POLICY_ALLOW:
+        default:
+            return ESP_OK;
+    }
+}
+
+static esp_err_t validate_route_policy(httpd_req_t *req)
+{
+    const http_route_policy_result_t result = http_route_policy_allowed(
+        req->uri,
+        route_method_from_httpd(req->method),
+        req->content_len);
+    return result == HTTP_ROUTE_POLICY_ALLOW ? ESP_OK : send_route_policy_error(req, result);
+}
+
+static esp_err_t validate_same_origin_header(httpd_req_t *req, const char *action)
+{
+    char origin[WEB_HEADER_VALUE_MAX];
+    char host[WEB_HEADER_VALUE_MAX];
+    if (httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) != ESP_OK ||
+        httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) != ESP_OK ||
+        !web_security_origin_allowed(origin, host)) {
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), action);
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid origin");
+    }
+    return ESP_OK;
+}
+
+static bool extract_session_cookie(httpd_req_t *req, char out_token[WEB_SECURITY_TOKEN_BUF_LEN])
+{
+    char cookie[WEB_HEADER_VALUE_MAX];
+    if (httpd_req_get_hdr_value_str(req, "Cookie", cookie, sizeof(cookie)) != ESP_OK) {
+        return false;
+    }
+
+    const char *name = "kvm_session=";
+    char *start = strstr(cookie, name);
+    if (start == NULL) {
+        return false;
+    }
+    start += strlen(name);
+    size_t len = 0;
+    while (start[len] != '\0' && start[len] != ';' && len < WEB_SECURITY_TOKEN_LEN) {
+        len++;
+    }
+    if (len != WEB_SECURITY_TOKEN_LEN) {
+        return false;
+    }
+    memcpy(out_token, start, len);
+    out_token[len] = '\0';
+    return true;
+}
+
+static bool request_authenticated(httpd_req_t *req, char out_token[WEB_SECURITY_TOKEN_BUF_LEN])
+{
+    return extract_session_cookie(req, out_token) &&
+           web_security_session_valid(&s_security, out_token, now_ms());
+}
+
+static esp_err_t redirect_to(httpd_req_t *req, const char *location)
+{
+    send_no_store_headers(req);
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", location);
+    return httpd_resp_send(req, "", 0);
+}
+
+static esp_err_t require_auth_or_redirect(httpd_req_t *req, char out_token[WEB_SECURITY_TOKEN_BUF_LEN])
+{
+    if (request_authenticated(req, out_token)) {
+        return ESP_OK;
+    }
+    return redirect_to(req, "/login");
+}
+
+static bool url_decode(char *value)
+{
+    char *write = value;
+    for (char *read = value; *read != '\0'; ++read) {
+        if (*read == '+') {
+            *write++ = ' ';
+        } else if (*read == '%' && read[1] != '\0' && read[2] != '\0') {
+            char hex[3] = {read[1], read[2], '\0'};
+            char *end = NULL;
+            const long decoded = strtol(hex, &end, 16);
+            if (end == NULL || *end != '\0' || decoded < 0 || decoded > 255) {
+                return false;
+            }
+            *write++ = (char)decoded;
+            read += 2;
+        } else {
+            *write++ = *read;
+        }
+    }
+    *write = '\0';
+    return true;
+}
+
+static bool form_value(const char *body, const char *key, char *out, size_t out_size)
+{
+    if (body == NULL || key == NULL || out == NULL || out_size == 0) {
+        return false;
+    }
+
+    const size_t key_len = strlen(key);
+    const char *cursor = body;
+    while (cursor != NULL && *cursor != '\0') {
+        if (strncmp(cursor, key, key_len) == 0 && cursor[key_len] == '=') {
+            const char *value = cursor + key_len + 1;
+            size_t len = 0;
+            while (value[len] != '\0' && value[len] != '&' && len < out_size - 1) {
+                len++;
+            }
+            out[len] = '\0';
+            memcpy(out, value, len);
+            out[len] = '\0';
+            return url_decode(out);
+        }
+        cursor = strchr(cursor, '&');
+        if (cursor != NULL) {
+            cursor++;
+        }
+    }
+    return false;
+}
+
+static esp_err_t read_small_body(httpd_req_t *req, char *out, size_t out_size)
+{
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route policy rejected");
+    if (req->content_len >= out_size || req->content_len > WEB_REQUEST_BODY_MAX) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "request body too large");
+    }
+
+    size_t received = 0;
+    while (received < req->content_len) {
+        const int ret = httpd_req_recv(req, out + received, req->content_len - received);
+        if (ret <= 0) {
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "request body read failed");
+        }
+        received += (size_t)ret;
+    }
+    out[received] = '\0';
+    return ESP_OK;
+}
+
+static bool csrf_header_valid(httpd_req_t *req, const char *session_token)
+{
+    char csrf[WEB_HEADER_VALUE_MAX];
+    if (httpd_req_get_hdr_value_str(req, "X-CSRF-Token", csrf, sizeof(csrf)) != ESP_OK) {
+        return false;
+    }
+    return web_security_csrf_valid(&s_security, session_token, csrf, now_ms());
+}
+
+static const char *level_name(event_log_level_t level)
+{
+    switch (level) {
+        case EVENT_LOG_INFO:
+            return "info";
+        case EVENT_LOG_WARN:
+            return "warn";
+        case EVENT_LOG_ERROR:
+            return "error";
+        case EVENT_LOG_SECURITY:
+            return "security";
+        default:
+            return "unknown";
+    }
+}
 
 static void remove_ws_fd(int fd)
 {
+    if (s_ws_fds_lock != NULL) {
+        xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
+    }
     for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
         if (s_ws_fds[i] == fd) {
             s_ws_fds[i] = -1;
         }
     }
+    if (s_ws_fds_lock != NULL) {
+        xSemaphoreGive(s_ws_fds_lock);
+    }
 }
 
 static esp_err_t add_ws_fd(int fd)
 {
+    if (s_ws_fds_lock != NULL) {
+        xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
+    }
     for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
         if (s_ws_fds[i] == fd) {
+            if (s_ws_fds_lock != NULL) {
+                xSemaphoreGive(s_ws_fds_lock);
+            }
             return ESP_OK;
         }
     }
     for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
         if (s_ws_fds[i] < 0) {
             s_ws_fds[i] = fd;
+            if (s_ws_fds_lock != NULL) {
+                xSemaphoreGive(s_ws_fds_lock);
+            }
             return ESP_OK;
         }
+    }
+    if (s_ws_fds_lock != NULL) {
+        xSemaphoreGive(s_ws_fds_lock);
     }
     return ESP_ERR_NO_MEM;
 }
@@ -55,9 +336,11 @@ static esp_err_t add_ws_fd(int fd)
 static void web_tx_task(void *arg)
 {
     (void)arg;
+    app_watchdog_register_current_task("web_tx");
     web_tx_chunk_t chunk;
     while (true) {
-        if (xQueueReceive(s_tx_queue, &chunk, portMAX_DELAY) != pdTRUE) {
+        app_watchdog_reset_current_task();
+        if (xQueueReceive(s_tx_queue, &chunk, pdMS_TO_TICKS(1000)) != pdTRUE) {
             continue;
         }
 
@@ -67,12 +350,22 @@ static void web_tx_task(void *arg)
             .len = chunk.len,
         };
 
+        int fds[WEB_MAX_WS_CLIENTS];
+        if (s_ws_fds_lock != NULL) {
+            xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
+        }
+        memcpy(fds, s_ws_fds, sizeof(fds));
+        if (s_ws_fds_lock != NULL) {
+            xSemaphoreGive(s_ws_fds_lock);
+        }
+
         for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-            if (s_ws_fds[i] >= 0) {
-                esp_err_t err = httpd_ws_send_frame_async(s_server, s_ws_fds[i], &frame);
+            if (fds[i] >= 0) {
+                esp_err_t err = httpd_ws_send_frame_async(s_server, fds[i], &frame);
                 if (err != ESP_OK) {
-                    ESP_LOGW(TAG, "dropping websocket client fd=%d: %s", s_ws_fds[i], esp_err_to_name(err));
-                    remove_ws_fd(s_ws_fds[i]);
+                    ESP_LOGW(TAG, "dropping websocket client fd=%d: %s", fds[i], esp_err_to_name(err));
+                    event_log_append(EVENT_LOG_WARN, now_ms(), "websocket client dropped during broadcast");
+                    remove_ws_fd(fds[i]);
                 }
             }
         }
@@ -96,25 +389,81 @@ static void bridge_output_cb(const uint8_t *data, size_t len, void *ctx)
         memcpy(chunk.data, data + offset, chunk.len);
         if (xQueueSend(s_tx_queue, &chunk, 0) != pdTRUE) {
             ESP_LOGW(TAG, "websocket tx queue full; dropped %u bytes", (unsigned)(len - offset));
+            event_log_append(EVENT_LOG_WARN, now_ms(), "websocket tx queue full");
             return;
         }
         offset += chunk.len;
     }
 }
 
+static void cleanup_failed_start(httpd_handle_t server)
+{
+    if (s_web_tx_task != NULL) {
+        vTaskDelete(s_web_tx_task);
+        s_web_tx_task = NULL;
+    }
+    if (s_tx_queue != NULL) {
+        vQueueDelete(s_tx_queue);
+        s_tx_queue = NULL;
+    }
+    if (server != NULL) {
+        httpd_stop(server);
+    }
+    s_server = NULL;
+}
+
+static void send_scrollback_to_ws_client(int fd)
+{
+    uint8_t snapshot[1024];
+    const size_t len = terminal_bridge_snapshot_recent_output(snapshot, sizeof(snapshot));
+    if (len == 0) {
+        return;
+    }
+
+    size_t offset = 0;
+    while (offset < len) {
+        httpd_ws_frame_t frame = {
+            .type = HTTPD_WS_TYPE_BINARY,
+            .payload = snapshot + offset,
+            .len = len - offset,
+        };
+        if (frame.len > WEB_SCROLLBACK_SEND_CHUNK_MAX) {
+            frame.len = WEB_SCROLLBACK_SEND_CHUNK_MAX;
+        }
+
+        const esp_err_t err = httpd_ws_send_frame_async(s_server, fd, &frame);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "scrollback send failed fd=%d: %s", fd, esp_err_to_name(err));
+            event_log_append(EVENT_LOG_WARN, now_ms(), "scrollback send failed");
+            remove_ws_fd(fd);
+            return;
+        }
+        offset += frame.len;
+    }
+}
+
 static esp_err_t index_handler(httpd_req_t *req)
 {
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+
     const usb_console_status_t usb = usb_console_get_status();
     const wifi_ap_status_t wifi = wifi_ap_get_status();
     const terminal_bridge_status_t bridge = terminal_bridge_get_status();
 
-    char body[768];
+    char body[1024];
     const int written = snprintf(
         body,
         sizeof(body),
         "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>ESP32-KVM</title></head><body>"
+        "<title>ESP32-KVM</title><style>body{background:#050b09;color:#e9fff8;font:16px sans-serif;margin:24px}"
+        "a,button{color:#7dffe1}.card{border:1px solid #164235;border-radius:16px;padding:16px;max-width:720px}</style></head><body>"
+        "<div class=\"card\">"
         "<h1>ESP32-KVM</h1>"
+        "<p><strong>Serial rescue console. Not HDMI KVM.</strong></p>"
         "<p>WiFi AP: %s</p>"
         "<p>IP: %s</p>"
         "<p>Clientes: %u</p>"
@@ -123,7 +472,11 @@ static esp_err_t index_handler(httpd_req_t *req)
         "<p>TX bytes: %llu</p>"
         "<p>Bridge USB RX: %llu</p>"
         "<p>Bridge USB TX: %llu</p>"
+        "<p>Scrollback: %u/%u bytes, dropped old=%llu</p>"
         "<p><a href=\"/terminal\">Abrir terminal</a></p>"
+        "<p><a href=\"/diagnostics\">Diagnostico</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/about\">About</a></p>"
+        "<p><a href=\"/logout\" onclick=\"event.preventDefault();fetch('/logout',{method:'POST',headers:{'X-CSRF-Token':'%s'}}).then(()=>location='/login')\">Logout</a></p>"
+        "</div>"
         "</body></html>",
         wifi.started ? "activo" : "inactivo",
         wifi.ip_addr,
@@ -132,55 +485,470 @@ static esp_err_t index_handler(httpd_req_t *req)
         (unsigned long long)usb.bytes_received,
         (unsigned long long)usb.bytes_sent,
         (unsigned long long)bridge.bytes_from_usb,
-        (unsigned long long)bridge.bytes_to_usb);
+        (unsigned long long)bridge.bytes_to_usb,
+        (unsigned)bridge.scrollback_retained,
+        (unsigned)bridge.scrollback_capacity,
+        (unsigned long long)bridge.scrollback_dropped_oldest,
+        web_security_csrf_for_session(&s_security, session_token, now_ms()));
 
     if (written < 0 || written >= (int)sizeof(body)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "status overflow");
     }
 
+    send_no_store_headers(req);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
 }
 
+static esp_err_t about_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+
+    const esp_app_desc_t *app = esp_app_get_description();
+    const terminal_bridge_status_t bridge = terminal_bridge_get_status();
+
+    char body[2300];
+    const int written = snprintf(
+        body,
+        sizeof(body),
+        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>ESP32-KVM About</title><style>body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px}"
+        ".card{border:1px solid #174436;border-radius:16px;padding:14px;background:#030807;max-width:760px}"
+        "dt{color:#7dffe1}dd{margin:0 0 8px 0}a{color:#7dffe1}</style></head><body><main class=\"card\">"
+        "<h1>About ESP32-KVM</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/runbook\">Runbook</a></p>"
+        "<p>Serial rescue console over local WiFi AP. It is not HDMI KVM, HID remote input, virtual media, power control, cloud access, or command automation.</p>"
+        "<dl><dt>Firmware</dt><dd>%s</dd><dt>Project</dt><dd>%s</dd><dt>Build date</dt><dd>%s %s</dd>"
+        "<dt>IDF</dt><dd>%s</dd><dt>Security model</dt><dd>Local AP, web auth, CSRF, Origin checks, single writer, RAM diagnostics.</dd>"
+        "<dt>Production build</dt><dd>Requires Secure Boot, Flash Encryption, encrypted NVS for persisted secrets, and closed debug/JTAG. Treat unsigned debug builds as lab-only.</dd>"
+        "<dt>Scrollback</dt><dd>%u/%u bytes retained, %llu old bytes dropped.</dd>"
+        "<dt>Factory reset</dt><dd>Hold BOOT for 10 seconds. This clears project NVS config and reboots.</dd></dl>"
+        "</main></body></html>",
+        app != NULL ? app->version : "unknown",
+        app != NULL ? app->project_name : "esp32-kvm",
+        app != NULL ? app->date : "unknown",
+        app != NULL ? app->time : "",
+        esp_get_idf_version(),
+        (unsigned)bridge.scrollback_retained,
+        (unsigned)bridge.scrollback_capacity,
+        (unsigned long long)bridge.scrollback_dropped_oldest);
+    if (written < 0 || written >= (int)sizeof(body)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "about overflow");
+    }
+
+    send_no_store_headers(req);
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t runbook_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+
+    static const char body[] =
+        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>ESP32-KVM Runbook</title><style>"
+        "body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px;line-height:1.45}"
+        "main{border:1px solid #174436;border-radius:16px;padding:16px;background:#030807;max-width:820px}"
+        "h2{color:#7dffe1}a{color:#7dffe1}li{margin:8px 0}code{color:#bffff0}</style></head><body><main>"
+        "<h1>Runbook de rescate</h1>"
+        "<p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/about\">About</a></p>"
+        "<h2>Antes de escribir</h2><ol>"
+        "<li>Confirma que estas conectado al AP local correcto y fisicamente junto al servidor.</li>"
+        "<li>Comprueba en Status que USB esta conectado y que no hay drops creciendo rapidamente.</li>"
+        "<li>Abre Terminal en modo solo lectura y espera salida antes de pedir escritura.</li>"
+        "</ol><h2>Recuperar acceso</h2><ol>"
+        "<li>Pulsa <code>Request write control</code> solo si necesitas enviar comandos.</li>"
+        "<li>Usa comandos de diagnostico de bajo riesgo primero: <code>ip addr</code>, <code>ip route</code>, <code>systemctl status</code>, <code>journalctl -xb</code>.</li>"
+        "<li>Evita pegar bloques largos. El paste grande se confirma y se trocea, pero sigue ejecutandose en la consola fisica.</li>"
+        "<li>Libera escritura con <code>Release</code> al terminar.</li>"
+        "</ol><h2>Si algo falla</h2><ol>"
+        "<li>Si USB aparece desconectado, revisa cable, puerto y que el servidor exponga consola CDC ACM.</li>"
+        "<li>Si hay rate limit, espera unos segundos y reduce recargas/conexiones.</li>"
+        "<li>Si las credenciales son desconocidas, pulsa BOOT para revelar temporales o manten BOOT 10s para factory reset.</li>"
+        "<li>Usa Diagnostics para copiar contadores y eventos sin exponer passwords.</li>"
+        "</ol><h2>Limites</h2><p>Esto es consola serie local. No hay HDMI, HID, virtual media, power cycle ni acceso cloud.</p>"
+        "</main></body></html>";
+
+    send_no_store_headers(req);
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t login_get_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    if (request_authenticated(req, (char[WEB_SECURITY_TOKEN_BUF_LEN]){0})) {
+        return redirect_to(req, "/");
+    }
+
+    static const char login_page[] =
+        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>ESP32-KVM Login</title><style>"
+        "body{margin:0;min-height:100vh;background:linear-gradient(180deg,#020504,#07130f);color:#eafff8;font:16px sans-serif;display:grid;place-items:center}"
+        "main{width:min(420px,calc(100% - 32px));border:1px solid #174436;border-radius:22px;padding:24px;background:#030807}"
+        "input,button{width:100%;box-sizing:border-box;border-radius:12px;padding:13px;margin-top:12px;font:inherit}"
+        "input{background:#000;color:#fff;border:1px solid #245c4c}button{background:#0c3429;color:#bffff0;border:1px solid #2ee6b8}"
+        "p{color:#8bb5aa}</style></head><body><main><h1>KVM</h1>"
+        "<p>Serial rescue console. Not HDMI KVM.</p>"
+        "<form method=\"post\" action=\"/login\"><input name=\"password\" type=\"password\" autocomplete=\"current-password\" autofocus>"
+        "<button type=\"submit\">Unlock web console</button></form></main></body></html>";
+
+    send_no_store_headers(req);
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    return httpd_resp_send(req, login_page, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t login_post_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char body[WEB_REQUEST_BODY_MAX + 1];
+    ESP_RETURN_ON_ERROR(read_small_body(req, body, sizeof(body)), TAG, "login body failed");
+
+    char password[WEB_SECURITY_PASSWORD_MAX_LEN];
+    if (!form_value(body, "password", password, sizeof(password))) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing password");
+    }
+
+    const web_security_login_result_t result = web_security_login(
+        &s_security,
+        password,
+        now_ms(),
+        security_random,
+        NULL);
+    memset(password, 0, sizeof(password));
+
+    if (result == WEB_SECURITY_LOGIN_LOCKED) {
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "login locked after repeated failures");
+        httpd_resp_set_status(req, "429 Too Many Requests");
+        return httpd_resp_send(req, "login temporarily locked", HTTPD_RESP_USE_STRLEN);
+    }
+    if (result != WEB_SECURITY_LOGIN_OK) {
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "login failed");
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid credentials");
+    }
+
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), "login ok");
+    char cookie[96];
+    snprintf(cookie, sizeof(cookie), "kvm_session=%s; HttpOnly; SameSite=Strict; Path=/", s_security.session_token);
+    httpd_resp_set_hdr(req, "Set-Cookie", cookie);
+    return redirect_to(req, "/terminal");
+}
+
+static esp_err_t logout_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+    ESP_RETURN_ON_ERROR(validate_same_origin_header(req, "logout rejected: origin"), TAG, "origin rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    if (!request_authenticated(req, session_token)) {
+        return redirect_to(req, "/login");
+    }
+    if (!csrf_header_valid(req, session_token)) {
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid csrf");
+    }
+    web_security_logout(&s_security, session_token);
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), "logout");
+    httpd_resp_set_hdr(req, "Set-Cookie", "kvm_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
+    return redirect_to(req, "/login");
+}
+
 static esp_err_t terminal_handler(httpd_req_t *req)
 {
-    static const char terminal_page[] =
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
+    if (csrf == NULL) {
+        return redirect_to(req, "/login");
+    }
+
+    char terminal_page[5632];
+    const int written = snprintf(
+        terminal_page,
+        sizeof(terminal_page),
         "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
         "<title>ESP32-KVM Terminal</title><style>"
-        "html,body{margin:0;height:100%;background:#07110e;color:#d8fff4;font:15px ui-monospace,SFMono-Regular,Menlo,monospace}"
+        "html,body{margin:0;height:100%%;background:#07110e;color:#d8fff4;font:15px ui-monospace,SFMono-Regular,Menlo,monospace}"
         "#bar{padding:10px 12px;background:#0d211b;border-bottom:1px solid #2ee6b8}"
-        "#term{white-space:pre-wrap;overflow:auto;height:calc(100% - 104px);padding:12px;box-sizing:border-box}"
-        "#input{width:100%;height:44px;box-sizing:border-box;border:0;border-top:1px solid #2ee6b8;background:#020604;color:#fff;padding:10px;font:inherit}"
+        "#term{white-space:pre-wrap;overflow:auto;height:calc(100%% - 104px);padding:12px;box-sizing:border-box}"
+        "#input{width:100%%;height:44px;box-sizing:border-box;border:0;border-top:1px solid #2ee6b8;background:#020604;color:#fff;padding:10px;font:inherit}"
         "button{margin-right:6px;background:#14392d;color:#d8fff4;border:1px solid #2ee6b8;border-radius:6px;padding:6px 9px}"
-        "</style></head><body><div id=\"bar\">ESP32-KVM <span id=\"state\">conectando</span><br>"
+        "button.danger{border-color:#ff875c;color:#ffd2c0}#mode{font-weight:bold;color:#7dffe1}</style></head><body><div id=\"bar\">"
+        "ESP32-KVM <span id=\"state\">conectando</span> <span id=\"mode\">Read-only</span> <a href=\"/runbook\">Runbook</a><br>"
+        "<button id=\"write\">Request write control</button><button id=\"release\">Release</button>"
+        "<button class=\"danger\" id=\"logout\">Logout</button><br>"
         "<button data-k=\"\\u0003\">Ctrl+C</button><button data-k=\"\\u0004\">Ctrl+D</button>"
         "<button data-k=\"\\r\">Enter</button><button data-k=\"\\u001b\">Esc</button><button data-k=\"\\t\">Tab</button>"
         "</div><div id=\"term\"></div><input id=\"input\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" autofocus>"
         "<script>"
+        "const CSRF='%s';let canWrite=false;const CHUNK=%u,PASTE_CONFIRM=%u,PASTE_MAX=%u;"
         "const term=document.getElementById('term'),input=document.getElementById('input'),state=document.getElementById('state');"
+        "const mode=document.getElementById('mode');function setWrite(v){canWrite=v;mode.textContent=v?'Write active':'Read-only';input.disabled=!v}"
         "let ws,backoff=500;function add(t){term.textContent+=t;term.scrollTop=term.scrollHeight;if(term.textContent.length>65536)term.textContent=term.textContent.slice(-49152)}"
         "function connect(){state.textContent='conectando';ws=new WebSocket(`ws://${location.host}/ws`);ws.binaryType='arraybuffer';"
         "ws.onopen=()=>{state.textContent='conectado';backoff=500;add('\\r\\n[web conectado]\\r\\n')};"
         "ws.onmessage=e=>{if(e.data instanceof ArrayBuffer)add(new TextDecoder().decode(e.data));else add(e.data)};"
         "ws.onclose=()=>{state.textContent='reconectando';setTimeout(connect,backoff);backoff=Math.min(backoff*2,5000)};"
         "ws.onerror=()=>ws.close()}"
-        "function send(s){if(ws&&ws.readyState===1)ws.send(s)}"
+        "async function post(u){const r=await fetch(u,{method:'POST',headers:{'X-CSRF-Token':CSRF}});return r.ok}"
+        "function send(s){if(!(canWrite&&ws&&ws.readyState===1))return;for(let i=0;i<s.length;i+=CHUNK)ws.send(s.slice(i,i+CHUNK))}"
+        "function safePaste(t){if(!canWrite)return;if(t.length>PASTE_MAX){alert('Paste too large; max '+PASTE_MAX+' bytes');return}"
+        "if((t.length>PASTE_CONFIRM||t.includes('\\n'))&&!confirm('Send '+t.length+' bytes to the physical console?'))return;send(t)}"
         "input.addEventListener('keydown',e=>{if(e.key==='Enter'){send(input.value+'\\r');input.value='';e.preventDefault()}});"
-        "document.querySelectorAll('button').forEach(b=>b.onclick=()=>send(b.dataset.k));connect();"
-        "</script></body></html>";
+        "input.addEventListener('paste',e=>{const t=(e.clipboardData||window.clipboardData).getData('text');if(t.length>PASTE_CONFIRM||t.includes('\\n')){e.preventDefault();safePaste(t)}});"
+        "document.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>send(b.dataset.k));"
+        "document.getElementById('write').onclick=async()=>{if(confirm('Writing here is equivalent to privileged physical console access. Continue?'))setWrite(await post('/api/write/acquire'))};"
+        "document.getElementById('release').onclick=async()=>{await post('/api/write/release');setWrite(false)};"
+        "document.getElementById('logout').onclick=async()=>{await post('/logout');location='/login'};"
+        "setWrite(false);connect();"
+        "</script></body></html>",
+        csrf,
+        (unsigned)WEB_INPUT_POLICY_FRAME_MAX,
+        (unsigned)WEB_PASTE_CONFIRM_BYTES,
+        (unsigned)WEB_PASTE_MAX_BYTES);
+    if (written < 0 || written >= (int)sizeof(terminal_page)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "terminal overflow");
+    }
 
+    send_no_store_headers(req);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, terminal_page, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t write_acquire_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+    ESP_RETURN_ON_ERROR(validate_same_origin_header(req, "write acquire rejected: origin"), TAG, "origin rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    if (!request_authenticated(req, session_token)) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "auth required");
+    }
+    if (!csrf_header_valid(req, session_token)) {
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "write acquire rejected: csrf");
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid csrf");
+    }
+    if (!web_security_acquire_writer(&s_security, session_token, now_ms())) {
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "write acquire rejected: busy");
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_send(req, "writer busy", HTTPD_RESP_USE_STRLEN);
+    }
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), "write control acquired");
+    return httpd_resp_sendstr(req, "ok");
+}
+
+static esp_err_t write_release_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+    ESP_RETURN_ON_ERROR(validate_same_origin_header(req, "write release rejected: origin"), TAG, "origin rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    if (!request_authenticated(req, session_token)) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "auth required");
+    }
+    if (!csrf_header_valid(req, session_token)) {
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "write release rejected: csrf");
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid csrf");
+    }
+    web_security_release_writer(&s_security, session_token);
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), "write control released");
+    return httpd_resp_sendstr(req, "ok");
+}
+
+static esp_err_t diagnostics_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+
+    const usb_console_status_t usb = usb_console_get_status();
+    const wifi_ap_status_t wifi = wifi_ap_get_status();
+    const terminal_bridge_status_t bridge = terminal_bridge_get_status();
+    const event_log_status_t log_status = event_log_get_status();
+    event_log_entry_t events[WEB_DIAG_EVENT_LIMIT];
+    const size_t event_count = event_log_snapshot(events, WEB_DIAG_EVENT_LIMIT);
+
+    char body[4096];
+    int written = snprintf(
+        body,
+        sizeof(body),
+        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>ESP32-KVM Diagnostics</title><style>"
+        "body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px}"
+        "code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}"
+        ".card{border:1px solid #174436;border-radius:16px;padding:14px;margin:12px 0;background:#030807}"
+        "dt{color:#7dffe1}dd{margin:0 0 8px 0}</style></head><body>"
+        "<h1>Diagnostics</h1><p><a href=\"/terminal\">Terminal</a> | <a href=\"/\">Status</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/diagnostics.json\">JSON</a></p>"
+        "<section class=\"card\"><h2>Runtime</h2><dl>"
+        "<dt>Uptime ms</dt><dd>%llu</dd>"
+        "<dt>Reset reason</dt><dd>%d</dd>"
+        "<dt>Heap free</dt><dd>%u</dd>"
+        "<dt>Heap minimum</dt><dd>%u</dd>"
+        "<dt>Event log retained/written/dropped</dt><dd>%u / %u / %u</dd>"
+        "</dl></section>"
+        "<section class=\"card\"><h2>Network and USB</h2><dl>"
+        "<dt>AP</dt><dd>%s %s clients=%u</dd>"
+        "<dt>USB</dt><dd>%s rx=%llu tx=%llu</dd>"
+        "<dt>Bridge</dt><dd>usb_rx=%llu usb_tx=%llu drop_rx=%llu drop_tx=%llu subscribers=%u scrollback=%u/%u dropped_old=%llu</dd>"
+        "</dl></section>"
+        "<section class=\"card\"><h2>Recent events</h2><pre>",
+        (unsigned long long)now_ms(),
+        (int)esp_reset_reason(),
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+        (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
+        (unsigned)log_status.retained,
+        (unsigned)log_status.written,
+        (unsigned)log_status.dropped_oldest,
+        wifi.started ? "active" : "inactive",
+        wifi.ip_addr,
+        wifi.connected_clients,
+        usb.connected ? "connected" : "disconnected",
+        (unsigned long long)usb.bytes_received,
+        (unsigned long long)usb.bytes_sent,
+        (unsigned long long)bridge.bytes_from_usb,
+        (unsigned long long)bridge.bytes_to_usb,
+        (unsigned long long)bridge.dropped_from_usb,
+        (unsigned long long)bridge.dropped_to_usb,
+        (unsigned)bridge.subscriber_count,
+        (unsigned)bridge.scrollback_retained,
+        (unsigned)bridge.scrollback_capacity,
+        (unsigned long long)bridge.scrollback_dropped_oldest);
+    if (written < 0 || written >= (int)sizeof(body)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "diagnostics overflow");
+    }
+
+    for (size_t i = 0; i < event_count; ++i) {
+        const int remaining = (int)sizeof(body) - written;
+        if (remaining <= 1) {
+            break;
+        }
+        char escaped_message[EVENT_LOG_MESSAGE_MAX * 6];
+        if (diagnostics_export_write_html_escaped(escaped_message, sizeof(escaped_message), events[i].message) < 0) {
+            strncpy(escaped_message, "[event message unavailable]", sizeof(escaped_message) - 1);
+            escaped_message[sizeof(escaped_message) - 1] = '\0';
+        }
+
+        const int add = snprintf(
+            body + written,
+            (size_t)remaining,
+            "#%u %llums [%s] %s\n",
+            (unsigned)events[i].sequence,
+            (unsigned long long)events[i].timestamp_ms,
+            level_name(events[i].level),
+            escaped_message);
+        if (add < 0 || add >= remaining) {
+            break;
+        }
+        written += add;
+    }
+
+    const char tail[] = "</pre></section></body></html>";
+    if ((size_t)written + sizeof(tail) > sizeof(body)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "diagnostics overflow");
+    }
+    memcpy(body + written, tail, sizeof(tail));
+
+    send_no_store_headers(req);
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t diagnostics_json_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    if (!request_authenticated(req, session_token)) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "auth required");
+    }
+
+    const usb_console_status_t usb = usb_console_get_status();
+    const wifi_ap_status_t wifi = wifi_ap_get_status();
+    const terminal_bridge_status_t bridge = terminal_bridge_get_status();
+    event_log_entry_t events[WEB_DIAG_EVENT_LIMIT];
+    const size_t event_count = event_log_snapshot(events, WEB_DIAG_EVENT_LIMIT);
+
+    const diagnostics_export_snapshot_t snapshot = {
+        .uptime_ms = now_ms(),
+        .reset_reason = (int)esp_reset_reason(),
+        .heap_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+        .heap_minimum = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
+        .event_log = event_log_get_status(),
+        .ap_started = wifi.started,
+        .ap_ip = wifi.ip_addr,
+        .wifi_clients = wifi.connected_clients,
+        .usb_connected = usb.connected,
+        .usb_bytes_received = usb.bytes_received,
+        .usb_bytes_sent = usb.bytes_sent,
+        .bridge_bytes_from_usb = bridge.bytes_from_usb,
+        .bridge_bytes_to_usb = bridge.bytes_to_usb,
+        .bridge_dropped_from_usb = bridge.dropped_from_usb,
+        .bridge_dropped_to_usb = bridge.dropped_to_usb,
+        .bridge_subscribers = bridge.subscriber_count,
+        .events = events,
+        .event_count = event_count,
+    };
+
+    char body[4096];
+    if (diagnostics_export_write_json(body, sizeof(body), &snapshot) < 0) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "diagnostics json overflow");
+    }
+
+    send_no_store_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t websocket_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
+        ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+        ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+    }
+
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+    if (!request_authenticated(req, session_token)) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "auth required");
+    }
+
+    if (req->method == HTTP_GET) {
+        char origin[WEB_HEADER_VALUE_MAX];
+        char host[WEB_HEADER_VALUE_MAX];
+        if (httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) != ESP_OK ||
+            httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) != ESP_OK ||
+            !web_security_origin_allowed(origin, host)) {
+            event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket rejected: origin");
+            return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid origin");
+        }
+
         const int fd = httpd_req_to_sockfd(req);
         if (add_ws_fd(fd) != ESP_OK) {
+            event_log_append(EVENT_LOG_WARN, now_ms(), "websocket rejected: too many clients");
             return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "too many websocket clients");
         }
         ESP_LOGI(TAG, "websocket client connected fd=%d", fd);
+        event_log_append(EVENT_LOG_INFO, now_ms(), "websocket client connected");
+        send_scrollback_to_ws_client(fd);
         return ESP_OK;
     }
 
@@ -190,54 +958,93 @@ static esp_err_t websocket_handler(httpd_req_t *req)
         .len = 0,
     };
     ESP_RETURN_ON_ERROR(httpd_ws_recv_frame(req, &frame, 0), TAG, "ws frame header failed");
-    if (frame.len > 512) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "websocket frame too large");
+    if (frame.len > WEB_INPUT_POLICY_FRAME_MAX) {
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input rejected: frame too large");
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "websocket frame too large");
     }
 
-    uint8_t payload[512];
+    uint8_t payload[WEB_INPUT_POLICY_FRAME_MAX];
     frame.payload = payload;
     ESP_RETURN_ON_ERROR(httpd_ws_recv_frame(req, &frame, frame.len), TAG, "ws frame payload failed");
     if (frame.type == HTTPD_WS_TYPE_CLOSE) {
         remove_ws_fd(httpd_req_to_sockfd(req));
+        event_log_append(EVENT_LOG_INFO, now_ms(), "websocket client closed");
         return ESP_OK;
     }
     if (frame.type != HTTPD_WS_TYPE_BINARY && frame.type != HTTPD_WS_TYPE_TEXT) {
         return ESP_OK;
     }
 
+    if (!web_security_can_write(&s_security, session_token, now_ms())) {
+        ESP_LOGW(TAG, "dropping websocket input without write lock");
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input dropped: read-only");
+        return ESP_OK;
+    }
+
+    const web_input_policy_result_t policy = web_input_policy_evaluate(&s_input_policy, frame.len, now_ms());
+    if (policy != WEB_INPUT_POLICY_ACCEPT) {
+        ESP_LOGW(TAG, "dropping websocket input: %s", web_input_policy_result_name(policy));
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input rejected by policy");
+        return ESP_OK;
+    }
+
     const size_t written = terminal_bridge_submit_input(TERMINAL_BRIDGE_SOURCE_WEB, payload, frame.len);
     if (written < frame.len) {
         ESP_LOGW(TAG, "bridge input queue full; accepted %u/%u bytes", (unsigned)written, (unsigned)frame.len);
+        event_log_append(EVENT_LOG_WARN, now_ms(), "bridge input queue full");
     }
     return ESP_OK;
 }
 
-esp_err_t web_server_start(void)
+static esp_err_t http_error_handler(httpd_req_t *req, httpd_err_code_t error)
 {
+    if (enforce_http_rate_limit(req) != ESP_OK) {
+        return ESP_OK;
+    }
+
+    http_route_policy_result_t result = HTTP_ROUTE_POLICY_REJECT_NOT_FOUND;
+    if (error == HTTPD_405_METHOD_NOT_ALLOWED) {
+        result = HTTP_ROUTE_POLICY_REJECT_METHOD;
+    }
+    return send_route_policy_error(req, result);
+}
+
+esp_err_t web_server_start(const web_server_config_t *server_config)
+{
+    ESP_RETURN_ON_FALSE(
+        server_config != NULL &&
+            web_security_init(&s_security, server_config->web_password, security_random, NULL),
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "invalid web auth config");
+    web_input_policy_init(&s_input_policy);
+    http_rate_limit_init(&s_http_rate_limit);
+    s_http_rate_limit_lock = xSemaphoreCreateMutexStatic(&s_http_rate_limit_lock_storage);
+    ESP_RETURN_ON_FALSE(s_http_rate_limit_lock != NULL, ESP_ERR_NO_MEM, TAG, "http rate lock failed");
+    s_ws_fds_lock = xSemaphoreCreateMutexStatic(&s_ws_fds_lock_storage);
+    ESP_RETURN_ON_FALSE(s_ws_fds_lock != NULL, ESP_ERR_NO_MEM, TAG, "websocket fd lock failed");
+    event_log_init();
+    event_log_append(EVENT_LOG_INFO, now_ms(), "web server starting");
+
     if (!wifi_ap_get_status().started) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.lru_purge_enable = true;
+    httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
+    http_config.lru_purge_enable = true;
+    http_config.max_uri_handlers = 12;
 
     httpd_handle_t server = NULL;
-    ESP_RETURN_ON_ERROR(httpd_start(&server, &config), TAG, "httpd_start failed");
+    ESP_RETURN_ON_ERROR(httpd_start(&server, &http_config), TAG, "httpd_start failed");
     s_server = server;
     for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
         s_ws_fds[i] = -1;
     }
     s_tx_queue = xQueueCreate(WEB_TX_QUEUE_DEPTH, sizeof(web_tx_chunk_t));
     if (s_tx_queue == NULL) {
-        httpd_stop(server);
+        cleanup_failed_start(server);
         return ESP_ERR_NO_MEM;
     }
-    BaseType_t task_ok = xTaskCreate(web_tx_task, "web_tx", 4096, NULL, 3, NULL);
-    if (task_ok != pdPASS) {
-        httpd_stop(server);
-        return ESP_ERR_NO_MEM;
-    }
-    ESP_RETURN_ON_ERROR(terminal_bridge_register_output_callback(bridge_output_cb, NULL), TAG, "bridge callback failed");
 
     const httpd_uri_t index_uri = {
         .uri = "/",
@@ -251,6 +1058,60 @@ esp_err_t web_server_start(void)
         .handler = terminal_handler,
         .user_ctx = NULL,
     };
+    const httpd_uri_t about_uri = {
+        .uri = "/about",
+        .method = HTTP_GET,
+        .handler = about_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t runbook_uri = {
+        .uri = "/runbook",
+        .method = HTTP_GET,
+        .handler = runbook_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t diagnostics_uri = {
+        .uri = "/diagnostics",
+        .method = HTTP_GET,
+        .handler = diagnostics_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t diagnostics_json_uri = {
+        .uri = "/diagnostics.json",
+        .method = HTTP_GET,
+        .handler = diagnostics_json_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t login_get_uri = {
+        .uri = "/login",
+        .method = HTTP_GET,
+        .handler = login_get_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t login_post_uri = {
+        .uri = "/login",
+        .method = HTTP_POST,
+        .handler = login_post_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t logout_uri = {
+        .uri = "/logout",
+        .method = HTTP_POST,
+        .handler = logout_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t write_acquire_uri = {
+        .uri = "/api/write/acquire",
+        .method = HTTP_POST,
+        .handler = write_acquire_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t write_release_uri = {
+        .uri = "/api/write/release",
+        .method = HTTP_POST,
+        .handler = write_release_handler,
+        .user_ctx = NULL,
+    };
     const httpd_uri_t ws_uri = {
         .uri = "/ws",
         .method = HTTP_GET,
@@ -261,13 +1122,27 @@ esp_err_t web_server_start(void)
 
     esp_err_t ret = ESP_OK;
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &index_uri), fail, TAG, "index handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &login_get_uri), fail, TAG, "login get handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &login_post_uri), fail, TAG, "login post handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &logout_uri), fail, TAG, "logout handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &terminal_uri), fail, TAG, "terminal handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &about_uri), fail, TAG, "about handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &runbook_uri), fail, TAG, "runbook handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_uri), fail, TAG, "diagnostics handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_json_uri), fail, TAG, "diagnostics json handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &write_acquire_uri), fail, TAG, "write acquire handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &write_release_uri), fail, TAG, "write release handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ws_uri), fail, TAG, "websocket handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, http_error_handler), fail, TAG, "404 handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_err_handler(server, HTTPD_405_METHOD_NOT_ALLOWED, http_error_handler), fail, TAG, "405 handler failed");
+    BaseType_t task_ok = xTaskCreate(web_tx_task, "web_tx", 4096, NULL, 3, &s_web_tx_task);
+    ESP_GOTO_ON_FALSE(task_ok == pdPASS, ESP_ERR_NO_MEM, fail, TAG, "web tx task failed");
+    ESP_GOTO_ON_ERROR(terminal_bridge_register_output_callback(bridge_output_cb, NULL), fail, TAG, "bridge callback failed");
 
     ESP_LOGI(TAG, "HTTP server started");
     return ESP_OK;
 
 fail:
-    httpd_stop(server);
+    cleanup_failed_start(server);
     return ret;
 }

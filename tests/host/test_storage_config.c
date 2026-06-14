@@ -18,7 +18,7 @@ static storage_wifi_config_t valid_config(void)
         .max_clients = 4,
     };
     strcpy(config.ssid, "ESP32-KVM-ABCDEF");
-    strcpy(config.password, "12345678abcdef");
+    strcpy(config.password, "anchor-bison-cobalt-delta");
     return config;
 }
 
@@ -38,6 +38,20 @@ static void test_rejects_empty_or_short_secrets(void)
     config = valid_config();
     strcpy(config.password, "1234567");
     CHECK(!storage_wifi_config_is_valid(&config));
+
+    config = valid_config();
+    strcpy(config.password, "12345678abcdef");
+    CHECK(!storage_wifi_config_is_valid(&config));
+
+    config = valid_config();
+    memset(config.password, 'a', STORAGE_PRODUCTION_PASSWORD_MIN_BYTES - 1);
+    config.password[STORAGE_PRODUCTION_PASSWORD_MIN_BYTES - 1] = '\0';
+    CHECK(!storage_wifi_config_is_valid(&config));
+
+    config = valid_config();
+    memset(config.password, 'b', STORAGE_PRODUCTION_PASSWORD_MIN_BYTES);
+    config.password[STORAGE_PRODUCTION_PASSWORD_MIN_BYTES] = '\0';
+    CHECK(storage_wifi_config_is_valid(&config));
 }
 
 static void test_rejects_out_of_range_network_values(void)

@@ -19,6 +19,7 @@ esp_err_t board_waveshare_amoled_new_display(const esp_lcd_panel_io_callbacks_t 
 
 esp_err_t board_waveshare_amoled_new_touch(esp_lcd_touch_handle_t *out_touch);
 bool board_waveshare_amoled_touch_signal_active(void);
+bool board_waveshare_amoled_wake_button_active(void);
 
 void board_waveshare_amoled_set_brightness(uint8_t brightness);
 void board_waveshare_amoled_display_on(void);

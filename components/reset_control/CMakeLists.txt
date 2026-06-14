@@ -1,0 +1,12 @@
+idf_component_register(
+    SRCS
+        "src/reset_control.c"
+        "src/reset_gesture.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        board
+        event_log
+        esp_timer
+        storage
+)

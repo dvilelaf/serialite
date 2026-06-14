@@ -5,6 +5,7 @@ idf_component_register(
         "."
     REQUIRES
         storage
+        reset_control
         wifi_ap
         web_server
         usb_console

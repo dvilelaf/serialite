@@ -36,7 +36,7 @@ bool storage_wifi_config_is_valid(const storage_wifi_config_t *config)
         return false;
     }
 
-    if (ssid_len == 0 || password_len < 8) {
+    if (ssid_len == 0 || password_len < STORAGE_PRODUCTION_PASSWORD_MIN_BYTES) {
         return false;
     }
 

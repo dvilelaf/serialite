@@ -2,4 +2,8 @@
 
 #include "esp_err.h"
 
-esp_err_t web_server_start(void);
+typedef struct {
+    const char *web_password;
+} web_server_config_t;
+
+esp_err_t web_server_start(const web_server_config_t *config);

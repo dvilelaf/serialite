@@ -27,12 +27,14 @@ static const char *TAG = "board_amoled";
 #define BOARD_PIN_TOUCH_SCL GPIO_NUM_14
 #define BOARD_PIN_TOUCH_SDA GPIO_NUM_15
 #define BOARD_PIN_TOUCH_INT GPIO_NUM_21
+#define BOARD_PIN_WAKE_BUTTON GPIO_NUM_0
 
 static esp_io_expander_handle_t s_io_expander;
 static esp_lcd_panel_io_handle_t s_panel_io;
 static esp_lcd_panel_handle_t s_panel;
 static bool s_i2c_ready;
 static bool s_spi_ready;
+static bool s_button_ready;
 
 static const sh8601_lcd_init_cmd_t s_lcd_init_cmds[] = {
     {0x11, (uint8_t[]){0x00}, 0, 120},
@@ -114,10 +116,30 @@ static esp_err_t init_spi(void)
     return ESP_OK;
 }
 
+static esp_err_t init_wake_button(void)
+{
+    if (s_button_ready) {
+        return ESP_OK;
+    }
+
+    const gpio_config_t button_config = {
+        .pin_bit_mask = 1ULL << BOARD_PIN_WAKE_BUTTON,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&button_config), TAG, "wake button config failed");
+
+    s_button_ready = true;
+    return ESP_OK;
+}
+
 esp_err_t board_waveshare_amoled_init(void)
 {
     ESP_RETURN_ON_ERROR(init_i2c(), TAG, "i2c init failed");
     ESP_RETURN_ON_ERROR(init_spi(), TAG, "spi init failed");
+    ESP_RETURN_ON_ERROR(init_wake_button(), TAG, "wake button init failed");
     return ESP_OK;
 }
 
@@ -198,6 +220,11 @@ esp_err_t board_waveshare_amoled_new_touch(esp_lcd_touch_handle_t *out_touch)
 bool board_waveshare_amoled_touch_signal_active(void)
 {
     return gpio_get_level(BOARD_PIN_TOUCH_INT) == 0;
+}
+
+bool board_waveshare_amoled_wake_button_active(void)
+{
+    return s_button_ready && gpio_get_level(BOARD_PIN_WAKE_BUTTON) == 0;
 }
 
 void board_waveshare_amoled_set_brightness(uint8_t brightness)

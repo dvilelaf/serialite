@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "lvgl_ui.h"
+#include "reset_control.h"
 #include "storage.h"
 #include "terminal_bridge.h"
 #include "usb_console.h"
@@ -88,6 +89,28 @@ static esp_err_t init_nvs(bool *recovered)
     return err;
 }
 
+static esp_err_t generate_human_password(char *out, size_t out_size)
+{
+    if (out == NULL || out_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint32_t word_indexes[4] = {0};
+    esp_fill_random(word_indexes, sizeof(word_indexes));
+    const int password_len = snprintf(
+        out,
+        out_size,
+        "%s-%s-%s-%s",
+        PASSWORD_WORDS[word_indexes[0] % PASSWORD_WORD_COUNT],
+        PASSWORD_WORDS[word_indexes[1] % PASSWORD_WORD_COUNT],
+        PASSWORD_WORDS[word_indexes[2] % PASSWORD_WORD_COUNT],
+        PASSWORD_WORDS[word_indexes[3] % PASSWORD_WORD_COUNT]);
+    if (password_len < 0 || password_len >= (int)out_size) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return ESP_OK;
+}
+
 static esp_err_t generate_ephemeral_wifi_config(kvm_wifi_ap_config_t *config)
 {
     if (config == NULL) {
@@ -96,19 +119,7 @@ static esp_err_t generate_ephemeral_wifi_config(kvm_wifi_ap_config_t *config)
 
     strlcpy(config->ssid, "KVM", sizeof(config->ssid));
 
-    uint32_t word_indexes[4] = {0};
-    esp_fill_random(word_indexes, sizeof(word_indexes));
-    const int password_len = snprintf(
-        config->password,
-        sizeof(config->password),
-        "%s-%s-%s-%s",
-        PASSWORD_WORDS[word_indexes[0] % PASSWORD_WORD_COUNT],
-        PASSWORD_WORDS[word_indexes[1] % PASSWORD_WORD_COUNT],
-        PASSWORD_WORDS[word_indexes[2] % PASSWORD_WORD_COUNT],
-        PASSWORD_WORDS[word_indexes[3] % PASSWORD_WORD_COUNT]);
-    if (password_len < 0 || password_len >= (int)sizeof(config->password)) {
-        return ESP_ERR_INVALID_SIZE;
-    }
+    ESP_RETURN_ON_ERROR(generate_human_password(config->password, sizeof(config->password)), TAG, "AP password generation failed");
     config->channel = 6;
     config->max_clients = 4;
 
@@ -140,14 +151,21 @@ void app_main(void)
         ephemeral_credentials = true;
     }
 
+    char web_password[WIFI_AP_PASSWORD_MAX_LEN];
+    ESP_ERROR_CHECK(generate_human_password(web_password, sizeof(web_password)));
+
     const lvgl_ui_boot_status_t ui_status = {
         .ssid = mapped_wifi_config.ssid,
         .password = mapped_wifi_config.password,
+        .web_password = web_password,
         .ip_addr = "192.168.4.1",
         .usb_connected = false,
     };
     const esp_err_t ui_err = lvgl_ui_start(&ui_status);
     log_init_result("lvgl_ui", ui_err);
+    if (ui_err == ESP_OK) {
+        log_init_result("reset_control", reset_control_start());
+    }
     if (ui_err != ESP_OK && ephemeral_credentials) {
         ESP_LOGE(TAG, "AP skipped: ephemeral password cannot be safely exposed without local display");
         log_init_result("usb_console", usb_console_start());
@@ -158,7 +176,10 @@ void app_main(void)
     log_init_result("wifi_ap", wifi_err);
     log_init_result("usb_console", usb_console_start());
     if (wifi_err == ESP_OK) {
-        log_init_result("web_server", web_server_start());
+        const web_server_config_t web_config = {
+            .web_password = web_password,
+        };
+        log_init_result("web_server", web_server_start(&web_config));
     } else {
         ESP_LOGE(TAG, "web_server skipped because AP did not start");
     }

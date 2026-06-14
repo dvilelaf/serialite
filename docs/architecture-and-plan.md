@@ -97,8 +97,9 @@ Responsabilidad:
 Responsabilidad:
 
 - inicializar LVGL;
-- pintar SSID, password temporal, URL local y estado USB;
+- pintar batería, estado AP, SSID, password temporal y URL local;
 - usar un tema oscuro adecuado para AMOLED;
+- apagar la pantalla tras 3 minutos de inactividad y reactivarla con el botón BOOT/GPIO0;
 - no procesar input táctil ni enviar comandos.
 
 ### 5. `storage_task` o acceso sincronizado a NVS
@@ -147,7 +148,7 @@ La pantalla local no envía comandos ni renderiza logs. En esta placa la superfi
 ### `web_server`
 
 - `web_server_init()`
-- `web_server_start()`
+- `web_server_start(const web_server_config_t *config)`
 - `web_server_broadcast_terminal()`
 - `web_server_get_clients()`
 
@@ -209,8 +210,8 @@ Motivo:
 
 Riesgo:
 
-- los logs por USB pueden mezclarse con la consola de rescate.
-- antes de producción debe bajarse el nivel de logs o redirigirlos si se usa el mismo CDC como consola.
+- la consola secundaria USB-Serial/JTAG de ESP-IDF queda desactivada para no mezclar logs con la consola de rescate;
+- el periférico USB-Serial/JTAG sigue habilitado para que `usb_console` lo use como bridge CDC.
 
 ### RAM
 

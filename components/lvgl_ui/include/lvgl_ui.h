@@ -6,6 +6,7 @@
 typedef struct {
     const char *ssid;
     const char *password;
+    const char *web_password;
     const char *ip_addr;
     bool usb_connected;
 } lvgl_ui_boot_status_t;

@@ -1,11 +1,18 @@
 idf_component_register(
     SRCS
         "src/lvgl_ui.c"
+        "src/ui_status_format.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
+        app_watchdog
         board
         esp_timer
         esp_lcd
         lvgl
+        power_status
+        secret_display
+        terminal_bridge
+        usb_console
+        wifi_ap
 )

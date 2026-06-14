@@ -1,10 +1,21 @@
 idf_component_register(
     SRCS
+        "src/http_route_policy.c"
+        "src/http_rate_limit.c"
         "src/web_server.c"
+        "src/web_input_policy.c"
+        "src/web_password_hash.c"
+        "src/web_security.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
+        app_watchdog
+        diagnostics_export
+        event_log
+        esp_app_format
         esp_http_server
+        esp_timer
+        mbedtls
         wifi_ap
         usb_console
         terminal_bridge
