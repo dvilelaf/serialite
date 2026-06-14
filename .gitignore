@@ -1,5 +1,6 @@
 .DS_Store
 build/
+build-host-tests/
 managed_components/
 sdkconfig
 sdkconfig.old
@@ -8,4 +9,3 @@ sdkconfig.old
 *.swp
 .vscode/
 .idea/
-

@@ -1,0 +1,13 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        storage
+        wifi_ap
+        web_server
+        usb_console
+        lvgl_ui
+        terminal_bridge
+)

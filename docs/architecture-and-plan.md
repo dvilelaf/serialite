@@ -229,13 +229,33 @@ Antes de ampliar funciones, se debe probar:
 4. LVGL muestra estado y últimas líneas.
 5. El sistema no bloquea con buffers llenos.
 
+## Verificacion de desarrollo
+
+El repo debe conservar un entrypoint reproducible:
+
+```bash
+source /path/to/esp-idf/export.sh
+./scripts/verify.sh
+```
+
+Este comando ejecuta:
+
+- pruebas host de componentes puros;
+- build ESP-IDF para `esp32s3`.
+
+## Politica de secretos
+
+No se deben introducir credenciales compartidas de fabrica.
+
+Mientras NVS encryption no este activa, el firmware puede generar credenciales WiFi efimeras, pero no debe persistir secretos en NVS. La persistencia de SSID/password solo queda permitida con almacenamiento cifrado configurado.
+
 ## Fases propuestas
 
 ### Fase 1
 
 - crear AP WiFi;
 - servidor web con estado;
-- WebSocket terminal;
+- preparar la frontera para WebSocket terminal sin exponerlo hasta implementarlo;
 - bridge USB CDC ACM;
 - pantalla LVGL de monitor;
 - persistencia básica en NVS.
@@ -282,4 +302,3 @@ El plan queda aprobado si:
 - USB, web y UI se conectan solo por colas/eventos;
 - no se presupone framebuffer completo ni KVM de vídeo;
 - el repo arranca con documentación clara antes del código.
-
