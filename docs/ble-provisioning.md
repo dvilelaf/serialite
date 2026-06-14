@@ -14,4 +14,6 @@ BLE provisioning may only be enabled by a future implementation when all gates p
 - advertising is time-boxed to at most 180 seconds;
 - the provisioning session is time-boxed to at most 600 seconds.
 
-The policy component does not start a BLE stack, advertise services, persist credentials, or replace web/AP setup. It exists to keep any future BLE implementation fail-closed and testable.
+The runtime component is also fail-closed. `CONFIG_ESP32_KVM_BLE_PROVISIONING_ENABLE` is disabled by default. When enabled, startup still evaluates the policy gates before any radio callback can run. The current firmware does not include a BLE radio backend, so the integrated runtime cannot advertise services or persist credentials accidentally.
+
+Any future backend must be wired only behind `ble_provisioning_runtime_start()`, must keep the offline AP flow available, and must stop advertising when the bounded setup window expires.

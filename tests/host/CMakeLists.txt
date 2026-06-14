@@ -242,6 +242,16 @@ target_include_directories(test_ble_provisioning_policy PRIVATE
 
 add_test(NAME ble_provisioning_policy COMMAND test_ble_provisioning_policy)
 
+add_executable(test_ble_provisioning_runtime
+    test_ble_provisioning_runtime.c
+    ../../components/ble_provisioning/src/ble_provisioning_policy.c
+    ../../components/ble_provisioning/src/ble_provisioning_runtime.c
+)
+target_include_directories(test_ble_provisioning_runtime PRIVATE
+    ../../components/ble_provisioning/include
+)
+add_test(NAME ble_provisioning_runtime COMMAND test_ble_provisioning_runtime)
+
 add_executable(test_ap_exposure_policy
     test_ap_exposure_policy.c
     ../../components/web_server/src/ap_exposure_policy.c

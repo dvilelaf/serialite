@@ -5,9 +5,11 @@
 #include "esp_system.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "ble_provisioning_runtime.h"
 #include "config_transfer.h"
 #include "credentials.h"
 #include "local_tls_identity.h"
@@ -33,6 +35,9 @@ typedef struct {
 } app_credentials_context_t;
 
 static app_credentials_context_t s_credentials_ctx;
+#if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
+static local_tls_identity_t s_tls_identity;
+#endif
 
 static bool credentials_random(uint8_t *buf, size_t len, void *ctx)
 {
@@ -92,6 +97,58 @@ static esp_err_t generate_pairing_code(char out[LOCAL_PAIRING_CODE_BUF_LEN])
     }
     return result == LOCAL_PAIRING_ERR_RANDOM_FAILED ? ESP_FAIL : ESP_ERR_INVALID_ARG;
 }
+
+#if CONFIG_ESP32_KVM_BLE_PROVISIONING_ENABLE
+static bool ble_radio_not_implemented_start(uint32_t advertising_window_seconds, void *ctx)
+{
+    (void)ctx;
+    ESP_LOGE(TAG, "BLE provisioning radio backend is not implemented; requested window=%" PRIu32 "s", advertising_window_seconds);
+    return false;
+}
+
+static void ble_radio_not_implemented_stop(void *ctx)
+{
+    (void)ctx;
+}
+
+static void maybe_start_ble_provisioning_runtime(bool offline_ap_available)
+{
+#if CONFIG_NVS_ENCRYPTION
+    const bool nvs_encryption_enabled = true;
+#else
+    const bool nvs_encryption_enabled = false;
+#endif
+    static ble_provisioning_runtime_t runtime;
+    ble_provisioning_runtime_init(&runtime);
+
+    const ble_provisioning_runtime_config_t runtime_config = {
+        .policy = {
+            .requested = true,
+            .physical_presence = false,
+            .local_pairing_passed = false,
+            .nvs_encrypted = nvs_encryption_enabled,
+            .offline_ap_flow_available = offline_ap_available,
+            .advertising_window_seconds = BLE_PROVISIONING_POLICY_ADV_WINDOW_MAX_SECONDS,
+            .session_budget_seconds = BLE_PROVISIONING_POLICY_SESSION_MAX_SECONDS,
+        },
+        .start_radio = ble_radio_not_implemented_start,
+        .stop_radio = ble_radio_not_implemented_stop,
+        .radio_ctx = NULL,
+    };
+
+    const ble_provisioning_runtime_result_t result = ble_provisioning_runtime_start(&runtime, &runtime_config);
+    if (result == BLE_PROVISIONING_RUNTIME_STARTED) {
+        ESP_LOGW(TAG, "BLE provisioning advertising started");
+    } else {
+        ESP_LOGW(TAG, "BLE provisioning not started: %s", ble_provisioning_runtime_last_reason(&runtime));
+    }
+}
+#else
+static void maybe_start_ble_provisioning_runtime(bool offline_ap_available)
+{
+    (void)offline_ap_available;
+}
+#endif
 
 static esp_err_t rotate_credentials_cb(const web_server_credential_rotation_t *rotation, void *ctx)
 {
@@ -276,11 +333,10 @@ void app_main(void)
 
     char pairing_code[LOCAL_PAIRING_CODE_BUF_LEN] = {0};
     ESP_ERROR_CHECK(generate_pairing_code(pairing_code));
-    local_tls_identity_t tls_identity = {0};
     bool tls_ready = false;
 #if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
     const local_tls_identity_result_t tls_result = local_tls_identity_generate(
-        &tls_identity,
+        &s_tls_identity,
         credentials_random,
         NULL,
         "kvm.local");
@@ -295,7 +351,12 @@ void app_main(void)
         .password = mapped_wifi_config.password,
         .web_password = web_password,
         .pairing_code = pairing_code,
-        .https_fingerprint = tls_ready ? tls_identity.fingerprint_text : NULL,
+        .https_fingerprint =
+#if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
+            tls_ready ? s_tls_identity.fingerprint_text : NULL,
+#else
+            NULL,
+#endif
         .web_url = ui_web_url_for_transport(tls_ready),
         .ip_addr = "192.168.4.1",
         .usb_connected = false,
@@ -316,9 +377,9 @@ void app_main(void)
         storage_secure_zero(mapped_wifi_config.password, sizeof(mapped_wifi_config.password));
         storage_secure_zero(web_password, sizeof(web_password));
         storage_secure_zero(pairing_code, sizeof(pairing_code));
-        if (tls_ready) {
-            local_tls_identity_zeroize(&tls_identity);
-        }
+#if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
+        local_tls_identity_zeroize(&s_tls_identity);
+#endif
         const esp_err_t usb_err = usb_console_start();
         log_init_result("usb_console", usb_err);
         return;
@@ -326,6 +387,7 @@ void app_main(void)
 
     esp_err_t wifi_err = wifi_ap_start(&mapped_wifi_config);
     log_init_result("wifi_ap", wifi_err);
+    maybe_start_ble_provisioning_runtime(wifi_err == ESP_OK);
     storage_secure_zero(mapped_wifi_config.password, sizeof(mapped_wifi_config.password));
     const esp_err_t usb_err = usb_console_start();
     log_init_result("usb_console", usb_err);
@@ -335,7 +397,12 @@ void app_main(void)
             .web_password_salt = persisted_web_auth ? config.web_password_salt : NULL,
             .web_password_hash = persisted_web_auth ? config.web_password_hash : NULL,
             .web_password_hash_configured = persisted_web_auth,
-            .tls_identity = tls_ready ? &tls_identity : NULL,
+            .tls_identity =
+#if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
+                tls_ready ? &s_tls_identity : NULL,
+#else
+                NULL,
+#endif
             .tls_fingerprint_displayed_locally = tls_ready && s_credentials_ctx.ui_ready,
             .pairing_code = pairing_code,
             .rotate_credentials = rotate_credentials_cb,
@@ -347,9 +414,9 @@ void app_main(void)
             .config_ctx = &s_credentials_ctx,
         };
         const esp_err_t web_err = web_server_start(&web_config);
-        if (tls_ready) {
-            local_tls_identity_zeroize(&tls_identity);
-        }
+#if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
+        local_tls_identity_zeroize(&s_tls_identity);
+#endif
         storage_secure_zero(web_password, sizeof(web_password));
         storage_secure_zero(pairing_code, sizeof(pairing_code));
         log_init_result("web_server", web_err);
@@ -382,9 +449,9 @@ void app_main(void)
             log_init_result("wifi_ap_stop", wifi_ap_stop());
         }
     } else {
-        if (tls_ready) {
-            local_tls_identity_zeroize(&tls_identity);
-        }
+#if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
+        local_tls_identity_zeroize(&s_tls_identity);
+#endif
         storage_secure_zero(web_password, sizeof(web_password));
         storage_secure_zero(pairing_code, sizeof(pairing_code));
         ESP_LOGE(TAG, "web_server skipped because AP did not start");

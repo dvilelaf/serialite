@@ -9,4 +9,13 @@ config ESP32_KVM_HTTPS_LOCAL_ENABLE
         the AMOLED. Disabled by default to preserve the simpler HTTP-only
         rescue path unless operators explicitly opt in.
 
+config ESP32_KVM_BLE_PROVISIONING_ENABLE
+    bool "Enable gated BLE provisioning runtime"
+    default n
+    help
+        Enables the BLE provisioning runtime gate. This does not replace the
+        offline AP flow. The runtime is fail-closed and must not start a BLE
+        radio unless physical presence, local pairing, encrypted NVS, and
+        bounded time windows are all satisfied.
+
 endmenu

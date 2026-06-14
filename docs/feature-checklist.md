@@ -148,7 +148,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: desactivado por defecto y documentado como aumento de superficie de ataque.
 - [x] BLE provisioning policy gate.
   Criterio: helper probado, desactivado por defecto, exige presencia fisica, pairing local, NVS cifrado y ventanas de tiempo.
-- [ ] BLE provisioning runtime.
+- [x] BLE provisioning runtime.
   Criterio: opcional; no reemplaza el flujo offline básico y no activa radio salvo durante setup fisico acotado.
 - [x] Macros seguras.
   Criterio: desactivadas por defecto, visibles, nunca ejecutadas automáticamente y bloqueadas salvo estado seguro.

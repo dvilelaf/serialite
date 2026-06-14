@@ -4,6 +4,7 @@ idf_component_register(
     INCLUDE_DIRS
         "."
     REQUIRES
+        ble_provisioning
         storage
         config_transfer
         credentials
