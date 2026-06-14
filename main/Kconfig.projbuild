@@ -1,0 +1,12 @@
+menu "ESP32-KVM"
+
+config ESP32_KVM_HTTPS_LOCAL_ENABLE
+    bool "Enable local HTTPS listener with on-screen fingerprint"
+    default n
+    help
+        Starts a local HTTPS listener on the rescue AP when a per-boot
+        certificate can be generated and its SHA-256 fingerprint is shown on
+        the AMOLED. Disabled by default to preserve the simpler HTTP-only
+        rescue path unless operators explicitly opt in.
+
+endmenu

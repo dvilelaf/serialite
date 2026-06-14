@@ -64,6 +64,37 @@ target_include_directories(test_https_fingerprint PRIVATE
 
 add_test(NAME https_fingerprint COMMAND test_https_fingerprint)
 
+find_path(HOST_MBEDTLS_INCLUDE_DIR mbedtls/pk.h)
+find_library(HOST_MBEDTLS_LIB mbedtls)
+find_library(HOST_MBEDX509_LIB mbedx509)
+find_library(HOST_MBEDCRYPTO_LIB mbedcrypto)
+if(HOST_MBEDTLS_INCLUDE_DIR AND HOST_MBEDTLS_LIB AND HOST_MBEDX509_LIB AND HOST_MBEDCRYPTO_LIB)
+    add_executable(test_local_tls_identity
+        test_local_tls_identity.c
+        ../../components/local_tls_identity/src/local_tls_identity.c
+        ../../components/https_fingerprint/src/https_fingerprint.c
+    )
+
+    target_include_directories(test_local_tls_identity PRIVATE
+        ../../components/local_tls_identity/include
+        ../../components/https_fingerprint/include
+        ${HOST_MBEDTLS_INCLUDE_DIR}
+    )
+
+    target_link_libraries(test_local_tls_identity PRIVATE
+        ${HOST_MBEDTLS_LIB}
+        ${HOST_MBEDX509_LIB}
+        ${HOST_MBEDCRYPTO_LIB}
+    )
+
+    add_test(NAME local_tls_identity COMMAND test_local_tls_identity)
+else()
+    if(DEFINED ENV{CI})
+        message(FATAL_ERROR "CI must install mbedTLS development headers/libraries to run local_tls_identity host test")
+    endif()
+    message(STATUS "Skipping local_tls_identity host test: mbedTLS development headers/libraries not found")
+endif()
+
 add_executable(test_config_transfer
     test_config_transfer.c
     ../../components/config_transfer/src/config_transfer.c
@@ -166,6 +197,17 @@ target_include_directories(test_web_terminal_ansi PRIVATE
 )
 
 add_test(NAME web_terminal_ansi COMMAND test_web_terminal_ansi)
+
+add_executable(test_web_transport_policy
+    test_web_transport_policy.c
+    ../../components/web_server/src/web_transport_policy.c
+)
+
+target_include_directories(test_web_transport_policy PRIVATE
+    ../../components/web_server/include
+)
+
+add_test(NAME web_transport_policy COMMAND test_web_transport_policy)
 
 add_executable(test_network_identity_policy
     test_network_identity_policy.c
@@ -291,6 +333,18 @@ target_include_directories(test_ui_status_format PRIVATE
 )
 
 add_test(NAME ui_status_format COMMAND test_ui_status_format)
+
+add_executable(test_ui_web_url_policy
+    test_ui_web_url_policy.c
+    ../../components/lvgl_ui/src/ui_web_url_policy.c
+)
+
+target_include_directories(test_ui_web_url_policy PRIVATE
+    ../../components/lvgl_ui/include
+    ../../components/network_identity/include
+)
+
+add_test(NAME ui_web_url_policy COMMAND test_ui_web_url_policy)
 
 add_executable(test_reset_gesture
     test_reset_gesture.c

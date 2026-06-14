@@ -34,6 +34,7 @@ static void rejects_bad_fingerprint_inputs(void)
 static void enable_requires_fingerprint_local_display_and_operator_ack(void)
 {
     assert(https_fingerprint_policy_can_enable(NULL) == HTTPS_FINGERPRINT_POLICY_REJECT_DISABLED);
+    assert(https_fingerprint_policy_can_start_listener(NULL) == HTTPS_FINGERPRINT_POLICY_REJECT_DISABLED);
 
     https_fingerprint_policy_request_t req = {
         .requested = true,
@@ -56,6 +57,7 @@ static void enable_requires_fingerprint_local_display_and_operator_ack(void)
 
     req.fingerprint_displayed_locally = true;
     req.operator_acknowledged_fingerprint = false;
+    assert(https_fingerprint_policy_can_start_listener(&req) == HTTPS_FINGERPRINT_POLICY_ALLOW);
     assert(https_fingerprint_policy_can_enable(&req) == HTTPS_FINGERPRINT_POLICY_REJECT_NO_ACK);
 }
 

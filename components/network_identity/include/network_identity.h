@@ -1,12 +1,9 @@
 #pragma once
 
+#include "network_identity_constants.h"
+
 #include "esp_err.h"
 #include <stdint.h>
-
-#define NETWORK_IDENTITY_HOSTNAME "kvm"
-#define NETWORK_IDENTITY_SERVICE_NAME "ESP32-KVM"
-#define NETWORK_IDENTITY_HTTP_SERVICE "_http"
-#define NETWORK_IDENTITY_LOCAL_URL "http://kvm.local"
 
 typedef struct {
     const char *hostname;

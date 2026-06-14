@@ -1,0 +1,8 @@
+#pragma once
+
+#define NETWORK_IDENTITY_HOSTNAME "kvm"
+#define NETWORK_IDENTITY_SERVICE_NAME "ESP32-KVM"
+#define NETWORK_IDENTITY_HTTP_SERVICE "_http"
+#define NETWORK_IDENTITY_HTTPS_SERVICE "_https"
+#define NETWORK_IDENTITY_LOCAL_URL "http://kvm.local"
+#define NETWORK_IDENTITY_LOCAL_HTTPS_URL "https://kvm.local"

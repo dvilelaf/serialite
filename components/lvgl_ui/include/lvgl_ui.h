@@ -8,6 +8,8 @@ typedef struct {
     const char *password;
     const char *web_password;
     const char *pairing_code;
+    const char *https_fingerprint;
+    const char *web_url;
     const char *ip_addr;
     bool usb_connected;
 } lvgl_ui_boot_status_t;

@@ -142,7 +142,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: nombre local opcional sin depender de DNS externo.
 - [x] HTTPS fingerprint policy gate.
   Criterio: helper probado para formatear SHA-256 y bloquear activacion salvo certificado, fingerprint visible localmente y confirmacion del operador.
-- [ ] HTTPS local runtime con fingerprint en pantalla.
+- [x] HTTPS local runtime con fingerprint en pantalla.
   Criterio: TLS local opcional con listener real, fingerprint visible en AMOLED; no depende de CA externa ni induce a ignorar warnings.
 - [x] Cliente WiFi opcional además de AP.
   Criterio: desactivado por defecto y documentado como aumento de superficie de ataque.

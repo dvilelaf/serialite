@@ -46,7 +46,7 @@ esp_err_t network_identity_start(const network_identity_config_t *config)
     }
 
     s_started = true;
-    ESP_LOGI(TAG, "mDNS ready: http://%s.local", config->hostname);
+    ESP_LOGI(TAG, "mDNS ready: %s://%s.local", config->port == 443 ? "https" : "http", config->hostname);
     return ESP_OK;
 }
 

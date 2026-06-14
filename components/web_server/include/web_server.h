@@ -1,6 +1,7 @@
 #pragma once
 
 #include "esp_err.h"
+#include "local_tls_identity.h"
 #include "web_password_hash.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -33,6 +34,8 @@ typedef struct {
     const uint8_t *web_password_salt;
     const uint8_t *web_password_hash;
     bool web_password_hash_configured;
+    const local_tls_identity_t *tls_identity;
+    bool tls_fingerprint_displayed_locally;
     web_server_rotate_credentials_fn_t rotate_credentials;
     void *rotate_credentials_ctx;
     web_server_pairing_event_fn_t pairing_event;
@@ -46,6 +49,7 @@ typedef struct {
     bool started;
     bool writer_active;
     bool locked;
+    bool tls_active;
 } web_server_status_t;
 
 esp_err_t web_server_start(const web_server_config_t *config);

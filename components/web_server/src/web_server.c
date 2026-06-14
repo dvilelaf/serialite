@@ -17,6 +17,7 @@
 #include "esp_app_desc.h"
 #include "esp_check.h"
 #include "esp_http_server.h"
+#include "esp_https_server.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_random.h"
@@ -60,6 +61,7 @@ typedef struct {
 } web_tx_chunk_t;
 
 static httpd_handle_t s_server;
+static bool s_server_tls;
 static int s_ws_fds[WEB_MAX_WS_CLIENTS];
 static QueueHandle_t s_tx_queue;
 static TaskHandle_t s_web_tx_task;
@@ -104,6 +106,16 @@ static void runtime_status_set_started(bool started)
 {
     portENTER_CRITICAL(&s_runtime_status_lock);
     s_runtime_status.started = started;
+    if (!started) {
+        s_runtime_status.tls_active = false;
+    }
+    portEXIT_CRITICAL(&s_runtime_status_lock);
+}
+
+static void runtime_status_set_tls_active(bool active)
+{
+    portENTER_CRITICAL(&s_runtime_status_lock);
+    s_runtime_status.tls_active = active;
     portEXIT_CRITICAL(&s_runtime_status_lock);
 }
 
@@ -577,9 +589,14 @@ static void cleanup_failed_start(httpd_handle_t server)
         s_tx_queue = NULL;
     }
     if (server != NULL) {
-        httpd_stop(server);
+        if (s_server_tls) {
+            (void)httpd_ssl_stop(server);
+        } else {
+            (void)httpd_stop(server);
+        }
     }
     s_server = NULL;
+    s_server_tls = false;
     runtime_status_set_started(false);
     runtime_status_set_writer_active(false);
 }
@@ -693,7 +710,7 @@ static esp_err_t about_handler(httpd_req_t *req)
 
     const esp_app_desc_t *app = esp_app_get_description();
     const terminal_bridge_status_t bridge = terminal_bridge_get_status();
-    const bool https_enabled = https_fingerprint_default_enabled();
+    const bool https_enabled = s_server_tls;
 
     char body[2300];
     const int written = snprintf(
@@ -1900,14 +1917,49 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         return ESP_ERR_INVALID_STATE;
     }
 
-    httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
-    http_config.lru_purge_enable = true;
-    http_config.max_uri_handlers = 25;
-
     httpd_handle_t server = NULL;
-    ESP_RETURN_ON_ERROR(httpd_start(&server, &http_config), TAG, "httpd_start failed");
+    bool tls_server = false;
+    if (server_config->tls_identity != NULL) {
+        const https_fingerprint_policy_request_t https_policy = {
+            .requested = true,
+            .certificate_present = server_config->tls_identity->cert_pem_len > 0U &&
+                                   server_config->tls_identity->key_pem_len > 0U,
+            .fingerprint_displayed_locally = server_config->tls_fingerprint_displayed_locally,
+            .operator_acknowledged_fingerprint = false,
+        };
+        const https_fingerprint_policy_result_t https_result = https_fingerprint_policy_can_start_listener(&https_policy);
+        if (https_result == HTTPS_FINGERPRINT_POLICY_ALLOW) {
+            httpd_ssl_config_t https_config = HTTPD_SSL_CONFIG_DEFAULT();
+            https_config.httpd.lru_purge_enable = true;
+            https_config.httpd.max_uri_handlers = 25;
+            https_config.servercert = (const uint8_t *)server_config->tls_identity->cert_pem;
+            https_config.servercert_len = server_config->tls_identity->cert_pem_len + 1U;
+            https_config.prvtkey_pem = (const uint8_t *)server_config->tls_identity->key_pem;
+            https_config.prvtkey_len = server_config->tls_identity->key_pem_len + 1U;
+            const esp_err_t tls_err = httpd_ssl_start(&server, &https_config);
+            if (tls_err == ESP_OK) {
+                tls_server = true;
+                event_log_append(EVENT_LOG_INFO, now_ms(), "https server started");
+            } else {
+                ESP_LOGE(TAG, "https start failed after displaying fingerprint: %s", esp_err_to_name(tls_err));
+                event_log_append(EVENT_LOG_ERROR, now_ms(), "https start failed after fingerprint display");
+                return tls_err;
+            }
+        } else {
+            ESP_LOGW(TAG, "https disabled by policy: %s", https_fingerprint_policy_result_name(https_result));
+            event_log_append(EVENT_LOG_WARN, now_ms(), "https disabled by policy");
+        }
+    }
+    if (server == NULL) {
+        httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
+        http_config.lru_purge_enable = true;
+        http_config.max_uri_handlers = 25;
+        ESP_RETURN_ON_ERROR(httpd_start(&server, &http_config), TAG, "httpd_start failed");
+    }
     s_server = server;
+    s_server_tls = tls_server;
     runtime_status_set_started(true);
+    runtime_status_set_tls_active(tls_server);
     runtime_status_set_locked(false);
     runtime_status_set_writer_active(false);
     for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
@@ -2106,7 +2158,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_GOTO_ON_ERROR(terminal_bridge_register_output_callback(bridge_output_cb, NULL), fail, TAG, "bridge callback failed");
     ESP_GOTO_ON_ERROR(demo_serial_runtime_start(), fail, TAG, "demo serial runtime failed");
 
-    ESP_LOGI(TAG, "HTTP server started");
+    ESP_LOGI(TAG, "%s server started", tls_server ? "HTTPS" : "HTTP");
     return ESP_OK;
 
 fail:

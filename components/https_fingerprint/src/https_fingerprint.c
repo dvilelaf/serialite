@@ -36,7 +36,7 @@ https_fingerprint_result_t https_fingerprint_format_sha256(
     return HTTPS_FINGERPRINT_OK;
 }
 
-https_fingerprint_policy_result_t https_fingerprint_policy_can_enable(const https_fingerprint_policy_request_t *request)
+https_fingerprint_policy_result_t https_fingerprint_policy_can_start_listener(const https_fingerprint_policy_request_t *request)
 {
     if (request == NULL || !request->requested) {
         return HTTPS_FINGERPRINT_POLICY_REJECT_DISABLED;
@@ -46,6 +46,15 @@ https_fingerprint_policy_result_t https_fingerprint_policy_can_enable(const http
     }
     if (!request->fingerprint_displayed_locally) {
         return HTTPS_FINGERPRINT_POLICY_REJECT_NOT_DISPLAYED;
+    }
+    return HTTPS_FINGERPRINT_POLICY_ALLOW;
+}
+
+https_fingerprint_policy_result_t https_fingerprint_policy_can_enable(const https_fingerprint_policy_request_t *request)
+{
+    const https_fingerprint_policy_result_t listener_result = https_fingerprint_policy_can_start_listener(request);
+    if (listener_result != HTTPS_FINGERPRINT_POLICY_ALLOW) {
+        return listener_result;
     }
     if (!request->operator_acknowledged_fingerprint) {
         return HTTPS_FINGERPRINT_POLICY_REJECT_NO_ACK;

@@ -11,6 +11,7 @@ idf_component_register(
         "src/web_macro_policy.c"
         "src/web_password_hash.c"
         "src/web_security.c"
+        "src/web_transport_policy.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
@@ -22,8 +23,10 @@ idf_component_register(
         event_log
         esp_app_format
         esp_http_server
+        esp_https_server
         esp_timer
         https_fingerprint
+        local_tls_identity
         mbedtls
         ota_update
         wifi_ap

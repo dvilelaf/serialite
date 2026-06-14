@@ -34,5 +34,6 @@ https_fingerprint_result_t https_fingerprint_format_sha256(
     size_t digest_len,
     char *out,
     size_t out_size);
+https_fingerprint_policy_result_t https_fingerprint_policy_can_start_listener(const https_fingerprint_policy_request_t *request);
 https_fingerprint_policy_result_t https_fingerprint_policy_can_enable(const https_fingerprint_policy_request_t *request);
 const char *https_fingerprint_policy_result_name(https_fingerprint_policy_result_t result);

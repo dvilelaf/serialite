@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "src/lvgl_ui.c"
         "src/ui_status_format.c"
+        "src/ui_web_url_policy.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
@@ -10,6 +11,7 @@ idf_component_register(
         esp_timer
         esp_lcd
         lvgl
+        network_identity
         power_status
         secret_display
         terminal_bridge

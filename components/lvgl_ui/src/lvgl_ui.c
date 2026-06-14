@@ -377,10 +377,16 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     const char *password = status->password != NULL ? status->password : "(sin password)";
     const char *web_password = status->web_password != NULL ? status->web_password : "(sin web password)";
     const char *pairing_code = status->pairing_code != NULL ? status->pairing_code : "(sin pairing)";
+    const char *https_fingerprint = status->https_fingerprint != NULL ? status->https_fingerprint : "";
+    const char *web_url = status->web_url != NULL ? status->web_url : "";
     const char *ip_addr = status->ip_addr != NULL ? status->ip_addr : "192.168.4.1";
     char line[128];
     char url[64];
-    snprintf(url, sizeof(url), "http://%s", ip_addr);
+    if (web_url[0] != '\0') {
+        snprintf(url, sizeof(url), "%s", web_url);
+    } else {
+        snprintf(url, sizeof(url), "http://%s", ip_addr);
+    }
 
     lv_obj_t *screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
@@ -468,6 +474,10 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
 
     add_label(card, "5  Open", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
     add_label(card, url, &lv_font_montserrat_20, lv_color_hex(0x7dffe1), UI_CONTENT_W);
+    if (https_fingerprint[0] != '\0') {
+        add_label(card, "TLS fingerprint SHA-256", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
+        add_label(card, https_fingerprint, &lv_font_montserrat_16, lv_color_hex(0xffffff), UI_CONTENT_W);
+    }
 
     add_label(card, "Status", &lv_font_montserrat_16, lv_color_hex(0x6b8f85), UI_CONTENT_W);
     s_ctx.usb_status_label = add_label(card, status->usb_connected ? "USB connected" : "USB disconnected", &lv_font_montserrat_16, lv_color_hex(0xff875c), UI_CONTENT_W);

@@ -7,6 +7,7 @@ idf_component_register(
         storage
         config_transfer
         credentials
+        local_tls_identity
         local_pairing
         reset_control
         wifi_ap

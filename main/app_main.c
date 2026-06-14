@@ -10,6 +10,7 @@
 
 #include "config_transfer.h"
 #include "credentials.h"
+#include "local_tls_identity.h"
 #include "local_pairing.h"
 #include "lvgl_ui.h"
 #include "network_identity.h"
@@ -18,8 +19,10 @@
 #include "storage.h"
 #include "startup_policy.h"
 #include "terminal_bridge.h"
+#include "ui_web_url_policy.h"
 #include "usb_console.h"
 #include "web_server.h"
+#include "web_transport_policy.h"
 #include "wifi_ap.h"
 
 static const char *TAG = "esp32_kvm";
@@ -273,12 +276,27 @@ void app_main(void)
 
     char pairing_code[LOCAL_PAIRING_CODE_BUF_LEN] = {0};
     ESP_ERROR_CHECK(generate_pairing_code(pairing_code));
+    local_tls_identity_t tls_identity = {0};
+    bool tls_ready = false;
+#if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
+    const local_tls_identity_result_t tls_result = local_tls_identity_generate(
+        &tls_identity,
+        credentials_random,
+        NULL,
+        "kvm.local");
+    tls_ready = tls_result == LOCAL_TLS_IDENTITY_OK;
+    if (!tls_ready) {
+        ESP_LOGW(TAG, "HTTPS identity unavailable despite HTTPS opt-in: %s; falling back to HTTP", local_tls_identity_result_name(tls_result));
+    }
+#endif
 
     const lvgl_ui_boot_status_t ui_status = {
         .ssid = mapped_wifi_config.ssid,
         .password = mapped_wifi_config.password,
         .web_password = web_password,
         .pairing_code = pairing_code,
+        .https_fingerprint = tls_ready ? tls_identity.fingerprint_text : NULL,
+        .web_url = ui_web_url_for_transport(tls_ready),
         .ip_addr = "192.168.4.1",
         .usb_connected = false,
     };
@@ -298,6 +316,9 @@ void app_main(void)
         storage_secure_zero(mapped_wifi_config.password, sizeof(mapped_wifi_config.password));
         storage_secure_zero(web_password, sizeof(web_password));
         storage_secure_zero(pairing_code, sizeof(pairing_code));
+        if (tls_ready) {
+            local_tls_identity_zeroize(&tls_identity);
+        }
         const esp_err_t usb_err = usb_console_start();
         log_init_result("usb_console", usb_err);
         return;
@@ -309,22 +330,13 @@ void app_main(void)
     const esp_err_t usb_err = usb_console_start();
     log_init_result("usb_console", usb_err);
     if (wifi_err == ESP_OK) {
-        const network_identity_config_t network_identity_config = {
-            .hostname = NETWORK_IDENTITY_HOSTNAME,
-            .instance_name = NETWORK_IDENTITY_SERVICE_NAME,
-            .service_type = NETWORK_IDENTITY_HTTP_SERVICE,
-            .port = 80,
-            .ttl_seconds = 120,
-        };
-        const esp_err_t identity_err = network_identity_start(&network_identity_config);
-        if (identity_err != ESP_OK) {
-            ESP_LOGW(TAG, "mDNS unavailable; use http://192.168.4.1: %s", esp_err_to_name(identity_err));
-        }
         const web_server_config_t web_config = {
             .web_password = persisted_web_auth ? NULL : web_password,
             .web_password_salt = persisted_web_auth ? config.web_password_salt : NULL,
             .web_password_hash = persisted_web_auth ? config.web_password_hash : NULL,
             .web_password_hash_configured = persisted_web_auth,
+            .tls_identity = tls_ready ? &tls_identity : NULL,
+            .tls_fingerprint_displayed_locally = tls_ready && s_credentials_ctx.ui_ready,
             .pairing_code = pairing_code,
             .rotate_credentials = rotate_credentials_cb,
             .rotate_credentials_ctx = &s_credentials_ctx,
@@ -335,9 +347,31 @@ void app_main(void)
             .config_ctx = &s_credentials_ctx,
         };
         const esp_err_t web_err = web_server_start(&web_config);
+        if (tls_ready) {
+            local_tls_identity_zeroize(&tls_identity);
+        }
         storage_secure_zero(web_password, sizeof(web_password));
         storage_secure_zero(pairing_code, sizeof(pairing_code));
         log_init_result("web_server", web_err);
+        const web_server_status_t web_status = web_server_get_status();
+        const web_transport_t web_transport = web_transport_from_status(web_err == ESP_OK && web_status.started, web_status.tls_active);
+        if (web_transport_should_advertise_mdns(web_transport)) {
+            const network_identity_config_t network_identity_config = {
+                .hostname = NETWORK_IDENTITY_HOSTNAME,
+                .instance_name = NETWORK_IDENTITY_SERVICE_NAME,
+                .service_type = web_transport == WEB_TRANSPORT_HTTPS ? NETWORK_IDENTITY_HTTPS_SERVICE : NETWORK_IDENTITY_HTTP_SERVICE,
+                .port = web_transport == WEB_TRANSPORT_HTTPS ? 443 : 80,
+                .ttl_seconds = 120,
+            };
+            const esp_err_t identity_err = network_identity_start(&network_identity_config);
+            if (identity_err != ESP_OK) {
+                if (web_transport == WEB_TRANSPORT_HTTPS) {
+                    ESP_LOGW(TAG, "mDNS unavailable for trusted HTTPS name %s: %s", NETWORK_IDENTITY_LOCAL_HTTPS_URL, esp_err_to_name(identity_err));
+                } else {
+                    ESP_LOGW(TAG, "mDNS unavailable; use %s://192.168.4.1: %s", web_transport_scheme(web_transport), esp_err_to_name(identity_err));
+                }
+            }
+        }
         if (bridge_err == ESP_OK && usb_err == ESP_OK && wifi_err == ESP_OK && web_err == ESP_OK) {
             log_init_result("ota_valid", ota_update_mark_running_app_valid());
         } else {
@@ -348,6 +382,9 @@ void app_main(void)
             log_init_result("wifi_ap_stop", wifi_ap_stop());
         }
     } else {
+        if (tls_ready) {
+            local_tls_identity_zeroize(&tls_identity);
+        }
         storage_secure_zero(web_password, sizeof(web_password));
         storage_secure_zero(pairing_code, sizeof(pairing_code));
         ESP_LOGE(TAG, "web_server skipped because AP did not start");

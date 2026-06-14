@@ -19,6 +19,7 @@ source /home/david/esp-idf/export.sh
 | Login rate limit and HTTP request budget | `tests/host/test_web_security.c`, `tests/host/test_http_rate_limit.c` |
 | WebSocket frame size and byte/frame rate limits | `tests/host/test_web_input_policy.c` |
 | Route allow-list and request body limits | `tests/host/test_http_route_policy.c` |
+| Web transport advertisement never publishes mDNS for a missing listener and only announces HTTPS when TLS is active | `tests/host/test_web_transport_policy.c` |
 | Credential generation and rotation policy | `tests/host/test_credentials.c`, `tests/host/test_web_security.c`, `tests/host/test_http_route_policy.c` |
 | Corrupt or incomplete WiFi config fails closed | `tests/host/test_storage_config.c`, `tests/host/test_startup_policy.c` |
 | Optional WiFi client mode is disabled by default and gated by physical/risk/encryption policy | `tests/host/test_wifi_client_policy.c` |
@@ -29,6 +30,8 @@ source /home/david/esp-idf/export.sh
 | Local initial pairing code format, one-time consume and lockout | `tests/host/test_local_pairing.c` |
 | Config export/import omits secrets and validates schema/checksum | `tests/host/test_config_transfer.c`, `tests/host/test_http_route_policy.c` |
 | Local HTTPS fingerprint formatting and enable policy fail closed by default | `tests/host/test_https_fingerprint.c` |
+| Local HTTPS identity generation compiles against ESP-IDF mbedTLS and never uses checked-in private keys | `idf.py build` |
+| On-screen HTTPS URL matches the certificate DNS SAN (`kvm.local`) instead of the raw AP IP | `tests/host/test_ui_web_url_policy.c` |
 | Emergency lock gesture and session invalidation primitive | `tests/host/test_emergency_lock_gesture.c`, `tests/host/test_web_security.c` |
 | Diagnostics export redacts sensitive strings | `tests/host/test_diagnostics_export.c` |
 
