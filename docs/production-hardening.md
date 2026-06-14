@@ -37,14 +37,31 @@ Requisitos de configuracion:
 - Secure Boot v2 habilitado.
 - Flash Encryption habilitado en modo release.
 - NVS Encryption habilitado antes de persistir credenciales.
+- Tabla de particiones OTA con `otadata`, `ota_0` y `ota_1` para rollback.
 - JTAG de produccion deshabilitado o protegido por eFuse.
 - Consola secundaria por USB-Serial/JTAG deshabilitada.
 - Nivel de log reducido; no emitir secretos ni transcripciones seriales.
 - Claves de firma y cifrado generadas fuera del repo y custodiadas por el operador.
 - `sdkconfig` de produccion versionado o reproducible mediante CI.
 - Binario firmado y verificado antes de flashear.
+- El perfil `sdkconfig.prod.defaults` debe usarse solo en CI/build de produccion con clave privada externa al repo.
 
 Un build que no cumpla estos puntos debe considerarse build de laboratorio aunque compile y funcione.
+
+## Firma y actualizaciones
+
+El firmware usa dos slots OTA en `partitions.csv`. Esto permite instalar una imagen nueva sin destruir la imagen anterior y habilita rollback del bootloader cuando `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`.
+
+El perfil de laboratorio no activa Secure Boot ni Flash Encryption para evitar quemar eFuses durante desarrollo. El perfil de produccion esta separado en `sdkconfig.prod.defaults` y exige:
+
+- `CONFIG_SECURE_BOOT_V2_ENABLED=y`;
+- `CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y`;
+- `CONFIG_SECURE_SIGNED_ON_UPDATE=y`;
+- `CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE=y`;
+- `CONFIG_NVS_ENCRYPTION=y`;
+- clave de firma externa en `keys/esp32-kvm-secure-boot-signing-key.pem`.
+
+La ruta `keys/` debe estar fuera del control de versiones o protegida por la infraestructura de CI. No se aceptan claves de ejemplo ni claves compartidas entre entornos.
 
 ## Politica de secretos
 

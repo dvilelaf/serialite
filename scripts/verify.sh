@@ -7,6 +7,7 @@ cd "$repo_root"
 cmake -S tests/host -B build-host-tests -G Ninja
 cmake --build build-host-tests
 ctest --test-dir build-host-tests --output-on-failure
+python3 scripts/verify_production_profile.py
 
 if ! command -v idf.py >/dev/null 2>&1; then
     echo "idf.py not found. Source your ESP-IDF export.sh first." >&2

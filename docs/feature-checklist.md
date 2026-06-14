@@ -86,7 +86,7 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
   Criterio: config inválida entra en setup seguro o requiere reset físico, nunca bypass de auth.
 - [x] Factory reset seguro.
   Criterio: borra passwords, sesiones, logs sensibles y claves; credenciales antiguas dejan de funcionar.
-- [ ] Firmware firmado para actualizaciones.
+- [x] Firmware firmado para actualizaciones.
   Criterio: imágenes no firmadas o firmadas con clave incorrecta se rechazan.
 - [x] Política de build de producción.
   Criterio: documenta Secure Boot, Flash Encryption, logs por USB y debug/JTAG; producción no expone depuración innecesaria.

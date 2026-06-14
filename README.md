@@ -28,6 +28,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - `terminal_bridge` para fan-in/fan-out entre USB y terminal web.
 - Buffer reciente de consola en RAM para que nuevos clientes vean contexto inicial sin escribir transcripciones en flash.
 - USB implementado con el transporte oficial USB-Serial/JTAG del ESP32-S3.
+- Tabla de particiones con dos slots OTA (`ota_0`/`ota_1`) para rollback.
 - Host tests para configuración, ring buffer, seguridad web, política de input, diagnóstico y secretos.
 
 ## Seguridad
@@ -51,7 +52,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - Los buffers temporales de credenciales se borran explícitamente tras ser copiados por WiFi, UI o autenticación web.
 - Si la configuración persistente está corrupta o incompleta, el firmware no la usa: regenera credenciales efímeras y exige exposición por pantalla local para continuar.
 
-Para despliegues reales, ver [`docs/production-hardening.md`](docs/production-hardening.md). Un firmware sin Secure Boot, Flash Encryption, NVS Encryption para secretos persistentes y JTAG/debug cerrado debe considerarse build de laboratorio, no producción.
+Para despliegues reales, ver [`docs/production-hardening.md`](docs/production-hardening.md). Un firmware sin Secure Boot, Flash Encryption, NVS Encryption para secretos persistentes y JTAG/debug cerrado debe considerarse build de laboratorio, no producción. El perfil de laboratorio no quema eFuses; el perfil `sdkconfig.prod.defaults` exige clave privada externa al repo para builds firmados.
 
 ## Verificación
 
