@@ -35,10 +35,11 @@ static void reset_control_task(void *arg)
     reset_gesture_init(&reset_gesture);
 
     while (true) {
-        const bool button_active = board_waveshare_amoled_wake_button_active();
+        const bool lock_button_active = board_waveshare_amoled_security_button_active();
+        const bool wake_button_active = board_waveshare_amoled_wake_button_active();
         const uint64_t timestamp_ms = now_ms();
 
-        if (emergency_lock_gesture_update(&lock_gesture, button_active, timestamp_ms)) {
+        if (emergency_lock_gesture_update(&lock_gesture, lock_button_active, timestamp_ms)) {
             ESP_LOGW(TAG, "emergency lock gesture accepted; invalidating web sessions");
             event_log_append(EVENT_LOG_SECURITY, timestamp_ms, "emergency lock gesture accepted");
             const esp_err_t err = web_server_emergency_lock();
@@ -48,7 +49,7 @@ static void reset_control_task(void *arg)
             }
         }
 
-        if (reset_gesture_update(&reset_gesture, button_active, timestamp_ms)) {
+        if (reset_gesture_update(&reset_gesture, wake_button_active, timestamp_ms)) {
             ESP_LOGW(TAG, "factory reset gesture accepted; erasing stored configuration");
             event_log_append(EVENT_LOG_SECURITY, timestamp_ms, "factory reset gesture accepted");
             const esp_err_t err = storage_factory_reset();

@@ -406,7 +406,7 @@ Estos items deberian incorporarse o detallarse en `docs/feature-checklist.md`:
 - [ ] Indicador persistente de terminal.
   Criterio: stream, USB disconnected, session expired y locked son visibles sin abrir diagnostico.
 - [ ] Flujo explicito de cierre/bloqueo.
-  Criterio: logout y BOOT emergency lock invalidan sesion y cierran WebSockets.
+  Criterio: logout y PWR emergency lock invalidan sesion y cierran WebSockets.
 - [ ] Pantalla local con secretos ocultos por defecto.
   Criterio: password completa o QR solo aparece tras accion fisica y con expiracion visible.
 - [ ] Emergency lock accesible fisicamente.

@@ -854,7 +854,7 @@ static esp_err_t about_handler(httpd_req_t *req)
         "<dt>HTTPS fingerprint mode</dt><dd>%s. See docs/https-fingerprint.md; operators must compare the browser certificate SHA-256 fingerprint with the AMOLED fingerprint before trusting TLS.</dd>"
         "<dt>Production build</dt><dd>Requires Secure Boot, Flash Encryption, encrypted NVS for persisted secrets, and closed debug/JTAG. Treat unsigned debug builds as lab-only.</dd>"
         "<dt>Scrollback</dt><dd>%u/%u bytes retained, %llu old bytes dropped.</dd>"
-        "<dt>Emergency lock</dt><dd>Hold BOOT for 3 seconds to invalidate the web session and close WebSockets.</dd>"
+        "<dt>Emergency lock</dt><dd>Hold PWR for 3 seconds to invalidate the web session and close WebSockets.</dd>"
         "<dt>Factory reset</dt><dd>Hold BOOT for 10 seconds. This clears project NVS config and reboots.</dd></dl>"
         "</main></body></html>",
         app != NULL ? app->version : "unknown",
@@ -905,7 +905,7 @@ static esp_err_t runbook_handler(httpd_req_t *req)
         "</ol><h2>Si algo falla</h2><ol>"
         "<li>Si USB aparece desconectado, revisa cable, puerto y que el servidor exponga consola CDC ACM.</li>"
         "<li>Si hay rate limit, espera unos segundos y reduce recargas/conexiones.</li>"
-        "<li>Si pierdes control operacional de la terminal web, manten BOOT 3s para invalidar sesiones y cerrar WebSockets.</li>"
+        "<li>Si pierdes control operacional de la terminal web, manten PWR 3s para invalidar sesiones y cerrar WebSockets.</li>"
         "<li>Si las credenciales son desconocidas, pulsa BOOT para revelar temporales o manten BOOT 10s para factory reset.</li>"
         "<li>Usa Diagnostics para copiar contadores y eventos sin exponer passwords.</li>"
         "</ol><h2>Limites</h2><p>Esto es consola serie local. No hay HDMI, HID, virtual media, power cycle ni acceso cloud.</p>"

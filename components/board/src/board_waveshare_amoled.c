@@ -28,6 +28,7 @@ static const char *TAG = "board_amoled";
 #define BOARD_PIN_TOUCH_SDA GPIO_NUM_15
 #define BOARD_PIN_TOUCH_INT GPIO_NUM_21
 #define BOARD_PIN_WAKE_BUTTON GPIO_NUM_0
+#define BOARD_PIN_POWER_BUTTON IO_EXPANDER_PIN_NUM_4
 
 static esp_io_expander_handle_t s_io_expander;
 static esp_lcd_panel_io_handle_t s_panel_io;
@@ -35,6 +36,7 @@ static esp_lcd_panel_handle_t s_panel;
 static bool s_i2c_ready;
 static bool s_spi_ready;
 static bool s_button_ready;
+static bool s_power_button_ready;
 
 static const sh8601_lcd_init_cmd_t s_lcd_init_cmds[] = {
     {0x11, (uint8_t[]){0x00}, 0, 120},
@@ -84,12 +86,14 @@ static esp_err_t init_i2c(void)
     ESP_RETURN_ON_ERROR(esp_io_expander_set_level(s_io_expander, IO_EXPANDER_PIN_NUM_0, 0), TAG, "p0 low failed");
     ESP_RETURN_ON_ERROR(esp_io_expander_set_level(s_io_expander, IO_EXPANDER_PIN_NUM_1, 0), TAG, "p1 low failed");
     ESP_RETURN_ON_ERROR(esp_io_expander_set_level(s_io_expander, IO_EXPANDER_PIN_NUM_2, 0), TAG, "p2 low failed");
+    ESP_RETURN_ON_ERROR(esp_io_expander_set_dir(s_io_expander, BOARD_PIN_POWER_BUTTON, IO_EXPANDER_INPUT), TAG, "power button direction failed");
     vTaskDelay(pdMS_TO_TICKS(200));
     ESP_RETURN_ON_ERROR(esp_io_expander_set_level(s_io_expander, IO_EXPANDER_PIN_NUM_0, 1), TAG, "p0 high failed");
     ESP_RETURN_ON_ERROR(esp_io_expander_set_level(s_io_expander, IO_EXPANDER_PIN_NUM_1, 1), TAG, "p1 high failed");
     ESP_RETURN_ON_ERROR(esp_io_expander_set_level(s_io_expander, IO_EXPANDER_PIN_NUM_2, 1), TAG, "p2 high failed");
 
     s_i2c_ready = true;
+    s_power_button_ready = true;
     return ESP_OK;
 }
 
@@ -225,6 +229,16 @@ bool board_waveshare_amoled_touch_signal_active(void)
 bool board_waveshare_amoled_wake_button_active(void)
 {
     return s_button_ready && gpio_get_level(BOARD_PIN_WAKE_BUTTON) == 0;
+}
+
+bool board_waveshare_amoled_security_button_active(void)
+{
+    uint32_t levels = 0;
+    if (!s_power_button_ready || s_io_expander == NULL ||
+        esp_io_expander_get_level(s_io_expander, BOARD_PIN_POWER_BUTTON, &levels) != ESP_OK) {
+        return false;
+    }
+    return (levels & BOARD_PIN_POWER_BUTTON) != 0;
 }
 
 void board_waveshare_amoled_set_brightness(uint8_t brightness)

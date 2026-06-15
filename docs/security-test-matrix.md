@@ -46,4 +46,4 @@ source /home/david/esp-idf/export.sh
 - The on-screen QR encodes WiFi join data and does not include web session tokens.
 - Old web sessions are rejected after credential rotation.
 - After credential rotation and reboot, the AP requires the rotated WiFi password.
-- BOOT long-press behavior must be smoke-tested on the physical board after firmware changes touching reset or lock flows.
+- PWR emergency-lock and BOOT reset long-press behavior must be smoke-tested on the physical board after firmware changes touching reset or lock flows.

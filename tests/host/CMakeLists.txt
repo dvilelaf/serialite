@@ -391,6 +391,16 @@ target_include_directories(test_emergency_lock_gesture PRIVATE
 
 add_test(NAME emergency_lock_gesture COMMAND test_emergency_lock_gesture)
 
+add_executable(test_strict_rescue_security_contract
+    test_strict_rescue_security_contract.c
+)
+
+target_compile_definitions(test_strict_rescue_security_contract PRIVATE
+    REPO_ROOT="${CMAKE_CURRENT_LIST_DIR}/../.."
+)
+
+add_test(NAME strict_rescue_security_contract COMMAND test_strict_rescue_security_contract)
+
 add_executable(test_startup_policy
     test_startup_policy.c
     ../../components/startup_policy/src/startup_policy.c

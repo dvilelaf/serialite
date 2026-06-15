@@ -15,8 +15,9 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - QR local en pantalla para conectarse al AP WiFi; no contiene tokens de sesión.
 - La pantalla local muestra estado USB, clientes WiFi/web, sesión/input y drops del bridge sin renderizar logs.
 - La pantalla se apaga tras 3 minutos y se reactiva con el botón BOOT/GPIO0.
+- El AP acepta un único cliente WiFi para evitar observadores dentro de la misma red local.
 - El AP se apaga automáticamente tras 10 minutos sin clientes WiFi ni clientes web.
-- Mantener `BOOT` durante 3 segundos invalida la sesión web y cierra WebSockets.
+- Mantener `PWR` durante 3 segundos invalida la sesión web y cierra WebSockets.
 - Mantener `BOOT` durante 10 segundos borra la configuración NVS del proyecto y reinicia con credenciales efímeras nuevas.
 - Servidor HTTP con página de estado y terminal web en `/terminal`.
 - Terminal web móvil fullscreen con HUD flotante, estado de stream y teclas táctiles rápidas.
@@ -43,6 +44,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - La terminal WebSocket exige sesión autenticada y valida `Origin`.
 - El login web crea una sesión local aleatoria `HttpOnly`/`SameSite=Strict`; un nuevo login reemplaza la sesión anterior.
 - La escritura hacia la consola exige una sesión web válida y única.
+- El AP está limitado a un único cliente WiFi conectado.
 - La entrada WebSocket tiene límite por frame y presupuesto por ventana para evitar DoS básico.
 - Las rutas HTTP están limitadas a endpoints conocidos con métodos y tamaños de body esperados.
 - La OTA local requiere sesión web, CSRF, `Origin` válido, tamaño compatible con slot OTA y no reinicia automáticamente tras la subida.
@@ -98,7 +100,7 @@ idf.py -p /dev/ttyACM0 monitor
 11. Usa `/config` para exportar o importar configuración no secreta. La importación requiere reboot para aplicar cambios de AP.
 12. Usa `/ota` solo para cargar una imagen completa `.bin` generada por ESP-IDF para esta placa. En producción debe estar firmada con la clave configurada en `sdkconfig.prod.defaults`.
 13. Tras una OTA aceptada, pulsa `Reboot to pending image` cuando estés listo para reiniciar el bridge.
-14. Mantén `BOOT` durante 3 segundos para cortar sesiones web si pierdes control operacional.
+14. Mantén `PWR` durante 3 segundos para cortar sesiones web si pierdes control operacional.
 15. Mantén `BOOT` durante 10 segundos para factory reset si necesitas regenerar credenciales.
 
 ## Nota USB

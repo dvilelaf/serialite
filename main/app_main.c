@@ -31,6 +31,7 @@ static const char *TAG = "esp32_kvm";
 
 #define EPHEMERAL_RTC_MAGIC 0x4b564d45U
 #define EPHEMERAL_RTC_VERSION 1U
+#define STRICT_WIFI_AP_MAX_CLIENTS 1U
 
 typedef struct {
     storage_config_t config;
@@ -112,6 +113,20 @@ static bool credentials_random(uint8_t *buf, size_t len, void *ctx)
     return true;
 }
 
+static void apply_strict_runtime_wifi_policy(kvm_wifi_ap_config_t *config)
+{
+    if (config != NULL) {
+        config->max_clients = STRICT_WIFI_AP_MAX_CLIENTS;
+    }
+}
+
+static void apply_strict_stored_wifi_policy(storage_wifi_config_t *config)
+{
+    if (config != NULL) {
+        config->max_clients = STRICT_WIFI_AP_MAX_CLIENTS;
+    }
+}
+
 static void log_init_result(const char *name, esp_err_t err)
 {
     if (err == ESP_OK) {
@@ -161,6 +176,7 @@ static esp_err_t make_operational_wifi_config(
     }
 
     *operational_config = *display_config;
+    operational_config->max_clients = STRICT_WIFI_AP_MAX_CLIENTS;
     if (!credentials_compact_human_phrase(
             display_config->password,
             CREDENTIALS_WIFI_PASSWORD_WORD_COUNT,
@@ -246,6 +262,7 @@ static esp_err_t rotate_credentials_cb(const web_server_credential_rotation_t *r
     storage_config_t next = state->config;
     strlcpy(next.wifi.ssid, "KVM", sizeof(next.wifi.ssid));
     strlcpy(next.wifi.password, rotation->wifi_password, sizeof(next.wifi.password));
+    apply_strict_stored_wifi_policy(&next.wifi);
     memset(next.web_password_salt, 0, sizeof(next.web_password_salt));
     memset(next.web_password_hash, 0, sizeof(next.web_password_hash));
     next.web_password_hash_configured = false;
@@ -310,6 +327,7 @@ static esp_err_t import_config_cb(const char *json, void *ctx)
         ESP_LOGW(TAG, "config import rejected: %s", config_transfer_result_name(import_result));
         return ESP_ERR_INVALID_ARG;
     }
+    apply_strict_stored_wifi_policy(&next.wifi);
     storage_wifi_config_apply_safe_ranges(&next.wifi);
     if (!storage_wifi_config_is_valid(&next.wifi)) {
         storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
@@ -338,7 +356,7 @@ static esp_err_t generate_ephemeral_wifi_config(kvm_wifi_ap_config_t *config)
 
     ESP_RETURN_ON_ERROR(generate_human_password(config->password, sizeof(config->password)), TAG, "AP password generation failed");
     config->channel = 6;
-    config->max_clients = 4;
+    config->max_clients = STRICT_WIFI_AP_MAX_CLIENTS;
 
     ESP_LOGW(TAG, "generated ephemeral AP credentials for ssid=%s", config->ssid);
     ESP_LOGW(TAG, "AP password is not logged; local display flow will expose it during provisioning");
@@ -386,6 +404,7 @@ void app_main(void)
         }
         ephemeral_credentials = true;
     }
+    apply_strict_runtime_wifi_policy(&mapped_wifi_config);
     storage_secure_zero(config.wifi.password, sizeof(config.wifi.password));
 
     if (!ephemeral_cache_valid()) {

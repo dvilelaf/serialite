@@ -33,7 +33,7 @@ static void operational_label_contains_required_fields(void)
     assert(strstr(doc, "Serial rescue console") != NULL);
     assert(strstr(doc, "http://192.168.4.1") != NULL);
     assert(strstr(doc, "SSID: KVM") != NULL);
-    assert(strstr(doc, "BOOT 3s") != NULL);
+    assert(strstr(doc, "PWR 3s") != NULL);
     assert(strstr(doc, "BOOT 10s") != NULL);
     assert(strstr(doc, "Privileged physical console") != NULL);
     assert(strstr(doc, "Do not expose to Internet") != NULL);
