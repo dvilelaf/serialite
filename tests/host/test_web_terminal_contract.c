@@ -91,6 +91,15 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     free(web_server);
 }
 
+static void check_terminal_output_interprets_backspace(void)
+{
+    char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
+    CHECK(strstr(web_server, "function appendTerminalData(t)") != NULL);
+    CHECK(strstr(web_server, "ch==='\\\\b'||ch==='\\\\u007f'") != NULL);
+    CHECK(strstr(web_server, "s=s.slice(0,-1)") != NULL);
+    free(web_server);
+}
+
 static void check_usb_serial_jtag_is_not_secondary_console(void)
 {
     char *defaults = read_repo_source_file("sdkconfig.defaults");
@@ -154,6 +163,7 @@ int main(void)
     check_pair_code_removed_from_normal_login();
     check_error_handler_does_not_recurse_via_send_err();
     check_terminal_is_terminal_first_not_command_composer();
+    check_terminal_output_interprets_backspace();
     check_usb_serial_jtag_is_not_secondary_console();
     check_lvgl_access_secrets_are_secrets_only();
     check_lvgl_access_secret_layout_avoids_overlap();
