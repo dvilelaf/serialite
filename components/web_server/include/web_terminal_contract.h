@@ -9,7 +9,7 @@
 #define WEB_TERMINAL_STATUS_LOCKED "LOCKED"
 
 #define WEB_TERMINAL_ACTION_UNLOCK "Take control"
-#define WEB_TERMINAL_ACTION_LOCK "Release"
+#define WEB_TERMINAL_ACTION_LOCK "Release control"
 
 #define WEB_TERMINAL_KEY_CTRL_C "Ctrl+C"
 #define WEB_TERMINAL_KEY_CTRL_D "Ctrl+D"

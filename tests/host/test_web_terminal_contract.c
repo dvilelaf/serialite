@@ -85,6 +85,12 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "<input id=\\\"input\\\"") == NULL);
     CHECK(strstr(web_server, "id=\\\"send\\\"") == NULL);
     CHECK(strstr(web_server, "sendInput()") == NULL);
+    CHECK(strstr(web_server, "id=\\\"mode\\\"") == NULL);
+    CHECK(strstr(web_server, "id=\\\"release\\\"") == NULL);
+    CHECK(strstr(web_server, "id=\\\"control\\\"") != NULL);
+    CHECK(strstr(web_server, "controlBtn.onclick") != NULL);
+    CHECK(strstr(web_server, "/api/write/acquire") != NULL);
+    CHECK(strstr(web_server, "/api/write/release") != NULL);
     CHECK(strstr(web_server, "terminal.focus()") != NULL);
     CHECK(strstr(web_server, "terminal.addEventListener('keydown'") != NULL);
     CHECK(strstr(web_server, "ws.send(data)") != NULL);
@@ -159,7 +165,7 @@ int main(void)
     CHECK(strcmp(WEB_TERMINAL_STATUS_WRITER_BUSY, "BUSY") == 0);
     CHECK(strcmp(WEB_TERMINAL_STATUS_USB_DISCONNECTED, "USB OFF") == 0);
     CHECK(strcmp(WEB_TERMINAL_ACTION_UNLOCK, "Take control") == 0);
-    CHECK(strcmp(WEB_TERMINAL_ACTION_LOCK, "Release") == 0);
+    CHECK(strcmp(WEB_TERMINAL_ACTION_LOCK, "Release control") == 0);
     check_pair_code_removed_from_normal_login();
     check_error_handler_does_not_recurse_via_send_err();
     check_terminal_is_terminal_first_not_command_composer();

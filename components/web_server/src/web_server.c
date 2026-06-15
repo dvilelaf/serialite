@@ -1114,16 +1114,15 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "body{display:grid;grid-template-rows:auto 1fr;overflow:hidden}"
         "#bar{height:44px;display:flex;align-items:center;gap:8px;padding:6px 8px;background:linear-gradient(180deg,#091611,#050806);border-bottom:1px solid var(--line)}"
         ".spacer{flex:1}.pill{border:1px solid var(--line);border-radius:999px;padding:5px 9px;color:var(--muted);background:#050907;font-size:12px;letter-spacing:.04em}"
-        "#mode{color:var(--hot);font-weight:800}#mode.write{background:var(--hot);color:#03110c;border-color:var(--hot)}#mode.busy,#mode.usb{background:var(--warn);color:#1b1000;border-color:var(--warn)}#mode.locked{background:var(--bad);color:#1c0500;border-color:var(--bad)}"
+        "#control{min-width:132px}#control.write{background:var(--hot);color:#03110c;border-color:var(--hot)}#control.busy,#control.usb{background:var(--warn);color:#1b1000;border-color:var(--warn)}#control.locked{background:var(--bad);color:#1c0500;border-color:var(--bad)}"
         "button,a{font:inherit;color:var(--text)}button{border:1px solid var(--line);border-radius:10px;background:#0a1813;padding:6px 10px;font-weight:700}button.primary{border-color:var(--hot)}button.danger{border-color:var(--bad);color:#ffd4c7}button:disabled{opacity:.42}"
         "#menu{position:relative}#keys{display:none;position:fixed;right:8px;top:50px;z-index:4;width:min(310px,calc(100vw - 16px));max-height:calc(100svh - 58px);overflow:auto;padding:8px;border:1px solid var(--line);border-radius:14px;background:#06100d;box-shadow:0 20px 50px #000b}"
         "#keys.open{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}#keys a{grid-column:1/-1;text-align:center;color:var(--hot);text-decoration:none;padding:7px}"
         "#terminal{position:relative;outline:none;overflow:auto;white-space:pre-wrap;word-break:break-word;padding:14px 16px;background:radial-gradient(circle at 70%% -30%%,#112b23 0,#030504 42%%);line-height:1.38;caret-color:transparent}"
         "#terminal:focus{box-shadow:inset 0 0 0 1px #21483d}.hint{color:var(--muted)}#kbd{position:fixed;left:0;top:44px;width:100vw;height:calc(100svh - 44px);opacity:.01;color:transparent;background:transparent;border:0;resize:none;caret-color:transparent;pointer-events:none}"
         "@media(max-width:640px){#bar{height:auto;min-height:42px;gap:6px;flex-wrap:wrap}.pill{font-size:11px;padding:5px 7px}button{padding:7px 9px}#terminal{padding:12px;font-size:13px}}"
-        "</style></head><body><div id=\"bar\"><span id=\"mode\" class=\"pill\">%s</span>"
-        "<span id=\"state\" class=\"pill\">STREAM ...</span><span class=\"spacer\"></span>"
-        "<button class=\"primary\" id=\"write\">%s</button><button id=\"release\">%s</button>"
+        "</style></head><body><div id=\"bar\"><span id=\"state\" class=\"pill\">STREAM ...</span><span class=\"spacer\"></span>"
+        "<button class=\"primary\" id=\"control\">%s</button>"
         "<div id=\"menu\"><button id=\"menuBtn\" aria-label=\"More controls\">More</button><div id=\"keys\">"
         "<button data-k=\"\\u0003\">%s</button><button data-k=\"\\u0004\">%s</button><button data-k=\"\\r\">%s</button>"
         "<button data-k=\"\\u001b\">%s</button><button data-k=\"\\t\">%s</button><button data-k=\"\\u001b[A\">%s</button>"
@@ -1134,11 +1133,10 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "<script>"
         "const CSRF='%s';let canWrite=false,usbConnected=%s,writerState='read-only',locked=false,connected=false,empty=true;"
         "const CHUNK=%u,PASTE_CONFIRM=%u,PASTE_MAX=%u;"
-        "const terminal=document.getElementById('terminal'),kbd=document.getElementById('kbd'),state=document.getElementById('state');"
-        "const mode=document.getElementById('mode'),writeBtn=document.getElementById('write'),releaseBtn=document.getElementById('release');"
-        "function modeLabel(){if(locked)return'%s';if(!usbConnected)return'%s';if(writerState==='write-active')return'%s';if(writerState==='writer-busy')return'%s';return'%s'}"
-        "function render(){const label=modeLabel();mode.textContent=label;mode.className='pill '+(label==='%s'?'write':label==='%s'?'busy':label==='%s'?'usb':label==='%s'?'locked':'');"
-        "canWrite=connected&&usbConnected&&writerState==='write-active'&&!locked;kbd.disabled=!canWrite;kbd.style.pointerEvents=canWrite?'auto':'none';document.querySelectorAll('#keys button[data-k]').forEach(b=>b.disabled=!canWrite);writeBtn.disabled=locked||!connected||!usbConnected||writerState==='write-active';releaseBtn.disabled=writerState!=='write-active';terminal.setAttribute('aria-label',canWrite?'Serial terminal, keyboard control active':'Serial terminal, watching only')}"
+        "const terminal=document.getElementById('terminal'),kbd=document.getElementById('kbd'),state=document.getElementById('state'),controlBtn=document.getElementById('control');"
+        "function controlLabel(){if(locked)return'%s';if(!usbConnected)return'%s';if(writerState==='write-active')return'%s';if(writerState==='writer-busy')return'%s';return'%s'}"
+        "function render(){const label=controlLabel();controlBtn.textContent=label;controlBtn.className='primary '+(writerState==='write-active'?'write':writerState==='writer-busy'?'busy':!usbConnected?'usb':locked?'locked':'');"
+        "canWrite=connected&&usbConnected&&writerState==='write-active'&&!locked;kbd.disabled=!canWrite;kbd.style.pointerEvents=canWrite?'auto':'none';document.querySelectorAll('#keys button[data-k]').forEach(b=>b.disabled=!canWrite);controlBtn.disabled=locked||!connected||!usbConnected||writerState==='writer-busy';terminal.setAttribute('aria-label',canWrite?'Serial terminal, keyboard control active':'Serial terminal, watching only')}"
         "let ws,backoff=500;function appendTerminalData(t){if(empty){terminal.textContent='';empty=false}let s=terminal.textContent;"
         "for(const ch of t){if(ch==='\\b'||ch==='\\u007f'){if(s.length)s=s.slice(0,-1)}else if(ch==='\\r'){}else{s+=ch}}"
         "terminal.textContent=s;terminal.scrollTop=terminal.scrollHeight;if(terminal.textContent.length>65536)terminal.textContent=terminal.textContent.slice(-49152)}"
@@ -1161,15 +1159,13 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "kbd.addEventListener('paste',e=>{const t=(e.clipboardData||window.clipboardData).getData('text');e.preventDefault();safePaste(t)});"
         "document.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>send(b.dataset.k));"
         "document.getElementById('menuBtn').onclick=()=>document.getElementById('keys').classList.toggle('open');"
-        "writeBtn.onclick=async()=>{if(confirm('Take keyboard control?\\n\\nEvery key you press will be sent to the attached server.')){const ok=await post('/api/write/acquire');if(ok){writerState='write-active';render();focusTerminal()}else if(writerState==='read-only')writerState='writer-busy';render()}};"
-        "releaseBtn.onclick=async()=>{await post('/api/write/release');writerState='read-only';render()};"
+        "controlBtn.onclick=async()=>{if(writerState==='write-active'){await post('/api/write/release');writerState='read-only';render();return}"
+        "if(confirm('Take keyboard control?\\n\\nEvery key you press will be sent to the attached server.')){const ok=await post('/api/write/acquire');if(ok){writerState='write-active';render();focusTerminal()}else if(writerState==='read-only')writerState='writer-busy';render()}};"
         "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock closes all web sessions and releases keyboard control. Continue?')){const ok=await post('/api/emergency-lock');if(ok){locked=true;if(ws){ws.onclose=null;ws.close()}location='/login'}}};"
         "document.getElementById('logout').onclick=async()=>{locked=true;if(ws){ws.onclose=null;ws.close()}await post('/logout');location='/login'};"
         "render();refreshStatus();setInterval(refreshStatus,2000);connect();terminal.focus();"
         "</script></body></html>",
-        usb.connected ? WEB_TERMINAL_STATUS_READ_ONLY : WEB_TERMINAL_STATUS_USB_DISCONNECTED,
         WEB_TERMINAL_ACTION_UNLOCK,
-        WEB_TERMINAL_ACTION_LOCK,
         WEB_TERMINAL_KEY_CTRL_C,
         WEB_TERMINAL_KEY_CTRL_D,
         WEB_TERMINAL_KEY_ENTER,
@@ -1186,13 +1182,9 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         (unsigned)WEB_PASTE_MAX_BYTES,
         WEB_TERMINAL_STATUS_LOCKED,
         WEB_TERMINAL_STATUS_USB_DISCONNECTED,
-        WEB_TERMINAL_STATUS_WRITE_ACTIVE,
+        WEB_TERMINAL_ACTION_LOCK,
         WEB_TERMINAL_STATUS_WRITER_BUSY,
-        WEB_TERMINAL_STATUS_READ_ONLY,
-        WEB_TERMINAL_STATUS_WRITE_ACTIVE,
-        WEB_TERMINAL_STATUS_WRITER_BUSY,
-        WEB_TERMINAL_STATUS_USB_DISCONNECTED,
-        WEB_TERMINAL_STATUS_LOCKED);
+        WEB_TERMINAL_ACTION_UNLOCK);
     if (written < 0 || written >= (int)sizeof(terminal_page)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "terminal overflow");
     }
