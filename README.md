@@ -10,34 +10,28 @@ This is not a video KVM: there is no HDMI capture, remote HID keyboard, or virtu
 
 1. Plug ESP32-KVM into the server USB port.
 
-2. Join the WiFi network from your laptop or phone:
+2. On the server, run the host setup once:
+
+   ```bash
+   sudo ./tools/host/setup-linux-serial-console.sh
+   ```
+
+3. Join the WiFi network from your laptop or phone:
 
    ```text
    SSID: KVM
    Password: shown on the ESP32 screen
    ```
 
-3. Open:
+4. Open:
 
    ```text
    http://192.168.4.1
    ```
 
-4. Use the terminal.
+5. Use the terminal.
 
-If the terminal is empty, the server probably does not have a serial console enabled. On the server, find the ESP32-KVM serial device:
-
-```bash
-ls /dev/ttyACM*
-```
-
-Then enable the serial console for that device. Replace `ttyACM0` with the device you saw, for example `ttyACM1`:
-
-```bash
-sudo systemctl enable --now serial-getty@ttyACM0.service
-```
-
-Then refresh the web page.
+The setup script detects the ESP32-KVM serial device, enables the right `serial-getty@<tty>` service, and makes it persistent across reboots. If the server already has a working serial console, the script is harmless to run again.
 
 ## Buttons
 
