@@ -26,7 +26,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - WebSocket en `/ws`.
 - Diagnóstico local autenticado en `/diagnostics` y export JSON en `/diagnostics.json`.
 - Actualización firmware local en `/ota`: subida manual autenticada, protegida por CSRF/Origin, validada por ESP-IDF OTA y con reboot explícito.
-- Rotación local de credenciales en `/credentials`: genera nueva WiFi password human-readable, no la devuelve por HTTP, la muestra en AMOLED y exige NVS Encryption para persistir WiFi.
+- Rotación local de credenciales desde el menú `+` de la terminal: genera nueva WiFi password human-readable, no la devuelve por HTTP, la muestra en AMOLED y reinicia el ESP32 para aplicar el AP.
 - Export/import local de configuración no secreta en `/config`: JSON autenticado con schema y checksum; nunca exporta passwords, hashes ni salts.
 - Log circular de eventos en RAM para auth, WebSocket, backpressure y estado operativo.
 - Task watchdog explícito para tareas críticas propias (`usb_rx`, `usb_tx`, `web_tx`, `lvgl_ui`).
@@ -95,8 +95,8 @@ idf.py -p /dev/ttyACM0 monitor
 6. Pulsa `Open console`; autentícate después en el login real de Linux si el getty lo solicita.
 7. Usa `/terminal`; la sesión web activa puede escribir directamente en la consola.
 8. Usa `/diagnostics` para estado técnico y eventos recientes sin secretos.
-9. Usa `/credentials` para rotar la WiFi password. La respuesta web no contiene secretos: pulsa `BOOT` y lee la nueva password en la AMOLED.
-10. Tras rotar credenciales, reinicia desde `/credentials` para aplicar la nueva WiFi password.
+9. Usa `+` -> `Rotate WiFi` para rotar la WiFi password. La respuesta web no contiene secretos: el ESP32 reinicia y la nueva password se lee en la AMOLED.
+10. Reconecta al AP con la nueva WiFi password.
 11. Usa `/config` para exportar o importar configuración no secreta. La importación requiere reboot para aplicar cambios de AP.
 12. Usa `/ota` solo para cargar una imagen completa `.bin` generada por ESP-IDF para esta placa. En producción debe estar firmada con la clave configurada en `sdkconfig.prod.defaults`.
 13. Tras una OTA aceptada, pulsa `Reboot to pending image` cuando estés listo para reiniciar el bridge.

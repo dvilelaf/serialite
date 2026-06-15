@@ -171,11 +171,11 @@ static void test_human_password_output_too_small_fails(void)
     CHECK(credentials_generate_human_password(password, sizeof(password), u32_sequence_random, &sequence) == CREDENTIALS_ERR_OUTPUT_TOO_SMALL);
 }
 
-static void test_rotation_requires_local_display_and_safe_persistence(void)
+static void test_rotation_requires_local_display_and_allows_ephemeral_fallback(void)
 {
     CHECK(credential_rotation_policy_evaluate(true, true) == CREDENTIAL_ROTATION_ACCEPT);
     CHECK(credential_rotation_policy_evaluate(false, true) == CREDENTIAL_ROTATION_REJECT_NO_LOCAL_DISPLAY);
-    CHECK(credential_rotation_policy_evaluate(true, false) == CREDENTIAL_ROTATION_REJECT_PERSISTENCE_UNSAFE);
+    CHECK(credential_rotation_policy_evaluate(true, false) == CREDENTIAL_ROTATION_ACCEPT);
 }
 
 static void test_rotation_policy_names_are_stable(void)
@@ -198,7 +198,7 @@ int main(void)
     test_human_password_rejects_out_of_range_random_values();
     test_human_password_random_failure_propagates();
     test_human_password_output_too_small_fails();
-    test_rotation_requires_local_display_and_safe_persistence();
+    test_rotation_requires_local_display_and_allows_ephemeral_fallback();
     test_rotation_policy_names_are_stable();
     return 0;
 }

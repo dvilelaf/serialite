@@ -62,6 +62,8 @@ static void test_emergency_lock_uses_pwr_not_boot(void)
     CHECK(strstr(reset, "lock_button_active = board_waveshare_amoled_security_button_active()") != NULL);
     CHECK(strstr(reset, "wake_button_active = board_waveshare_amoled_wake_button_active()") != NULL);
     CHECK(strstr(reset, "emergency_lock_gesture_update(&lock_gesture, lock_button_active") != NULL);
+    CHECK(strstr(reset, "web_server_emergency_lock_toggle()") != NULL);
+    CHECK(strstr(reset, "web_server_emergency_lock()") == NULL);
     CHECK(strstr(reset, "reset_gesture_update(&reset_gesture, wake_button_active") != NULL);
     CHECK(strstr(reset, "emergency_lock_gesture_update(&lock_gesture, button_active") == NULL);
 

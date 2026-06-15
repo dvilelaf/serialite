@@ -30,20 +30,34 @@ cleanup() {
 }
 trap cleanup EXIT
 
-./build/esp32_kvm_http_harness.elf >"$log_file" 2>&1 &
-pid=$!
+stop_harness() {
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    fi
+    pid=""
+}
 
-for _ in $(seq 1 100); do
-    if curl -fsS --max-time 1 -o /dev/null "http://127.0.0.1:${PORT}/terminal" 2>/dev/null; then
-        break
-    fi
-    if ! kill -0 "$pid" 2>/dev/null; then
-        echo "harness exited before becoming ready" >&2
-        cat "$log_file" >&2
-        exit 1
-    fi
-    sleep 0.1
-done
+start_harness() {
+    : >"$log_file"
+    rm -f "$cookie_file"
+    ./build/esp32_kvm_http_harness.elf >"$log_file" 2>&1 &
+    pid=$!
+
+    for _ in $(seq 1 100); do
+        if curl -fsS --max-time 1 -o /dev/null "http://127.0.0.1:${PORT}/terminal" 2>/dev/null; then
+            return
+        fi
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "harness exited before becoming ready" >&2
+            cat "$log_file" >&2
+            exit 1
+        fi
+        sleep 0.1
+    done
+}
+
+start_harness
 
 if [ "${ESP32_KVM_SKIP_BROWSER_TEST:-0}" != "1" ]; then
     if command -v npm >/dev/null 2>&1; then
@@ -52,6 +66,8 @@ if [ "${ESP32_KVM_SKIP_BROWSER_TEST:-0}" != "1" ]; then
         fi
         ESP32_KVM_HTTP_HARNESS_BASE_URL="http://127.0.0.1:${PORT}" npm run test:browser
         sleep 1.1
+        stop_harness
+        start_harness
     else
         echo "npm not found; skipping browser functional test" >&2
     fi

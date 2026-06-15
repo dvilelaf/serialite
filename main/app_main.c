@@ -282,6 +282,21 @@ static esp_err_t rotate_credentials_cb(const web_server_credential_rotation_t *r
 
     const esp_err_t save_err = storage_save_config(&next);
     if (save_err != ESP_OK) {
+        if (save_err == ESP_ERR_INVALID_STATE) {
+            kvm_wifi_ap_config_t runtime_wifi = {
+                .channel = next.wifi.channel,
+                .max_clients = next.wifi.max_clients,
+            };
+            strlcpy(runtime_wifi.ssid, next.wifi.ssid, sizeof(runtime_wifi.ssid));
+            strlcpy(runtime_wifi.password, next.wifi.password, sizeof(runtime_wifi.password));
+            ephemeral_cache_store_wifi(&runtime_wifi);
+            storage_secure_zero(state->config.wifi.password, sizeof(state->config.wifi.password));
+            state->config = next;
+            storage_secure_zero(runtime_wifi.password, sizeof(runtime_wifi.password));
+            storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
+            ESP_LOGW(TAG, "credential rotation stored in RTC only because NVS Encryption is disabled");
+            return ESP_OK;
+        }
         const lvgl_ui_boot_status_t rollback_ui_status = {
             .ssid = state->config.wifi.ssid,
             .password = state->config.wifi.password,

@@ -40,12 +40,12 @@ static void reset_control_task(void *arg)
         const uint64_t timestamp_ms = now_ms();
 
         if (emergency_lock_gesture_update(&lock_gesture, lock_button_active, timestamp_ms)) {
-            ESP_LOGW(TAG, "emergency lock gesture accepted; invalidating web sessions");
-            event_log_append(EVENT_LOG_SECURITY, timestamp_ms, "emergency lock gesture accepted");
-            const esp_err_t err = web_server_emergency_lock();
+            ESP_LOGW(TAG, "emergency lock toggle gesture accepted");
+            event_log_append(EVENT_LOG_SECURITY, timestamp_ms, "emergency lock toggle gesture accepted");
+            const esp_err_t err = web_server_emergency_lock_toggle();
             if (err != ESP_OK) {
-                ESP_LOGE(TAG, "emergency lock failed: %s", esp_err_to_name(err));
-                event_log_append(EVENT_LOG_ERROR, timestamp_ms, "emergency lock failed");
+                ESP_LOGE(TAG, "emergency lock toggle failed: %s", esp_err_to_name(err));
+                event_log_append(EVENT_LOG_ERROR, timestamp_ms, "emergency lock toggle failed");
             }
         }
 

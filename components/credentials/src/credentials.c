@@ -8024,11 +8024,9 @@ credential_rotation_policy_result_t credential_rotation_policy_evaluate(
     bool local_display_ready,
     bool persistence_allowed)
 {
+    (void)persistence_allowed;
     if (!local_display_ready) {
         return CREDENTIAL_ROTATION_REJECT_NO_LOCAL_DISPLAY;
-    }
-    if (!persistence_allowed) {
-        return CREDENTIAL_ROTATION_REJECT_PERSISTENCE_UNSAFE;
     }
     return CREDENTIAL_ROTATION_ACCEPT;
 }

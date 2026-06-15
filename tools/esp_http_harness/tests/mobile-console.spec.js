@@ -39,6 +39,7 @@ test('mobile operator opens xterm console and terminal controls work end-to-end'
   await expect(page.getByRole('button', { name: 'More controls' })).toHaveText('+');
   await page.getByRole('button', { name: 'More controls' }).click();
   await expect(page.locator('#keys')).toHaveClass(/open/);
+  await expect(page.getByRole('button', { name: 'Rotate WiFi' })).toBeVisible();
   await page.locator('#keys').dispatchEvent('mouseleave');
   await expect(page.locator('#keys')).not.toHaveClass(/open/);
   await page.getByRole('button', { name: 'More controls' }).click();

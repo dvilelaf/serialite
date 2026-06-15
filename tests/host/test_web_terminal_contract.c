@@ -130,6 +130,12 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "'ctrl-c':'\\\\u0003'") != NULL);
     CHECK(strstr(web_server, "sendQuickKey(b.dataset.k)") != NULL);
     CHECK(strstr(web_server, "keys.onmouseleave=closeMenu") != NULL);
+    CHECK(strstr(web_server, "id=\\\"rotateWifi\\\"") != NULL);
+    CHECK(strstr(web_server, "Rotate WiFi") != NULL);
+    CHECK(strstr(web_server, "rotateWifi=document.getElementById('rotateWifi')") != NULL);
+    CHECK(strstr(web_server, "rotateWifi.onclick") != NULL);
+    CHECK(strstr(web_server, "post('/api/credentials/rotate')") != NULL);
+    CHECK(strstr(web_server, "WiFi password will rotate now. The ESP32 will reboot automatically.") != NULL);
     CHECK(strstr(web_server, "aria-label=\\\"Fullscreen\\\"") != NULL);
     CHECK(strstr(web_server, "Lucide maximize-2") != NULL);
     CHECK(strstr(web_server, "id=\\\"fullscreenBtn\\\"") != NULL);
@@ -146,6 +152,33 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "cursor:'#839496'") != NULL);
     CHECK(strstr(web_server, "brightWhite:'#fdf6e3'") != NULL);
     CHECK(strstr(web_server, "ws.send(data)") != NULL);
+    free(web_server);
+}
+
+static void check_lock_requires_physical_unlock(void)
+{
+    char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
+    CHECK(strstr(web_server, "static bool runtime_status_is_locked(void)") != NULL);
+    CHECK(strstr(web_server, "if (runtime_status_is_locked())") != NULL);
+    CHECK(strstr(web_server, "423 Locked") != NULL);
+    CHECK(strstr(web_server, "Hold PWR for 3 seconds to unlock") != NULL);
+    CHECK(strstr(web_server, "web_server_emergency_lock_toggle") != NULL);
+    CHECK(strstr(web_server, "emergency unlock engaged") != NULL);
+    CHECK(strstr(web_server, "runtime_status_set_locked(false)") != NULL);
+    CHECK(strstr(web_server, "runtime_status_set_locked(false);\n    if (out_cookie != NULL)") == NULL);
+    free(web_server);
+}
+
+static void check_credential_rotation_reboots_automatically(void)
+{
+    char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
+    const char *handler = strstr(web_server, "static esp_err_t credentials_rotate_handler");
+    CHECK(handler != NULL);
+    const char *next = strstr(handler + 1, "static esp_err_t config_page_handler");
+    CHECK(next != NULL);
+    CHECK(strstr(handler, "xTaskCreate(reboot_task") != NULL && strstr(handler, "xTaskCreate(reboot_task") < next);
+    CHECK(strstr(handler, "WiFi password rotated; rebooting") != NULL && strstr(handler, "WiFi password rotated; rebooting") < next);
+    CHECK(strstr(handler, "s_credential_reboot_pending = true") == NULL || strstr(handler, "s_credential_reboot_pending = true") > next);
     free(web_server);
 }
 
@@ -249,6 +282,8 @@ int main(void)
     check_login_screen_removed_from_primary_flow();
     check_terminal_is_terminal_first_not_command_composer();
     check_terminal_output_uses_xterm_renderer();
+    check_lock_requires_physical_unlock();
+    check_credential_rotation_reboots_automatically();
     check_terminal_page_is_streamed_without_large_stack_buffer();
     check_diagnostics_has_clear_terminal_return();
     check_usb_serial_jtag_is_not_secondary_console();

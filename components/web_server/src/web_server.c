@@ -115,6 +115,7 @@ static bool s_macros_enabled;
 static RTC_NOINIT_ATTR web_route_trace_t s_route_trace;
 
 static uint64_t now_ms(void);
+static void reboot_task(void *arg);
 
 static uint32_t web_route_trace_checksum(const web_route_trace_t *trace)
 {
@@ -214,6 +215,14 @@ static void runtime_status_set_locked(bool locked)
         s_runtime_status.writer_active = false;
     }
     portEXIT_CRITICAL(&s_runtime_status_lock);
+}
+
+static bool runtime_status_is_locked(void)
+{
+    portENTER_CRITICAL(&s_runtime_status_lock);
+    const bool locked = s_runtime_status.locked;
+    portEXIT_CRITICAL(&s_runtime_status_lock);
+    return locked;
 }
 
 static void secure_zero(void *ptr, size_t len)
@@ -397,6 +406,9 @@ static bool ensure_web_session(
     if (request_authenticated(req, out_token)) {
         return true;
     }
+    if (runtime_status_is_locked()) {
+        return false;
+    }
 
     const web_security_login_result_t result = web_security_login(
         &s_security,
@@ -409,7 +421,6 @@ static bool ensure_web_session(
     }
 
     strlcpy(out_token, s_security.session_token, WEB_SECURITY_TOKEN_BUF_LEN);
-    runtime_status_set_locked(false);
     if (out_cookie != NULL) {
         snprintf(out_cookie, 96, "kvm_session=%s; HttpOnly; SameSite=Strict; Path=/", s_security.session_token);
     }
@@ -670,6 +681,15 @@ static void emergency_lock_work(void *arg)
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock engaged");
 }
 
+static void emergency_unlock_work(void *arg)
+{
+    (void)arg;
+    web_security_invalidate_all(&s_security);
+    runtime_status_set_locked(false);
+    close_all_ws_clients();
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency unlock engaged");
+}
+
 static void web_tx_task(void *arg)
 {
     (void)arg;
@@ -847,7 +867,7 @@ static esp_err_t about_handler(httpd_req_t *req)
         "<title>ESP32-KVM About</title><style>body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px}"
         ".card{border:1px solid #174436;border-radius:16px;padding:14px;background:#030807;max-width:760px}"
         "dt{color:#7dffe1}dd{margin:0 0 8px 0}a{color:#7dffe1}</style></head><body><main class=\"card\">"
-        "<h1>About ESP32-KVM</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/macros\">Macros</a> | <a href=\"/credentials\">Credentials</a> | <a href=\"/ota\">Firmware</a></p>"
+        "<h1>About ESP32-KVM</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/macros\">Macros</a> | <a href=\"/ota\">Firmware</a></p>"
         "<p>Serial rescue console over local WiFi AP. It is not HDMI KVM, HID remote input, virtual media, power control, cloud access, or command automation.</p>"
         "<dl><dt>Firmware</dt><dd>%s</dd><dt>Project</dt><dd>%s</dd><dt>Build date</dt><dd>%s %s</dd>"
         "<dt>IDF</dt><dd>%s</dd><dt>Security model</dt><dd>Local AP, web auth, CSRF, Origin checks, one active web session, RAM diagnostics.</dd>"
@@ -1041,6 +1061,13 @@ static esp_err_t terminal_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
+    if (runtime_status_is_locked()) {
+        send_no_store_headers(req);
+        httpd_resp_set_status(req, "423 Locked");
+        httpd_resp_set_type(req, "text/plain; charset=utf-8");
+        return httpd_resp_sendstr(req, "Emergency lock is active. Hold PWR for 3 seconds to unlock.");
+    }
+
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
     char session_cookie[96] = {0};
     bool session_created = false;
@@ -1088,7 +1115,7 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "<button data-k=\"ctrl-c\">%s</button><button data-k=\"ctrl-d\">%s</button><button data-k=\"ctrl-l\">%s</button>"
         "<button data-k=\"enter\">%s</button><button data-k=\"esc\">%s</button><button data-k=\"tab\">%s</button>"
         "<button data-k=\"up\">%s</button><button data-k=\"down\">%s</button><button data-k=\"left\">%s</button><button data-k=\"right\">%s</button><button id=\"fitTty\">Fit TTY</button>"
-        "<button class=\"danger\" id=\"panic\">Emergency lock</button><button class=\"danger\" id=\"logout\">Sign out</button><a href=\"/diagnostics\">Diagnostics</a></div></div></div>",
+        "<button id=\"rotateWifi\">Rotate WiFi</button><button class=\"danger\" id=\"panic\">Emergency lock</button><button class=\"danger\" id=\"logout\">Sign out</button><a href=\"/diagnostics\">Diagnostics</a></div></div></div>",
         WEB_TERMINAL_KEY_CTRL_C,
         WEB_TERMINAL_KEY_CTRL_D,
         WEB_TERMINAL_KEY_CTRL_L,
@@ -1146,10 +1173,11 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "document.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>sendQuickKey(b.dataset.k));"
         "document.getElementById('fitTty').onclick=fitHostTty;"
         "document.getElementById('fullscreenBtn').onclick=toggleFullscreen;"
-        "const keys=document.getElementById('keys'),menuBtn=document.getElementById('menuBtn');"
+        "const keys=document.getElementById('keys'),menuBtn=document.getElementById('menuBtn'),rotateWifi=document.getElementById('rotateWifi');"
         "function closeMenu(){keys.classList.remove('open');menuBtn.blur()}"
         "menuBtn.onclick=()=>keys.classList.toggle('open');keys.onmouseleave=closeMenu;keys.onblur=e=>{if(!keys.contains(e.relatedTarget))closeMenu()};state.tabIndex=0;state.onclick=()=>{state.classList.add('expanded');renderStreamLabel()};state.onmouseleave=()=>{state.classList.remove('expanded');state.blur();renderStreamLabel()};state.onfocus=renderStreamLabel;state.onblur=()=>{state.classList.remove('expanded');renderStreamLabel()};"
-        "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock closes the web session. Continue?')){const ok=await post('/api/emergency-lock');if(ok){locked=true;if(ws){ws.onclose=null;ws.close()}location='/terminal'}}};"
+        "rotateWifi.onclick=async()=>{if(confirm('WiFi password will rotate now. The ESP32 will reboot automatically. Continue?')){await post('/api/credentials/rotate')}};"
+        "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock closes the web session. Hold PWR for 3 seconds to unlock. Continue?')){const ok=await post('/api/emergency-lock');if(ok){locked=true;if(ws){ws.onclose=null;ws.close()}location='/terminal'}}};"
         "document.getElementById('logout').onclick=async()=>{locked=true;if(ws){ws.onclose=null;ws.close()}await post('/logout');location='/terminal'};"
         "render();refreshStatus();setInterval(refreshStatus,2000);setInterval(checkConsoleSilence,1000);connect();term.focus();"
         "</script></body></html>"), TAG, "terminal script chunk failed");
@@ -1303,46 +1331,7 @@ static esp_err_t credentials_page_handler(httpd_req_t *req)
 {
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!require_auth_or_redirect(req, session_token)) {
-        return ESP_OK;
-    }
-    const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
-    if (csrf == NULL) {
-        return redirect_to(req, "/terminal");
-    }
-
-    char body[2800];
-    const int written = snprintf(
-        body,
-        sizeof(body),
-        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>ESP32-KVM Credentials</title><style>"
-        "*{box-sizing:border-box}body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px;line-height:1.45}"
-        "main{border:1px solid #174436;border-radius:18px;padding:18px;background:#030807;max-width:760px;width:100%%}"
-        "button{font:inherit;border:1px solid #ff875c;border-radius:12px;background:#24110c;color:#ffd2c0;padding:12px 14px;margin:8px 0}"
-        "a{color:#7dffe1}.warn{color:#ffcf7a}code{color:#bffff0}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><main>"
-        "<h1>Credential rotation</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/runbook\">Runbook</a></p>"
-        "<p class=\"warn\">Rotation immediately invalidates web sessions and changes the next WiFi AP password. Secrets are never returned over HTTP.</p>"
-        "<ol><li>Stay physically near the device.</li><li>Click rotate.</li><li>Read the new WiFi password on the AMOLED after pressing BOOT if needed.</li><li>Reboot to apply the new WiFi AP password.</li></ol>"
-        "<button id=\"rotate\">Rotate WiFi password</button><button id=\"reboot\" %s>Reboot to apply WiFi</button><pre id=\"out\"></pre><script>"
-        "const CSRF='%s',out=document.getElementById('out'),reboot=document.getElementById('reboot');let rebootPending=%s;"
-        "function say(s){out.textContent+=s+'\\n'}"
-        "document.getElementById('rotate').onclick=async()=>{if(!confirm('Rotate WiFi password now? Existing web sessions will be invalidated.'))return;"
-        "const r=await fetch('/api/credentials/rotate',{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();say(r.status+' '+t);if(r.ok){say('Session invalidated. Press BOOT, read the AMOLED WiFi password, then reconnect after reboot.');setTimeout(()=>location='/terminal',2500)}};"
-        "reboot.onclick=async()=>{if(!rebootPending){say('no pending credential reboot');return}if(confirm('Reboot now to apply the new WiFi password?')){const r=await fetch('/api/reboot',{method:'POST',headers:{'X-CSRF-Token':CSRF}});say(r.status+' '+await r.text())}};"
-        "</script></main></body></html>",
-        s_credential_reboot_pending ? "" : "disabled",
-        csrf,
-        s_credential_reboot_pending ? "true" : "false");
-    if (written < 0 || written >= (int)sizeof(body)) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "credentials page overflow");
-    }
-
-    send_no_store_headers(req);
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+    return redirect_to(req, "/terminal");
 }
 
 static esp_err_t credentials_rotate_handler(httpd_req_t *req)
@@ -1385,10 +1374,13 @@ static esp_err_t credentials_rotate_handler(httpd_req_t *req)
 
     runtime_status_set_writer_active(false);
     runtime_status_set_locked(true);
-    s_credential_reboot_pending = true;
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "credentials rotated");
+    if (xTaskCreate(reboot_task, "wifi_rotate_reboot", 2048, NULL, 5, NULL) != pdPASS) {
+        event_log_append(EVENT_LOG_ERROR, now_ms(), "credential reboot task creation failed");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "reboot task failed");
+    }
     send_no_store_headers(req);
-    return httpd_resp_sendstr(req, "WiFi password rotated; read it on local display and reboot to apply WiFi");
+    return httpd_resp_sendstr(req, "WiFi password rotated; rebooting");
 }
 
 static esp_err_t config_page_handler(httpd_req_t *req)
@@ -2239,6 +2231,24 @@ esp_err_t web_server_emergency_lock(void)
             ESP_LOGE(TAG, "emergency lock could not stop AP: %s; firmware kept alive for local recovery", esp_err_to_name(stop_err));
             event_log_append(EVENT_LOG_ERROR, now_ms(), "emergency lock AP stop failed; firmware kept alive");
         }
+    }
+    return err;
+}
+
+esp_err_t web_server_emergency_lock_toggle(void)
+{
+    if (s_server == NULL) {
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock toggle ignored before http start");
+        return ESP_OK;
+    }
+
+    demo_serial_runtime_disable();
+    const esp_err_t err = httpd_queue_work(
+        s_server,
+        runtime_status_is_locked() ? emergency_unlock_work : emergency_lock_work,
+        NULL);
+    if (err != ESP_OK) {
+        event_log_append(EVENT_LOG_ERROR, now_ms(), "emergency lock toggle queue failed");
     }
     return err;
 }
