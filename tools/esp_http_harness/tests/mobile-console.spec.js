@@ -1,6 +1,6 @@
 const { test, expect } = require('@playwright/test');
 
-test('mobile operator can log in and reach terminal without browser errors', async ({ page }) => {
+test('mobile operator auth and terminal controls work end-to-end', async ({ page }) => {
   const consoleErrors = [];
   const pageErrors = [];
   const failedRequests = [];
@@ -19,11 +19,17 @@ test('mobile operator can log in and reach terminal without browser errors', asy
     }
   });
 
-  await page.goto('/');
-  await expect(page).toHaveURL(/\/login$/);
+  await page.goto('/login');
   await expect(page.getByRole('heading', { name: 'Serial console' })).toBeVisible();
 
-  await page.getByPlaceholder('Web password').fill('alpha zoom');
+  await page.getByPlaceholder('Web password').fill('wrong password');
+  await page.getByRole('button', { name: 'Unlock console' }).click();
+  await expect(page.locator('body')).toContainText('invalid credentials');
+  consoleErrors.length = 0;
+  failedRequests.length = 0;
+
+  await page.goto('/login');
+  await page.getByPlaceholder('Web password').fill('alphazoom');
   await page.getByRole('button', { name: 'Unlock console' }).click();
 
   await expect(page).toHaveURL(/\/terminal$/);
@@ -31,8 +37,27 @@ test('mobile operator can log in and reach terminal without browser errors', asy
   await expect(page.locator('#state')).toBeVisible();
   await expect(page.locator('#term')).toContainText(/Waiting for serial output|harness login:/);
   await expect(page.locator('#input')).toBeDisabled();
+  await expect(page.locator('#state')).toContainText('Stream live');
 
-  await page.waitForTimeout(1000);
+  page.on('dialog', (dialog) => dialog.accept());
+
+  await page.getByRole('button', { name: 'Unlock input' }).click();
+  await expect(page.locator('#mode')).toContainText('Input enabled');
+  await expect(page.locator('#input')).toBeEnabled();
+  await page.locator('#input').fill('whoami');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await expect(page.locator('#term')).toContainText('whoami');
+
+  await page.getByRole('button', { name: 'Lock input', exact: true }).click();
+  await expect(page.locator('#input')).toBeDisabled();
+
+  await page.getByRole('button', { name: 'Emergency lock' }).click();
+  await expect
+    .poll(async () => {
+      const response = await page.request.get('/terminal-status.json');
+      return response.status();
+    })
+    .toBe(401);
 
   expect(consoleErrors).toEqual([]);
   expect(pageErrors).toEqual([]);

@@ -74,9 +74,14 @@ typedef struct {
     char phase[12];
 } web_route_trace_t;
 
+typedef struct {
+    int fd;
+    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
+} web_ws_client_t;
+
 static httpd_handle_t s_server;
 static bool s_server_tls;
-static int s_ws_fds[WEB_MAX_WS_CLIENTS];
+static web_ws_client_t s_ws_clients[WEB_MAX_WS_CLIENTS];
 static QueueHandle_t s_tx_queue;
 static TaskHandle_t s_web_tx_task;
 static TaskHandle_t s_ap_guard_task;
@@ -335,12 +340,13 @@ static esp_err_t redirect_to(httpd_req_t *req, const char *location)
     return httpd_resp_send(req, "", 0);
 }
 
-static esp_err_t require_auth_or_redirect(httpd_req_t *req, char out_token[WEB_SECURITY_TOKEN_BUF_LEN])
+static bool require_auth_or_redirect(httpd_req_t *req, char out_token[WEB_SECURITY_TOKEN_BUF_LEN])
 {
     if (request_authenticated(req, out_token)) {
-        return ESP_OK;
+        return true;
     }
-    return redirect_to(req, "/login");
+    (void)redirect_to(req, "/login");
+    return false;
 }
 
 static bool url_decode(char *value)
@@ -476,8 +482,9 @@ static void remove_ws_fd(int fd)
         xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
     }
     for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-        if (s_ws_fds[i] == fd) {
-            s_ws_fds[i] = -1;
+        if (s_ws_clients[i].fd == fd) {
+            s_ws_clients[i].fd = -1;
+            memset(s_ws_clients[i].session_token, 0, sizeof(s_ws_clients[i].session_token));
         }
     }
     if (s_ws_fds_lock != NULL) {
@@ -485,13 +492,17 @@ static void remove_ws_fd(int fd)
     }
 }
 
-static esp_err_t add_ws_fd(int fd)
+static esp_err_t add_ws_fd(int fd, const char *session_token)
 {
+    if (session_token == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
     if (s_ws_fds_lock != NULL) {
         xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
     }
     for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-        if (s_ws_fds[i] == fd) {
+        if (s_ws_clients[i].fd == fd) {
+            strlcpy(s_ws_clients[i].session_token, session_token, sizeof(s_ws_clients[i].session_token));
             if (s_ws_fds_lock != NULL) {
                 xSemaphoreGive(s_ws_fds_lock);
             }
@@ -499,8 +510,9 @@ static esp_err_t add_ws_fd(int fd)
         }
     }
     for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-        if (s_ws_fds[i] < 0) {
-            s_ws_fds[i] = fd;
+        if (s_ws_clients[i].fd < 0) {
+            s_ws_clients[i].fd = fd;
+            strlcpy(s_ws_clients[i].session_token, session_token, sizeof(s_ws_clients[i].session_token));
             if (s_ws_fds_lock != NULL) {
                 xSemaphoreGive(s_ws_fds_lock);
             }
@@ -513,12 +525,33 @@ static esp_err_t add_ws_fd(int fd)
     return ESP_ERR_NO_MEM;
 }
 
+static bool ws_fd_session_token(int fd, char out_token[WEB_SECURITY_TOKEN_BUF_LEN])
+{
+    bool found = false;
+    if (s_ws_fds_lock != NULL) {
+        xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
+    }
+    for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
+        if (s_ws_clients[i].fd == fd) {
+            strlcpy(out_token, s_ws_clients[i].session_token, WEB_SECURITY_TOKEN_BUF_LEN);
+            found = out_token[0] != '\0';
+            break;
+        }
+    }
+    if (s_ws_fds_lock != NULL) {
+        xSemaphoreGive(s_ws_fds_lock);
+    }
+    return found;
+}
+
 static void snapshot_ws_fds(int fds[WEB_MAX_WS_CLIENTS])
 {
     if (s_ws_fds_lock != NULL) {
         xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
     }
-    memcpy(fds, s_ws_fds, sizeof(s_ws_fds));
+    for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
+        fds[i] = s_ws_clients[i].fd;
+    }
     if (s_ws_fds_lock != NULL) {
         xSemaphoreGive(s_ws_fds_lock);
     }
@@ -533,7 +566,7 @@ static uint32_t count_ws_clients(void)
     uint32_t count = 0;
     xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
     for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-        if (s_ws_fds[i] >= 0) {
+        if (s_ws_clients[i].fd >= 0) {
             count++;
         }
     }
@@ -719,12 +752,18 @@ static esp_err_t index_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    if (!require_auth_or_redirect(req, session_token)) {
+        return ESP_OK;
+    }
 
     const usb_console_status_t usb = usb_console_get_status();
     const wifi_ap_status_t wifi = wifi_ap_get_status();
     const terminal_bridge_status_t bridge = terminal_bridge_get_status();
     const demo_serial_runtime_status_t demo = demo_serial_runtime_get_status();
+    const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
+    if (csrf == NULL) {
+        return redirect_to(req, "/login");
+    }
 
     char body[1600];
     const int written = snprintf(
@@ -764,7 +803,7 @@ static esp_err_t index_handler(httpd_req_t *req)
         (unsigned)bridge.scrollback_retained,
         (unsigned)bridge.scrollback_capacity,
         (unsigned long long)bridge.scrollback_dropped_oldest,
-        web_security_csrf_for_session(&s_security, session_token, now_ms()));
+        csrf);
 
     if (written < 0 || written >= (int)sizeof(body)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "status overflow");
@@ -782,7 +821,9 @@ static esp_err_t about_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    if (!require_auth_or_redirect(req, session_token)) {
+        return ESP_OK;
+    }
 
     const esp_app_desc_t *app = esp_app_get_description();
     const terminal_bridge_status_t bridge = terminal_bridge_get_status();
@@ -830,7 +871,9 @@ static esp_err_t runbook_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    if (!require_auth_or_redirect(req, session_token)) {
+        return ESP_OK;
+    }
 
     static const char body[] =
         "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
@@ -869,7 +912,9 @@ static esp_err_t macros_page_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    if (!require_auth_or_redirect(req, session_token)) {
+        return ESP_OK;
+    }
     const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
     if (csrf == NULL) {
         return redirect_to(req, "/login");
@@ -1048,7 +1093,9 @@ static esp_err_t terminal_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    if (!require_auth_or_redirect(req, session_token)) {
+        return ESP_OK;
+    }
     const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
     if (csrf == NULL) {
         return redirect_to(req, "/login");
@@ -1073,7 +1120,9 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "button{min-height:42px;background:#102a23;color:var(--text);border:1px solid var(--line);border-radius:12px;padding:9px 12px;font:inherit;font-weight:700}"
         "button.primary{background:#123d32;border-color:var(--hot)}button.danger{border-color:var(--bad);color:#ffd2c0}button:disabled{opacity:.45}"
         "#term{white-space:pre-wrap;overflow:auto;padding:12px;box-sizing:border-box;background:#020604}"
-        "#input{width:100%%;height:48px;box-sizing:border-box;border:0;border-top:1px solid var(--line);background:#07110e;color:#fff;padding:12px;font:16px ui-monospace,SFMono-Regular,Menlo,monospace}"
+        "#composer{display:grid;grid-template-columns:1fr auto;border-top:1px solid var(--line);background:#07110e}"
+        "#input{width:100%%;height:48px;box-sizing:border-box;border:0;background:transparent;color:#fff;padding:12px;font:16px ui-monospace,SFMono-Regular,Menlo,monospace}"
+        "#send{border-radius:0;border-width:0 0 0 1px;min-width:74px}"
         "a{color:var(--hot)}@media(max-width:640px){html,body{font-size:14px}#bar{padding:8px}button{flex:1 1 27%%;min-height:46px;padding:10px 8px}#term{padding:10px}#input{height:52px}}"
         "</style></head><body><div id=\"bar\"><div id=\"top\"><span id=\"brand\">Serial console</span><span id=\"mode\" class=\"pill\">%s</span>"
         "<span id=\"state\" class=\"pill\">Connecting stream</span><a href=\"/diagnostics\">Diagnostics</a></div>"
@@ -1083,15 +1132,15 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "<button data-k=\"\\r\">%s</button><button data-k=\"\\u001b\">%s</button><button data-k=\"\\t\">%s</button>"
         "<button data-k=\"\\u001b[A\">%s</button><button data-k=\"\\u001b[B\">%s</button>"
         "<button data-k=\"\\u001b[D\">%s</button><button data-k=\"\\u001b[C\">%s</button></div>"
-        "</div><div id=\"term\">Waiting for serial output.\r\nIf the server is at a login prompt, unlock input and press Enter.</div><input id=\"input\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"Unlock input to type commands\" disabled>"
+        "</div><div id=\"term\">Waiting for serial output.\r\nIf the server is at a login prompt, unlock input and press Enter.</div><div id=\"composer\"><input id=\"input\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"Unlock input to type commands\" disabled><button id=\"send\" disabled>Send</button></div>"
         "<script>"
         "const CSRF='%s';let canWrite=false,usbConnected=%s,writerState='read-only',locked=false,connected=false,empty=true;"
         "const CHUNK=%u,PASTE_CONFIRM=%u,PASTE_MAX=%u;"
-        "const term=document.getElementById('term'),input=document.getElementById('input'),state=document.getElementById('state');"
+        "const term=document.getElementById('term'),input=document.getElementById('input'),sendBtn=document.getElementById('send'),state=document.getElementById('state');"
         "const mode=document.getElementById('mode'),writeBtn=document.getElementById('write'),releaseBtn=document.getElementById('release');"
         "function modeLabel(){if(locked)return'%s';if(!usbConnected)return'%s';if(writerState==='write-active')return'%s';if(writerState==='writer-busy')return'%s';return'%s'}"
         "function render(){const label=modeLabel();mode.textContent=label;mode.className='pill '+(label==='%s'?'write':label==='%s'?'busy':label==='%s'?'usb':label==='%s'?'locked':'');"
-        "canWrite=connected&&usbConnected&&writerState==='write-active'&&!locked;input.disabled=!canWrite;document.querySelectorAll('#keys button').forEach(b=>b.disabled=!canWrite);writeBtn.disabled=locked||!connected||!usbConnected||writerState==='write-active';releaseBtn.disabled=writerState!=='write-active';"
+        "canWrite=connected&&usbConnected&&writerState==='write-active'&&!locked;input.disabled=!canWrite;sendBtn.disabled=!canWrite;document.querySelectorAll('#keys button').forEach(b=>b.disabled=!canWrite);writeBtn.disabled=locked||!connected||!usbConnected||writerState==='write-active';releaseBtn.disabled=writerState!=='write-active';"
         "input.placeholder=canWrite?'Type command, Enter sends to serial':'Unlock input to type commands'}"
         "let ws,backoff=500;function add(t){if(empty){term.textContent='';empty=false}term.textContent+=t;term.scrollTop=term.scrollHeight;if(term.textContent.length>65536)term.textContent=term.textContent.slice(-49152)}"
         "function connect(){state.textContent='Connecting stream';connected=false;render();const scheme=location.protocol==='https:'?'wss://':'ws://';ws=new WebSocket(scheme+location.host+'/ws');ws.binaryType='arraybuffer';"
@@ -1102,12 +1151,13 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "async function refreshStatus(){try{const r=await fetch('/terminal-status.json',{cache:'no-store'});if(r.status===401||r.redirected){locked=true;state.textContent='Session expired. Log in again.';render();return}if(!r.ok)return;const s=await r.json();usbConnected=!!s.usb_connected;writerState=s.writer_state||'read-only';locked=writerState==='locked';render()}catch(e){}}"
         "async function post(u){const r=await fetch(u,{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();await refreshStatus();if(!r.ok)alert(t||('Request failed: '+r.status));return r.ok}"
         "function send(s){if(!(canWrite&&ws&&ws.readyState===1))return;for(let i=0;i<s.length;i+=CHUNK)ws.send(s.slice(i,i+CHUNK))}"
+        "function sendInput(){if(!canWrite||input.value.length===0)return;send(input.value+'\\r');input.value='';input.focus()}"
         "function safePaste(t){if(!canWrite)return;if(t.length>PASTE_MAX){alert('Paste too large; max '+PASTE_MAX+' bytes');return}"
         "if((t.length>PASTE_CONFIRM||t.includes('\\n'))&&!confirm('Send '+t.length+' bytes to the physical console?'))return;send(t)}"
-        "input.addEventListener('keydown',e=>{if(e.key==='Enter'){send(input.value+'\\r');input.value='';e.preventDefault()}});"
+        "input.addEventListener('keydown',e=>{if(e.key==='Enter'){sendInput();e.preventDefault()}});sendBtn.onclick=sendInput;"
         "input.addEventListener('paste',e=>{const t=(e.clipboardData||window.clipboardData).getData('text');if(t.length>PASTE_CONFIRM||t.includes('\\n')){e.preventDefault();safePaste(t)}});"
         "document.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>send(b.dataset.k));"
-        "writeBtn.onclick=async()=>{if(confirm('Unlock input?\\n\\nAnything you type will be sent to the server serial console.\\nOnly continue if you are operating this server.')){input.disabled=false;input.focus();const ok=await post('/api/write/acquire');if(ok){writerState='write-active';render()}else if(writerState==='read-only')writerState='writer-busy';render()}};"
+        "writeBtn.onclick=async()=>{if(confirm('Unlock input?\\n\\nAnything you type will be sent to the server serial console.\\nOnly continue if you are operating this server.')){const ok=await post('/api/write/acquire');if(ok){writerState='write-active';render();input.focus()}else if(writerState==='read-only')writerState='writer-busy';render()}};"
         "releaseBtn.onclick=async()=>{await post('/api/write/release');writerState='read-only';render()};"
         "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock closes web sessions and disables input. Continue?'))await post('/api/emergency-lock')};"
         "document.getElementById('logout').onclick=async()=>{await post('/logout');location='/login'};"
@@ -1343,7 +1393,9 @@ static esp_err_t credentials_page_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    if (!require_auth_or_redirect(req, session_token)) {
+        return ESP_OK;
+    }
     const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
     if (csrf == NULL) {
         return redirect_to(req, "/login");
@@ -1451,7 +1503,9 @@ static esp_err_t config_page_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    if (!require_auth_or_redirect(req, session_token)) {
+        return ESP_OK;
+    }
     const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
     if (csrf == NULL) {
         return redirect_to(req, "/login");
@@ -1496,7 +1550,9 @@ static esp_err_t config_json_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    if (!require_auth_or_redirect(req, session_token)) {
+        return ESP_OK;
+    }
     if (s_export_config == NULL) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config export unavailable");
     }
@@ -1562,7 +1618,9 @@ static esp_err_t ota_page_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    if (!require_auth_or_redirect(req, session_token)) {
+        return ESP_OK;
+    }
     const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
     if (csrf == NULL) {
         return redirect_to(req, "/login");
@@ -1727,7 +1785,9 @@ static esp_err_t diagnostics_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(require_auth_or_redirect(req, session_token), TAG, "auth failed");
+    if (!require_auth_or_redirect(req, session_token)) {
+        return ESP_OK;
+    }
 
     const usb_console_status_t usb = usb_console_get_status();
     const wifi_ap_status_t wifi = wifi_ap_get_status();
@@ -1880,7 +1940,13 @@ static esp_err_t websocket_handler(httpd_req_t *req)
     }
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!request_authenticated(req, session_token)) {
+    if (req->method == HTTP_GET) {
+        if (!request_authenticated(req, session_token)) {
+            return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "auth required");
+        }
+    } else if (!ws_fd_session_token(httpd_req_to_sockfd(req), session_token) ||
+               !web_security_session_valid(&s_security, session_token, now_ms())) {
+        remove_ws_fd(httpd_req_to_sockfd(req));
         return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "auth required");
     }
 
@@ -1895,7 +1961,7 @@ static esp_err_t websocket_handler(httpd_req_t *req)
         }
 
         const int fd = httpd_req_to_sockfd(req);
-        if (add_ws_fd(fd) != ESP_OK) {
+        if (add_ws_fd(fd, session_token) != ESP_OK) {
             event_log_append(EVENT_LOG_WARN, now_ms(), "websocket rejected: too many clients");
             return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "too many websocket clients");
         }
@@ -2070,7 +2136,8 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     runtime_status_set_locked(false);
     runtime_status_set_writer_active(false);
     for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-        s_ws_fds[i] = -1;
+        s_ws_clients[i].fd = -1;
+        memset(s_ws_clients[i].session_token, 0, sizeof(s_ws_clients[i].session_token));
     }
     s_tx_queue = xQueueCreate(WEB_TX_QUEUE_DEPTH, sizeof(web_tx_chunk_t));
     if (s_tx_queue == NULL) {

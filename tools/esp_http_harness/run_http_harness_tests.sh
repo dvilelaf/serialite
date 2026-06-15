@@ -20,6 +20,7 @@ idf.py --preview build >/tmp/esp32-kvm-http-harness-build.log
 
 log_file="$(mktemp /tmp/esp32-kvm-http-harness.XXXXXX.log)"
 cookie_file="$(mktemp /tmp/esp32-kvm-http-harness.XXXXXX.cookies)"
+compact_cookie_file="$(mktemp /tmp/esp32-kvm-http-harness.XXXXXX.compact.cookies)"
 pid=""
 
 cleanup() {
@@ -27,7 +28,7 @@ cleanup() {
         kill "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
     fi
-    rm -f "$cookie_file"
+    rm -f "$cookie_file" "$compact_cookie_file"
 }
 trap cleanup EXIT
 
@@ -45,6 +46,18 @@ for _ in $(seq 1 100); do
     fi
     sleep 0.1
 done
+
+if [ "${ESP32_KVM_SKIP_BROWSER_TEST:-0}" != "1" ]; then
+    if command -v npm >/dev/null 2>&1; then
+        if [ ! -d node_modules/@playwright/test ]; then
+            npm install
+        fi
+        ESP32_KVM_HTTP_HARNESS_BASE_URL="http://127.0.0.1:${PORT}" npm run test:browser
+        sleep 1.1
+    else
+        echo "npm not found; skipping browser functional test" >&2
+    fi
+fi
 
 curl_status() {
     local path="$1"
@@ -97,6 +110,7 @@ for i in $(seq 1 "$ITERATIONS"); do
         expect_status "favicon 404" "HTTP/1.1 404 Not Found" "/favicon.ico"
         expect_status "login page" "HTTP/1.1 200 OK" "/login"
         expect_status "login post" "HTTP/1.1 303 See Other" "/login" -c "$cookie_file" -X POST --data-urlencode "password=${PASSWORD}"
+        expect_status "compact login post" "HTTP/1.1 303 See Other" "/login" -c "$compact_cookie_file" -X POST --data-urlencode "password=${PASSWORD// /}"
     else
         expect_status_or_rate_limit "root redirect" "HTTP/1.1 303 See Other" "/"
         expect_status_or_rate_limit "favicon 404" "HTTP/1.1 404 Not Found" "/favicon.ico"
@@ -116,6 +130,17 @@ for i in $(seq 1 "$ITERATIONS"); do
             exit 1
             ;;
     esac
+    if [ "$i" = 1 ]; then
+        compact_root_status="$(curl_status "/" -b "$compact_cookie_file")"
+        case "$compact_root_status" in
+            "HTTP/1.1 200 OK") ;;
+            *)
+                echo "compact auth root: unexpected '${compact_root_status}'" >&2
+                cat "$log_file" >&2
+                exit 1
+                ;;
+        esac
+    fi
     case "$terminal_status" in
         "HTTP/1.1 200 OK"|"HTTP/1.1 429 Too Many Requests") ;;
         *)
@@ -137,17 +162,7 @@ for i in $(seq 1 "$ITERATIONS"); do
     if [ $((i % 5)) -eq 0 ]; then
         echo "harness iteration ${i}/${ITERATIONS}"
     fi
+    sleep 0.25
 done
 
 echo "http harness ok (${ITERATIONS} iterations)"
-
-if [ "${ESP32_KVM_SKIP_BROWSER_TEST:-0}" != "1" ]; then
-    if command -v npm >/dev/null 2>&1; then
-        if [ ! -d node_modules/@playwright/test ]; then
-            npm install
-        fi
-        ESP32_KVM_HTTP_HARNESS_BASE_URL="http://127.0.0.1:${PORT}" npm run test:browser
-    else
-        echo "npm not found; skipping browser smoke test" >&2
-    fi
-fi

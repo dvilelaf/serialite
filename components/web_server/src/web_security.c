@@ -8,6 +8,68 @@
 #define MIN_PASSWORD_LEN 6
 #define TOKEN_RANDOM_BYTES 16
 
+static bool password_canonicalize(const char *input, char out[WEB_SECURITY_PASSWORD_MAX_LEN])
+{
+    if (input == NULL || out == NULL) {
+        return false;
+    }
+
+    size_t written = 0;
+    bool pending_space = false;
+    bool saw_non_space = false;
+    for (const char *p = input; *p != '\0'; ++p) {
+        unsigned char c = (unsigned char)*p;
+        const bool is_space = c == ' ' || c == '\t' || c == '\r' || c == '\n';
+        if (is_space) {
+            pending_space = saw_non_space;
+            continue;
+        }
+
+        if (pending_space) {
+            if (written + 1 >= WEB_SECURITY_PASSWORD_MAX_LEN) {
+                return false;
+            }
+            out[written++] = ' ';
+            pending_space = false;
+        }
+        if (c >= 'A' && c <= 'Z') {
+            c = (unsigned char)(c + ('a' - 'A'));
+        }
+        if (written + 1 >= WEB_SECURITY_PASSWORD_MAX_LEN) {
+            return false;
+        }
+        out[written++] = (char)c;
+        saw_non_space = true;
+    }
+    out[written] = '\0';
+    return saw_non_space;
+}
+
+static bool password_compact_canonicalize(const char *input, char out[WEB_SECURITY_PASSWORD_MAX_LEN])
+{
+    if (input == NULL || out == NULL) {
+        return false;
+    }
+
+    size_t written = 0;
+    for (const char *p = input; *p != '\0'; ++p) {
+        unsigned char c = (unsigned char)*p;
+        const bool is_space = c == ' ' || c == '\t' || c == '\r' || c == '\n';
+        if (is_space) {
+            continue;
+        }
+        if (c >= 'A' && c <= 'Z') {
+            c = (unsigned char)(c + ('a' - 'A'));
+        }
+        if (written + 1 >= WEB_SECURITY_PASSWORD_MAX_LEN) {
+            return false;
+        }
+        out[written++] = (char)c;
+    }
+    out[written] = '\0';
+    return written > 0;
+}
+
 static bool bounded_strlen(const char *value, size_t max_len, size_t *out_len)
 {
     if (value == NULL) {
@@ -118,8 +180,13 @@ bool web_security_init(
     web_security_random_fn_t random_fn,
     void *random_ctx)
 {
+    char canonical_password[WEB_SECURITY_PASSWORD_MAX_LEN];
+    char compact_password[WEB_SECURITY_PASSWORD_MAX_LEN];
     size_t len = 0;
-    if (state == NULL || !bounded_strlen(password, WEB_SECURITY_PASSWORD_MAX_LEN - 1, &len) ||
+    if (state == NULL ||
+        !password_canonicalize(password, canonical_password) ||
+        !password_compact_canonicalize(canonical_password, compact_password) ||
+        !bounded_strlen(compact_password, WEB_SECURITY_PASSWORD_MAX_LEN - 1, &len) ||
         len < MIN_PASSWORD_LEN) {
         return false;
     }
@@ -127,10 +194,14 @@ bool web_security_init(
     memset(state, 0, sizeof(*state));
     if (random_fn == NULL ||
         !random_fn(state->password_salt, sizeof(state->password_salt), random_ctx) ||
-        !web_password_hash_derive(password, state->password_salt, state->password_hash)) {
+        !web_password_hash_derive(compact_password, state->password_salt, state->password_hash)) {
         memset(state, 0, sizeof(*state));
+        memset(canonical_password, 0, sizeof(canonical_password));
+        memset(compact_password, 0, sizeof(compact_password));
         return false;
     }
+    memset(canonical_password, 0, sizeof(canonical_password));
+    memset(compact_password, 0, sizeof(compact_password));
     state->password_hash_configured = true;
     return true;
 }
@@ -163,17 +234,25 @@ bool web_security_prepare_password_hash(
     uint8_t out_salt[WEB_PASSWORD_SALT_LEN],
     uint8_t out_hash[WEB_PASSWORD_HASH_LEN])
 {
+    char canonical_password[WEB_SECURITY_PASSWORD_MAX_LEN];
+    char compact_password[WEB_SECURITY_PASSWORD_MAX_LEN];
     size_t len = 0;
-    if (!bounded_strlen(password, WEB_SECURITY_PASSWORD_MAX_LEN - 1, &len) ||
+    if (!password_canonicalize(password, canonical_password) ||
+        !password_compact_canonicalize(canonical_password, compact_password) ||
+        !bounded_strlen(compact_password, WEB_SECURITY_PASSWORD_MAX_LEN - 1, &len) ||
         len < MIN_PASSWORD_LEN || random_fn == NULL || out_salt == NULL || out_hash == NULL) {
         return false;
     }
     if (!random_fn(out_salt, WEB_PASSWORD_SALT_LEN, random_ctx) ||
-        !web_password_hash_derive(password, out_salt, out_hash)) {
+        !web_password_hash_derive(compact_password, out_salt, out_hash)) {
         memset(out_salt, 0, WEB_PASSWORD_SALT_LEN);
         memset(out_hash, 0, WEB_PASSWORD_HASH_LEN);
+        memset(canonical_password, 0, sizeof(canonical_password));
+        memset(compact_password, 0, sizeof(compact_password));
         return false;
     }
+    memset(canonical_password, 0, sizeof(canonical_password));
+    memset(compact_password, 0, sizeof(compact_password));
     return true;
 }
 
@@ -221,10 +300,14 @@ web_security_login_result_t web_security_login(
     if (now_ms < state->lockout_until_ms) {
         return WEB_SECURITY_LOGIN_LOCKED;
     }
+    char compact_password[WEB_SECURITY_PASSWORD_MAX_LEN];
     uint8_t candidate_hash[WEB_PASSWORD_HASH_LEN];
-    const bool password_ok = state->password_hash_configured &&
-                             web_password_hash_derive(password, state->password_salt, candidate_hash) &&
-                             web_password_hash_equal(state->password_hash, candidate_hash);
+    const bool compact_ok = password_compact_canonicalize(password, compact_password);
+    bool password_ok = state->password_hash_configured &&
+                       compact_ok &&
+                       web_password_hash_derive(compact_password, state->password_salt, candidate_hash) &&
+                       web_password_hash_equal(state->password_hash, candidate_hash);
+    memset(compact_password, 0, sizeof(compact_password));
     memset(candidate_hash, 0, sizeof(candidate_hash));
     if (!password_ok) {
         if (state->failed_logins < UINT8_MAX) {
