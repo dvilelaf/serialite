@@ -85,6 +85,10 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "<input id=\\\"input\\\"") == NULL);
     CHECK(strstr(web_server, "id=\\\"send\\\"") == NULL);
     CHECK(strstr(web_server, "sendInput()") == NULL);
+    CHECK(strstr(web_server, "id=\\\"bar\\\"") == NULL);
+    CHECK(strstr(web_server, "id=\\\"hud\\\"") != NULL);
+    CHECK(strstr(web_server, "id=\\\"streamDot\\\"") != NULL);
+    CHECK(strstr(web_server, "id=\\\"controlSwitch\\\"") != NULL);
     CHECK(strstr(web_server, "id=\\\"mode\\\"") == NULL);
     CHECK(strstr(web_server, "id=\\\"release\\\"") == NULL);
     CHECK(strstr(web_server, "id=\\\"control\\\"") != NULL);
@@ -92,6 +96,7 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "/api/write/acquire") != NULL);
     CHECK(strstr(web_server, "/api/write/release") != NULL);
     CHECK(strstr(web_server, "terminal.focus()") != NULL);
+    CHECK(strstr(web_server, "document.addEventListener('keydown',handleKey)") != NULL);
     CHECK(strstr(web_server, "terminal.addEventListener('keydown'") != NULL);
     CHECK(strstr(web_server, "ws.send(data)") != NULL);
     free(web_server);
