@@ -109,6 +109,8 @@ EOF
             service = root / "etc" / "systemd" / "system" / "serialite-serial-console.service"
             self.assertIn("agetty", service.read_text())
             self.assertIn("/dev/serialite-console", service.read_text())
+            self.assertIn("serialite-console vt220", service.read_text())
+            self.assertNotIn("/dev/serialite-console vt220", service.read_text())
 
             systemctl_log = (root / "state" / "systemctl.log").read_text()
             self.assertIn("enable --now serialite-serial-console.service", systemctl_log)

@@ -23,7 +23,7 @@ Usage:
 Enables a persistent Linux serial login on the Serialite USB serial device.
 
 Recommended install from a tagged release:
-  curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh
+  sudo sh -c 'curl -4fsSL https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/host/setup-linux-serial-console.sh | sh'
 EOF
 }
 
@@ -71,7 +71,7 @@ require_root() {
 This setup changes systemd and udev state, so it must run as root.
 
 Use:
-  curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh
+  sudo sh -c 'curl -4fsSL https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/host/setup-linux-serial-console.sh | sh'
 
 Or download a tagged release, review this script, then run:
   sudo sh ./setup-linux-serial-console.sh
@@ -234,7 +234,7 @@ After=systemd-udev-settle.service
 
 [Service]
 Type=idle
-ExecStart=-${agetty_path} -o '-p -- \\\\u' --keep-baud 115200,57600,38400,9600 /dev/${SYMLINK_NAME} vt220
+ExecStart=-${agetty_path} -o '-p -- \\\\u' --keep-baud 115200,57600,38400,9600 ${SYMLINK_NAME} vt220
 Restart=always
 RestartSec=1
 UtmpIdentifier=${SYMLINK_NAME}
@@ -290,7 +290,7 @@ Device:  ${symlink_path}
 Join WiFi KVM and open http://192.168.4.1
 
 Undo:
-  curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh -s -- --uninstall
+  sudo sh -c 'curl -4fsSL https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/host/setup-linux-serial-console.sh | sh -s -- --uninstall'
 EOF
 }
 
