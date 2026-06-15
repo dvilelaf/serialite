@@ -147,6 +147,21 @@ static void check_terminal_output_uses_xterm_renderer(void)
     free(web_server);
 }
 
+static void check_terminal_page_is_streamed_without_large_stack_buffer(void)
+{
+    char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
+    const char *handler = strstr(web_server, "static esp_err_t terminal_handler");
+    CHECK(handler != NULL);
+    const char *next_function = strstr(handler + 1, "static esp_err_t terminal_status_handler");
+    CHECK(next_function != NULL);
+
+    const char *large_stack_page = strstr(handler, "char terminal_page[12000]");
+    CHECK(large_stack_page == NULL || large_stack_page > next_function);
+    CHECK(strstr(handler, "httpd_resp_sendstr_chunk(req") != NULL &&
+          strstr(handler, "httpd_resp_sendstr_chunk(req") < next_function);
+    free(web_server);
+}
+
 static void check_diagnostics_has_clear_terminal_return(void)
 {
     char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
@@ -223,6 +238,7 @@ int main(void)
     check_login_screen_removed_from_primary_flow();
     check_terminal_is_terminal_first_not_command_composer();
     check_terminal_output_uses_xterm_renderer();
+    check_terminal_page_is_streamed_without_large_stack_buffer();
     check_diagnostics_has_clear_terminal_return();
     check_usb_serial_jtag_is_not_secondary_console();
     check_lvgl_access_secrets_are_secrets_only();

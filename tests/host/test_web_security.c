@@ -132,7 +132,11 @@ static void test_origin_must_match_host(void)
     CHECK(web_security_origin_allowed("http://192.168.4.1", "192.168.4.1"));
     CHECK(web_security_origin_allowed("http://192.168.4.1:80", "192.168.4.1"));
     CHECK(web_security_origin_allowed("http://192.168.4.1", "192.168.4.1:80"));
+    CHECK(web_security_origin_allowed("https://kvm.local", "kvm.local"));
+    CHECK(web_security_origin_allowed("https://kvm.local:443", "kvm.local"));
+    CHECK(web_security_origin_allowed("https://kvm.local", "kvm.local:443"));
     CHECK(!web_security_origin_allowed("http://evil.local", "192.168.4.1"));
+    CHECK(!web_security_origin_allowed("https://evil.local", "kvm.local"));
     CHECK(!web_security_origin_allowed(NULL, "192.168.4.1"));
     CHECK(!web_security_origin_allowed("http://192.168.4.1", NULL));
 }

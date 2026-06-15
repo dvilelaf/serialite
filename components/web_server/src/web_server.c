@@ -36,6 +36,7 @@
 #include "web_terminal_contract.h"
 #include "wifi_ap.h"
 #include "esp_attr.h"
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,6 +62,7 @@ extern const uint8_t _binary_xterm_css_end[] asm("_binary_xterm_css_end");
 #define WEB_AP_GUARD_INTERVAL_MS 30000
 #define WEB_OTA_RECV_CHUNK 2048
 #define WEB_HTTPD_STACK_SIZE (16 * 1024)
+#define WEB_TERMINAL_FORMAT_CHUNK_MAX 2048
 #define WEB_HTTPD_MAX_URI_HANDLERS 32
 #define WEB_ROUTE_TRACE_MAGIC 0x4b565754U
 #define WEB_ROUTE_TRACE_VERSION 1U
@@ -1018,6 +1020,21 @@ static esp_err_t logout_handler(httpd_req_t *req)
     return redirect_to(req, "/terminal");
 }
 
+static esp_err_t send_terminal_format_chunk(httpd_req_t *req, const char *fmt, ...)
+{
+    char chunk[WEB_TERMINAL_FORMAT_CHUNK_MAX];
+    va_list args;
+    va_start(args, fmt);
+    const int written = vsnprintf(chunk, sizeof(chunk), fmt, args);
+    va_end(args);
+
+    if (written < 0 || written >= (int)sizeof(chunk)) {
+        ESP_LOGE(TAG, "terminal dynamic chunk overflow");
+        return ESP_FAIL;
+    }
+    return httpd_resp_sendstr_chunk(req, chunk);
+}
+
 static esp_err_t terminal_handler(httpd_req_t *req)
 {
     web_route_trace_mark("/terminal", "enter");
@@ -1037,37 +1054,63 @@ static esp_err_t terminal_handler(httpd_req_t *req)
 
     const usb_console_status_t usb = usb_console_get_status();
 
-    char terminal_page[12000];
-    const int written = snprintf(
-        terminal_page,
-        sizeof(terminal_page),
+    send_no_store_headers(req);
+    if (session_created) {
+        httpd_resp_set_hdr(req, "Set-Cookie", session_cookie);
+    }
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    web_route_trace_mark("/terminal", "done");
+
+    ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
         "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
         "<link rel=\"stylesheet\" href=\"/assets/xterm.css\">"
         "<title>Serial console</title><style>"
         ":root{--bg:#002B36;--bar:#073642;--line:#174652;--hot:#2aa198;--warn:#b58900;--bad:#dc322f;--text:#93A1A1;--muted:#657b83;--ok:#859900}"
         "*{box-sizing:border-box}html,body{margin:0;height:100%%;background:#002B36;color:var(--text);font:14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}"
         "body{overflow:hidden}"
-        "#hud{position:fixed;right:12px;top:12px;z-index:5;display:flex;align-items:center;gap:8px;padding:7px;border:1px solid #174652;border-radius:999px;background:rgba(7,54,66,.88);backdrop-filter:blur(14px);box-shadow:0 14px 40px #001b22cc}"
+        "#hud{position:fixed;right:12px;top:12px;z-index:5;display:flex;align-items:center;gap:8px;padding:7px;border:1px solid #174652;border-radius:999px;background:rgba(7,54,66,.88);backdrop-filter:blur(14px);box-shadow:0 14px 40px #001b22cc}"), TAG, "terminal head chunk failed");
+    ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
         ".pill{border:1px solid var(--line);border-radius:999px;padding:5px 9px;color:var(--muted);background:#00212a;font-size:12px;letter-spacing:.04em}.stream{display:flex;align-items:center;gap:7px;max-width:74px;overflow:hidden;white-space:nowrap;transition:max-width .16s ease,color .16s ease}.stream.expanded,.stream:hover,.stream:focus{max-width:min(360px,calc(100vw - 32px));color:var(--text)}.dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%%;background:var(--warn);box-shadow:0 0 12px var(--warn)}.dot.ok{background:var(--ok);box-shadow:0 0 14px var(--ok)}.dot.bad{background:var(--bad);box-shadow:0 0 14px var(--bad)}#streamText{overflow:hidden;text-overflow:ellipsis}.stream.expanded #streamText,.stream:hover #streamText,.stream:focus #streamText{text-overflow:clip}"
         ".usb{border-color:var(--warn);color:var(--warn)}.locked{border-color:var(--bad);color:var(--bad)}"
         "button,a{font:inherit;color:var(--text)}button{border:1px solid var(--line);border-radius:10px;background:#073642;padding:6px 10px;font-weight:700}button.primary{border-color:var(--hot)}button.danger{border-color:var(--bad);color:#eee8d5}button:disabled{opacity:.42}"
-        "#menu{position:relative}#keys{display:none;position:fixed;right:12px;top:62px;z-index:4;width:min(310px,calc(100vw - 24px));max-height:calc(100svh - 74px);overflow:auto;padding:8px;border:1px solid var(--line);border-radius:14px;background:#073642;box-shadow:0 20px 50px #001b22cc}"
+        "#menu{position:relative}#keys{display:none;position:fixed;right:12px;top:62px;z-index:4;width:min(310px,calc(100vw - 24px));max-height:calc(100svh - 74px);overflow:auto;padding:8px;border:1px solid var(--line);border-radius:14px;background:#073642;box-shadow:0 20px 50px #001b22cc}"), TAG, "terminal css chunk failed");
+    ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
         "#keys.open{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}#keys a{grid-column:1/-1;text-align:center;color:var(--hot);text-decoration:none;padding:7px}"
         "#terminal{position:fixed;inset:0;outline:none;padding:14px 14px 64px;background:#002B36}"
         "#consoleNotice{position:fixed;left:50%%;top:50%%;z-index:3;transform:translate(-50%%,-50%%);width:min(680px,calc(100vw - 28px));padding:18px 20px;border:1px solid #174652;border-radius:18px;background:rgba(7,54,66,.94);box-shadow:0 24px 70px #001b22d9;color:var(--text)}#consoleNotice.hidden{display:none}#consoleNotice h2{margin:0 0 8px;font-size:17px;color:var(--warn)}#consoleNotice p{margin:6px 0;color:var(--muted);line-height:1.45}#consoleNotice code{display:block;margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:#00212a;color:var(--hot);white-space:normal;overflow-wrap:anywhere}"
         "#terminal:focus{box-shadow:inset 0 0 0 1px #21483d}.xterm{height:100%%}.xterm-viewport{background:transparent!important}.xterm-screen{background:transparent!important}"
         "@media(max-width:640px){#hud{right:8px;top:8px;gap:6px;padding:6px}.pill{font-size:11px;padding:5px 7px}button{padding:7px 9px}#terminal{padding:12px 12px 76px;font-size:13px}}"
-        "</style></head><body><div id=\"hud\"><span id=\"state\" class=\"pill stream\"><span id=\"streamDot\" class=\"dot\"></span><span id=\"streamText\">STREAM ...</span></span>"
-        "<div id=\"menu\"><button id=\"menuBtn\" aria-label=\"More controls\">More</button><div id=\"keys\">"
+        "</style></head><body><div id=\"hud\"><span id=\"state\" class=\"pill stream\"><span id=\"streamDot\" class=\"dot\"></span><span id=\"streamText\">STREAM ...</span></span>"), TAG, "terminal layout chunk failed");
+    ESP_RETURN_ON_ERROR(httpd_resp_sendstr_chunk(req,
+        "<div id=\"menu\"><button id=\"menuBtn\" aria-label=\"More controls\">More</button><div id=\"keys\">"), TAG, "terminal controls chunk failed");
+    ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
         "<button data-k=\"\\u0003\">%s</button><button data-k=\"\\u0004\">%s</button><button data-k=\"\\u000c\">%s</button>"
         "<button data-k=\"\\r\">%s</button><button data-k=\"\\u001b\">%s</button><button data-k=\"\\t\">%s</button>"
         "<button data-k=\"\\u001b[A\">%s</button><button data-k=\"\\u001b[B\">%s</button><button data-k=\"\\u001b[D\">%s</button><button data-k=\"\\u001b[C\">%s</button><button id=\"fitTty\">Fit TTY</button>"
-        "<button class=\"danger\" id=\"panic\">Emergency lock</button><button class=\"danger\" id=\"logout\">Sign out</button><a href=\"/diagnostics\">Diagnostics</a></div></div></div>"
+        "<button class=\"danger\" id=\"panic\">Emergency lock</button><button class=\"danger\" id=\"logout\">Sign out</button><a href=\"/diagnostics\">Diagnostics</a></div></div></div>",
+        WEB_TERMINAL_KEY_CTRL_C,
+        WEB_TERMINAL_KEY_CTRL_D,
+        WEB_TERMINAL_KEY_CTRL_L,
+        WEB_TERMINAL_KEY_ENTER,
+        WEB_TERMINAL_KEY_ESC,
+        WEB_TERMINAL_KEY_TAB,
+        WEB_TERMINAL_KEY_UP,
+        WEB_TERMINAL_KEY_DOWN,
+        WEB_TERMINAL_KEY_LEFT,
+        WEB_TERMINAL_KEY_RIGHT), TAG, "terminal key chunk failed");
+    ESP_RETURN_ON_ERROR(httpd_resp_sendstr_chunk(req,
         "<div id=\"terminal\" tabindex=\"0\"></div>"
         "<section id=\"consoleNotice\" class=\"hidden\" role=\"status\" aria-live=\"polite\"><h2>No serial console detected</h2><p>The USB link is up, but the Linux host has not sent a login prompt or console output yet.</p><p>On the host, enable the serial getty:</p><code>sudo systemctl start serial-getty@ttyACM0.service</code></section>"
-        "<script src=\"/assets/xterm.js\"></script><script>"
+        "<script src=\"/assets/xterm.js\"></script><script>"), TAG, "terminal body chunk failed");
+    ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
         "const CSRF='%s';let canWrite=false,usbConnected=%s,writerState='write-active',locked=false,connected=false,empty=true,lastRx=0,lastInput=0,openedAt=0;"
-        "const CHUNK=%u,PASTE_CONFIRM=%u,PASTE_MAX=%u;"
+        "const CHUNK=%u,PASTE_CONFIRM=%u,PASTE_MAX=%u;",
+        csrf,
+        usb.connected ? "true" : "false",
+        (unsigned)WEB_INPUT_POLICY_FRAME_MAX,
+        (unsigned)WEB_PASTE_CONFIRM_BYTES,
+        (unsigned)WEB_PASTE_MAX_BYTES), TAG, "terminal config chunk failed");
+    ESP_RETURN_ON_ERROR(httpd_resp_sendstr_chunk(req,
         "const terminal=document.getElementById('terminal'),state=document.getElementById('state'),streamText=document.getElementById('streamText'),streamDot=document.getElementById('streamDot'),consoleNotice=document.getElementById('consoleNotice');"
         "const term=new KvmTerminal.Terminal({cursorBlink:true,convertEol:false,scrollback:2000,fontFamily:'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',fontSize:14,theme:{background:'#002B36',foreground:'#93A1A1',cursor:'#839496',black:'#073642',red:'#dc322f',green:'#859900',yellow:'#b58900',blue:'#268bd2',magenta:'#d33682',cyan:'#2aa198',white:'#eee8d5',brightBlack:'#002b36',brightRed:'#dc322f',brightGreen:'#586e75',brightYellow:'#657b83',brightBlue:'#839496',brightMagenta:'#6c71c4',brightCyan:'#93a1a1',brightWhite:'#fdf6e3'}});"
         "const fit=new KvmTerminal.FitAddon();term.loadAddon(fit);term.open(terminal);fit.fit();term.write('Serial console ready.\\r\\n');addEventListener('resize',()=>fit.fit());"
@@ -1102,33 +1145,8 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock closes the web session. Continue?')){const ok=await post('/api/emergency-lock');if(ok){locked=true;if(ws){ws.onclose=null;ws.close()}location='/terminal'}}};"
         "document.getElementById('logout').onclick=async()=>{locked=true;if(ws){ws.onclose=null;ws.close()}await post('/logout');location='/terminal'};"
         "render();refreshStatus();setInterval(refreshStatus,2000);setInterval(checkConsoleSilence,1000);connect();term.focus();"
-        "</script></body></html>",
-        WEB_TERMINAL_KEY_CTRL_C,
-        WEB_TERMINAL_KEY_CTRL_D,
-        WEB_TERMINAL_KEY_CTRL_L,
-        WEB_TERMINAL_KEY_ENTER,
-        WEB_TERMINAL_KEY_ESC,
-        WEB_TERMINAL_KEY_TAB,
-        WEB_TERMINAL_KEY_UP,
-        WEB_TERMINAL_KEY_DOWN,
-        WEB_TERMINAL_KEY_LEFT,
-        WEB_TERMINAL_KEY_RIGHT,
-        csrf,
-        usb.connected ? "true" : "false",
-        (unsigned)WEB_INPUT_POLICY_FRAME_MAX,
-        (unsigned)WEB_PASTE_CONFIRM_BYTES,
-        (unsigned)WEB_PASTE_MAX_BYTES);
-    if (written < 0 || written >= (int)sizeof(terminal_page)) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "terminal overflow");
-    }
-
-    send_no_store_headers(req);
-    if (session_created) {
-        httpd_resp_set_hdr(req, "Set-Cookie", session_cookie);
-    }
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    web_route_trace_mark("/terminal", "done");
-    return httpd_resp_send(req, terminal_page, HTTPD_RESP_USE_STRLEN);
+        "</script></body></html>"), TAG, "terminal script chunk failed");
+    return httpd_resp_sendstr_chunk(req, NULL);
 }
 
 static esp_err_t terminal_status_handler(httpd_req_t *req)

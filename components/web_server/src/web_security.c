@@ -323,21 +323,30 @@ bool web_security_origin_allowed(const char *origin, const char *host)
         return false;
     }
 
-    const char *prefix = "http://";
-    const size_t prefix_len = strlen(prefix);
-    if (strncmp(origin, prefix, prefix_len) != 0) {
+    const char *origin_host = NULL;
+    const char *default_port = NULL;
+    const char http_prefix[] = "http://";
+    const char https_prefix[] = "https://";
+    if (strncmp(origin, http_prefix, sizeof(http_prefix) - 1U) == 0) {
+        origin_host = origin + sizeof(http_prefix) - 1U;
+        default_port = ":80";
+    } else if (strncmp(origin, https_prefix, sizeof(https_prefix) - 1U) == 0) {
+        origin_host = origin + sizeof(https_prefix) - 1U;
+        default_port = ":443";
+    } else {
         return false;
     }
 
-    const char *origin_host = origin + prefix_len;
     size_t host_len = strlen(host);
-    if (host_len > 3 && strcmp(host + host_len - 3, ":80") == 0) {
-        host_len -= 3;
+    const size_t default_port_len = strlen(default_port);
+    if (host_len > default_port_len &&
+        strcmp(host + host_len - default_port_len, default_port) == 0) {
+        host_len -= default_port_len;
     }
     if (strncmp(origin_host, host, host_len) != 0) {
         return false;
     }
 
     const char next = origin_host[host_len];
-    return next == '\0' || (next == ':' && strcmp(origin_host + host_len, ":80") == 0);
+    return next == '\0' || (next == ':' && strcmp(origin_host + host_len, default_port) == 0);
 }

@@ -29,7 +29,12 @@ test('mobile operator opens xterm console and terminal controls work end-to-end'
   await expect(page.locator('#terminal')).toContainText(/Serial console ready|harness login:/);
   await expect(page.locator('#input')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Send' })).toHaveCount(0);
-  await expect(page.locator('#state')).toContainText('Stream OK');
+  await expect(page.locator('#state')).toContainText('OK');
+  await expect(page.locator('#state')).toHaveAttribute('title', 'Stream OK');
+  await expect(page.locator('#streamDot')).toHaveCSS('border-radius', '50%');
+  await page.locator('#consoleNotice').evaluate((el) => el.classList.remove('hidden'));
+  await expect(page.locator('#consoleNotice')).toHaveCSS('transform', /matrix\(1, 0, 0, 1, -/);
+  await page.locator('#consoleNotice').evaluate((el) => el.classList.add('hidden'));
   await page.locator('#terminal').click();
   await page.keyboard.type('whoami');
   await page.keyboard.press('Enter');
