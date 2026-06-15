@@ -116,6 +116,24 @@ static void check_lvgl_access_secrets_are_secrets_only(void)
     free(lvgl_ui);
 }
 
+static void check_lvgl_access_secret_layout_avoids_overlap(void)
+{
+    char *lvgl_ui = read_repo_source_file("components/lvgl_ui/src/lvgl_ui.c");
+    const char *secrets = strstr(lvgl_ui, "lv_obj_t *secrets = add_card");
+    CHECK(secrets != NULL);
+    const char *end = strstr(secrets, "strlcpy(s_ctx.wifi_ssid");
+    CHECK(end != NULL);
+
+    const char *hint_pos = strstr(secrets, "lv_obj_set_pos(s_ctx.secret_hint_label");
+    CHECK(hint_pos != NULL && hint_pos < end);
+    CHECK(strstr(hint_pos, "UI_BOTTOM_CONTENT_W - 96, 0") != NULL);
+
+    const char *web_label = strstr(secrets, "s_ctx.web_password_label = add_label");
+    CHECK(web_label != NULL && web_label < end);
+    CHECK(strstr(web_label, "&lv_font_montserrat_16") != NULL && strstr(web_label, "&lv_font_montserrat_16") < end);
+    free(lvgl_ui);
+}
+
 int main(void)
 {
     CHECK(web_terminal_contract_has_required_statuses());
@@ -131,5 +149,6 @@ int main(void)
     check_terminal_is_terminal_first_not_command_composer();
     check_usb_serial_jtag_is_not_secondary_console();
     check_lvgl_access_secrets_are_secrets_only();
+    check_lvgl_access_secret_layout_avoids_overlap();
     return 0;
 }

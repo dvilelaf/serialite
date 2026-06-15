@@ -539,7 +539,7 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
 
     lv_obj_t *secrets = add_card(screen, UI_SCREEN_PAD, UI_BOTTOM_Y, UI_LANDSCAPE_W - (UI_SCREEN_PAD * 2), UI_BOTTOM_H);
     s_ctx.secret_hint_label = add_label(secrets, "", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 96);
-    lv_obj_set_pos(s_ctx.secret_hint_label, UI_BOTTOM_CONTENT_W - 96, UI_BOTTOM_H - (UI_CARD_PAD * 2) - 22);
+    lv_obj_set_pos(s_ctx.secret_hint_label, UI_BOTTOM_CONTENT_W - 96, 0);
     lv_obj_add_flag(s_ctx.secret_hint_label, LV_OBJ_FLAG_HIDDEN);
 
     s_ctx.wifi_placeholder = lv_obj_create(secrets);
@@ -569,7 +569,7 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     lv_obj_t *web_title = add_label(secrets, "Web password", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), UI_SECRET_RIGHT_W);
     lv_obj_set_pos(web_title, UI_SECRET_RIGHT_X, 78);
 
-    s_ctx.web_password_label = add_label(secrets, web_password, &lv_font_montserrat_20, lv_color_hex(UI_COLOR_TEXT), UI_SECRET_RIGHT_W);
+    s_ctx.web_password_label = add_label(secrets, web_password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_SECRET_RIGHT_W);
     lv_obj_set_pos(s_ctx.web_password_label, UI_SECRET_RIGHT_X, 100);
 
     strlcpy(s_ctx.wifi_ssid, ssid, sizeof(s_ctx.wifi_ssid));
