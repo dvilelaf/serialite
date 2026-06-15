@@ -37,6 +37,13 @@ test('mobile operator opens xterm console and terminal controls work end-to-end'
   await page.locator('#consoleNotice').evaluate((el) => el.classList.add('hidden'));
   await expect(page.getByRole('button', { name: 'Fullscreen' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'More controls' })).toHaveText('+');
+  await page.getByRole('button', { name: 'More controls' }).click();
+  await expect(page.locator('#keys')).toHaveClass(/open/);
+  await page.locator('#keys').dispatchEvent('mouseleave');
+  await expect(page.locator('#keys')).not.toHaveClass(/open/);
+  await page.getByRole('button', { name: 'More controls' }).click();
+  await page.getByRole('button', { name: 'Ctrl+C' }).click();
+  await expect(page.locator('#terminal')).not.toContainText('\\u0003');
   await page.locator('#terminal').click();
   await page.keyboard.type('whoami');
   await page.keyboard.press('Enter');

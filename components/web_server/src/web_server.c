@@ -1085,9 +1085,9 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "<button id=\"fullscreenBtn\" class=\"round icon-btn\" aria-label=\"Fullscreen\" title=\"Fullscreen\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><!-- Lucide maximize-2 --><polyline points=\"15 3 21 3 21 9\"></polyline><polyline points=\"9 21 3 21 3 15\"></polyline><line x1=\"21\" x2=\"14\" y1=\"3\" y2=\"10\"></line><line x1=\"3\" x2=\"10\" y1=\"21\" y2=\"14\"></line></svg></button>"
         "<div id=\"menu\"><button id=\"menuBtn\" class=\"round\" aria-label=\"More controls\" title=\"More controls\">+</button><div id=\"keys\">"), TAG, "terminal controls chunk failed");
     ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
-        "<button data-k=\"\\u0003\">%s</button><button data-k=\"\\u0004\">%s</button><button data-k=\"\\u000c\">%s</button>"
-        "<button data-k=\"\\r\">%s</button><button data-k=\"\\u001b\">%s</button><button data-k=\"\\t\">%s</button>"
-        "<button data-k=\"\\u001b[A\">%s</button><button data-k=\"\\u001b[B\">%s</button><button data-k=\"\\u001b[D\">%s</button><button data-k=\"\\u001b[C\">%s</button><button id=\"fitTty\">Fit TTY</button>"
+        "<button data-k=\"ctrl-c\">%s</button><button data-k=\"ctrl-d\">%s</button><button data-k=\"ctrl-l\">%s</button>"
+        "<button data-k=\"enter\">%s</button><button data-k=\"esc\">%s</button><button data-k=\"tab\">%s</button>"
+        "<button data-k=\"up\">%s</button><button data-k=\"down\">%s</button><button data-k=\"left\">%s</button><button data-k=\"right\">%s</button><button id=\"fitTty\">Fit TTY</button>"
         "<button class=\"danger\" id=\"panic\">Emergency lock</button><button class=\"danger\" id=\"logout\">Sign out</button><a href=\"/diagnostics\">Diagnostics</a></div></div></div>",
         WEB_TERMINAL_KEY_CTRL_C,
         WEB_TERMINAL_KEY_CTRL_D,
@@ -1137,14 +1137,18 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "function focusTerminal(){terminal.focus();term.focus()}"
         "function safePaste(t){if(!canWrite)return;if(t.length>PASTE_MAX){alert('Paste too large; max '+PASTE_MAX+' bytes');return}"
         "if((t.length>PASTE_CONFIRM||t.includes('\\n'))&&!confirm('Send '+t.length+' bytes to the physical console?'))return;send(t)}"
+        "const QUICK_KEYS={'ctrl-c':'\\u0003','ctrl-d':'\\u0004','ctrl-l':'\\u000c',enter:'\\r',esc:'\\u001b',tab:'\\t',up:'\\u001b[A',down:'\\u001b[B',left:'\\u001b[D',right:'\\u001b[C'};"
+        "function sendQuickKey(id){const data=QUICK_KEYS[id];if(data)send(data)}"
         "function terminalHasFocus(){return document.activeElement===terminal||terminal.contains(document.activeElement)||document.activeElement===term.textarea}"
         "function captureTerminalShortcuts(e){if(!canWrite)return;if(e.ctrlKey&&!e.altKey&&!e.metaKey&&e.key&&e.key.toLowerCase()==='l'&&terminalHasFocus()){e.preventDefault();e.stopPropagation();send('\\u000c');return false}}"
         "term.onData(data=>send(data));term.attachCustomKeyEventHandler(e=>{if(e.ctrlKey&&e.key.toLowerCase()==='l'){send('\\u000c');return false}return true});addEventListener('keydown',captureTerminalShortcuts,true);"
         "terminal.addEventListener('click',focusTerminal);terminal.addEventListener('paste',e=>{const t=(e.clipboardData||window.clipboardData).getData('text');e.preventDefault();safePaste(t)});"
-        "document.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>send(b.dataset.k));"
+        "document.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>sendQuickKey(b.dataset.k));"
         "document.getElementById('fitTty').onclick=fitHostTty;"
         "document.getElementById('fullscreenBtn').onclick=toggleFullscreen;"
-        "document.getElementById('menuBtn').onclick=()=>document.getElementById('keys').classList.toggle('open');state.tabIndex=0;state.onclick=()=>{state.classList.add('expanded');renderStreamLabel()};state.onmouseleave=()=>{state.classList.remove('expanded');state.blur();renderStreamLabel()};state.onfocus=renderStreamLabel;state.onblur=()=>{state.classList.remove('expanded');renderStreamLabel()};"
+        "const keys=document.getElementById('keys'),menuBtn=document.getElementById('menuBtn');"
+        "function closeMenu(){keys.classList.remove('open');menuBtn.blur()}"
+        "menuBtn.onclick=()=>keys.classList.toggle('open');keys.onmouseleave=closeMenu;keys.onblur=e=>{if(!keys.contains(e.relatedTarget))closeMenu()};state.tabIndex=0;state.onclick=()=>{state.classList.add('expanded');renderStreamLabel()};state.onmouseleave=()=>{state.classList.remove('expanded');state.blur();renderStreamLabel()};state.onfocus=renderStreamLabel;state.onblur=()=>{state.classList.remove('expanded');renderStreamLabel()};"
         "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock closes the web session. Continue?')){const ok=await post('/api/emergency-lock');if(ok){locked=true;if(ws){ws.onclose=null;ws.close()}location='/terminal'}}};"
         "document.getElementById('logout').onclick=async()=>{locked=true;if(ws){ws.onclose=null;ws.close()}await post('/logout');location='/terminal'};"
         "render();refreshStatus();setInterval(refreshStatus,2000);setInterval(checkConsoleSilence,1000);connect();term.focus();"

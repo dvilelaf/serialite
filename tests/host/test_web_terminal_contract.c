@@ -126,6 +126,10 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "Fit TTY") != NULL);
     CHECK(strstr(web_server, "function fitHostTty()") != NULL);
     CHECK(strstr(web_server, "send(`stty rows ${term.rows} cols ${term.cols}\\\\r`)") != NULL);
+    CHECK(strstr(web_server, "const QUICK_KEYS=") != NULL);
+    CHECK(strstr(web_server, "'ctrl-c':'\\\\u0003'") != NULL);
+    CHECK(strstr(web_server, "sendQuickKey(b.dataset.k)") != NULL);
+    CHECK(strstr(web_server, "keys.onmouseleave=closeMenu") != NULL);
     CHECK(strstr(web_server, "aria-label=\\\"Fullscreen\\\"") != NULL);
     CHECK(strstr(web_server, "Lucide maximize-2") != NULL);
     CHECK(strstr(web_server, "id=\\\"fullscreenBtn\\\"") != NULL);
