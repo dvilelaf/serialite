@@ -119,7 +119,7 @@ static void test_session_expires_and_logout_invalidates_tokens(void)
     CHECK(!web_security_session_valid(&state, token, 2000));
 }
 
-static void test_single_writer_lock(void)
+static void test_login_replaces_previous_session(void)
 {
     web_security_state_t state = valid_state();
     uint8_t counter = 1;
@@ -127,21 +127,19 @@ static void test_single_writer_lock(void)
     CHECK(web_security_login(&state, "correct horse battery staple", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
     char first_token[WEB_SECURITY_TOKEN_BUF_LEN];
     strcpy(first_token, state.session_token);
-    CHECK(web_security_acquire_writer(&state, first_token, 1000));
     CHECK(web_security_can_write(&state, first_token, 1000));
 
     CHECK(web_security_login(&state, "correct horse battery staple", 2000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
     char second_token[WEB_SECURITY_TOKEN_BUF_LEN];
     strcpy(second_token, state.session_token);
-    CHECK(!web_security_acquire_writer(&state, second_token, 2000));
-    CHECK(!web_security_can_write(&state, second_token, 2000));
 
-    web_security_release_writer(&state, first_token);
-    CHECK(web_security_acquire_writer(&state, second_token, 2000));
+    CHECK(!web_security_session_valid(&state, first_token, 2000));
+    CHECK(!web_security_can_write(&state, first_token, 2000));
+    CHECK(web_security_session_valid(&state, second_token, 2000));
     CHECK(web_security_can_write(&state, second_token, 2000));
 }
 
-static void test_writer_state_reports_read_only_active_busy_and_invalid(void)
+static void test_writer_state_is_active_for_the_only_valid_session(void)
 {
     web_security_state_t state = valid_state();
     uint8_t counter = 1;
@@ -151,58 +149,13 @@ static void test_writer_state_reports_read_only_active_busy_and_invalid(void)
     CHECK(web_security_login(&state, "correct horse battery staple", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
     char first_token[WEB_SECURITY_TOKEN_BUF_LEN];
     strcpy(first_token, state.session_token);
-    CHECK(web_security_writer_state(&state, first_token, 1000) == WEB_SECURITY_WRITER_READ_ONLY);
-    CHECK(web_security_acquire_writer(&state, first_token, 1000));
     CHECK(web_security_writer_state(&state, first_token, 1000) == WEB_SECURITY_WRITER_ACTIVE);
 
     CHECK(web_security_login(&state, "correct horse battery staple", 2000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
     char second_token[WEB_SECURITY_TOKEN_BUF_LEN];
     strcpy(second_token, state.session_token);
-    CHECK(web_security_writer_state(&state, second_token, 2000) == WEB_SECURITY_WRITER_BUSY);
-
-    web_security_release_writer(&state, first_token);
-    CHECK(web_security_writer_state(&state, second_token, 2000) == WEB_SECURITY_WRITER_READ_ONLY);
-}
-
-static void test_expired_writer_lock_does_not_block_new_writer(void)
-{
-    web_security_state_t state = valid_state();
-    uint8_t counter = 1;
-
-    CHECK(web_security_login(&state, "correct horse battery staple", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
-    char first_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    strcpy(first_token, state.session_token);
-    CHECK(web_security_acquire_writer(&state, first_token, 1000));
-
-    CHECK(web_security_login(&state, "correct horse battery staple", 2000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
-    char second_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    strcpy(second_token, state.session_token);
-
-    const uint64_t after_first_expires = 901500;
-    CHECK(!web_security_can_write(&state, first_token, after_first_expires));
-    CHECK(web_security_acquire_writer(&state, second_token, after_first_expires));
-    CHECK(web_security_can_write(&state, second_token, after_first_expires));
-}
-
-static void test_evicted_writer_lock_does_not_block_new_writer(void)
-{
-    web_security_state_t state = valid_state();
-    uint8_t counter = 1;
-
-    CHECK(web_security_login(&state, "correct horse battery staple", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
-    char writer_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    strcpy(writer_token, state.session_token);
-    CHECK(web_security_acquire_writer(&state, writer_token, 1000));
-
-    char latest_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    for (size_t i = 0; i < WEB_SECURITY_MAX_SESSIONS; ++i) {
-        CHECK(web_security_login(&state, "correct horse battery staple", 2000 + i, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
-        strcpy(latest_token, state.session_token);
-    }
-
-    CHECK(!web_security_session_valid(&state, writer_token, 3000));
-    CHECK(web_security_acquire_writer(&state, latest_token, 3000));
-    CHECK(web_security_can_write(&state, latest_token, 3000));
+    CHECK(web_security_writer_state(&state, first_token, 2000) == WEB_SECURITY_WRITER_INVALID_SESSION);
+    CHECK(web_security_writer_state(&state, second_token, 2000) == WEB_SECURITY_WRITER_ACTIVE);
 }
 
 static void test_origin_must_match_host(void)
@@ -223,7 +176,7 @@ static void test_invalidate_all_clears_sessions_and_writer(void)
     CHECK(web_security_login(&state, "correct horse battery staple", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
     char token[WEB_SECURITY_TOKEN_BUF_LEN];
     strcpy(token, state.session_token);
-    CHECK(web_security_acquire_writer(&state, token, 1000));
+    CHECK(web_security_can_write(&state, token, 1000));
 
     web_security_invalidate_all(&state);
 
@@ -271,10 +224,8 @@ int main(void)
     test_login_creates_session_and_csrf_tokens();
     test_wrong_password_rate_limits_login();
     test_session_expires_and_logout_invalidates_tokens();
-    test_single_writer_lock();
-    test_writer_state_reports_read_only_active_busy_and_invalid();
-    test_expired_writer_lock_does_not_block_new_writer();
-    test_evicted_writer_lock_does_not_block_new_writer();
+    test_login_replaces_previous_session();
+    test_writer_state_is_active_for_the_only_valid_session();
     test_origin_must_match_host();
     test_invalidate_all_clears_sessions_and_writer();
     test_rotate_password_invalidates_existing_sessions_and_accepts_new_password();

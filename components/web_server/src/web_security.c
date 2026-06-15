@@ -106,31 +106,6 @@ static const web_security_session_t *find_session_const(const web_security_state
     return find_session((web_security_state_t *)state, token, now_ms);
 }
 
-static web_security_session_t *oldest_or_free_session(web_security_state_t *state)
-{
-    web_security_session_t *slot = &state->sessions[0];
-    for (size_t i = 0; i < WEB_SECURITY_MAX_SESSIONS; ++i) {
-        if (!state->sessions[i].active) {
-            return &state->sessions[i];
-        }
-        if (state->sessions[i].expires_ms < slot->expires_ms) {
-            slot = &state->sessions[i];
-        }
-    }
-    return slot;
-}
-
-static void clear_writer_if_session_inactive(web_security_state_t *state, uint64_t now_ms)
-{
-    if (state == NULL || state->writer_token[0] == '\0') {
-        return;
-    }
-
-    if (find_session(state, state->writer_token, now_ms) == NULL) {
-        memset(state->writer_token, 0, sizeof(state->writer_token));
-    }
-}
-
 bool web_security_init(
     web_security_state_t *state,
     const char *password,
@@ -268,7 +243,6 @@ web_security_login_result_t web_security_login(
         return WEB_SECURITY_LOGIN_DENIED;
     }
 
-    web_security_session_t *session = oldest_or_free_session(state);
     char new_session_token[WEB_SECURITY_TOKEN_BUF_LEN];
     char new_csrf_token[WEB_SECURITY_TOKEN_BUF_LEN];
     if (!make_token(new_session_token, random_fn, random_ctx) ||
@@ -276,9 +250,8 @@ web_security_login_result_t web_security_login(
         return WEB_SECURITY_LOGIN_DENIED;
     }
 
-    if (strncmp(state->writer_token, session->session_token, WEB_SECURITY_TOKEN_BUF_LEN) == 0) {
-        memset(state->writer_token, 0, sizeof(state->writer_token));
-    }
+    web_security_invalidate_all(state);
+    web_security_session_t *session = &state->sessions[0];
     memset(session, 0, sizeof(*session));
     memcpy(session->session_token, new_session_token, sizeof(new_session_token));
     memcpy(session->csrf_token, new_csrf_token, sizeof(new_csrf_token));
@@ -316,9 +289,6 @@ void web_security_logout(web_security_state_t *state, const char *token)
 {
     web_security_session_t *session = find_session_by_token(state, token);
     if (session != NULL) {
-        if (strncmp(state->writer_token, session->session_token, WEB_SECURITY_TOKEN_BUF_LEN) == 0) {
-            memset(state->writer_token, 0, sizeof(state->writer_token));
-        }
         memset(session, 0, sizeof(*session));
     }
 }
@@ -339,30 +309,19 @@ void web_security_invalidate_all(web_security_state_t *state)
 
 bool web_security_acquire_writer(web_security_state_t *state, const char *token, uint64_t now_ms)
 {
-    if (state == NULL || find_session(state, token, now_ms) == NULL) {
-        return false;
-    }
-    clear_writer_if_session_inactive(state, now_ms);
-    if (state->writer_token[0] != '\0' && strncmp(state->writer_token, token, WEB_SECURITY_TOKEN_BUF_LEN) != 0) {
-        return false;
-    }
-    strncpy(state->writer_token, token, sizeof(state->writer_token) - 1);
-    return true;
+    return state != NULL && find_session(state, token, now_ms) != NULL;
 }
 
 void web_security_release_writer(web_security_state_t *state, const char *token)
 {
-    if (state != NULL && token != NULL &&
-        strncmp(state->writer_token, token, WEB_SECURITY_TOKEN_BUF_LEN) == 0) {
-        memset(state->writer_token, 0, sizeof(state->writer_token));
-    }
+    (void)state;
+    (void)token;
 }
 
 bool web_security_can_write(const web_security_state_t *state, const char *token, uint64_t now_ms)
 {
     return state != NULL && token != NULL &&
-           find_session_const(state, token, now_ms) != NULL &&
-           strncmp(state->writer_token, token, WEB_SECURITY_TOKEN_BUF_LEN) == 0;
+           find_session_const(state, token, now_ms) != NULL;
 }
 
 web_security_writer_state_t web_security_writer_state(web_security_state_t *state, const char *token, uint64_t now_ms)
@@ -371,14 +330,7 @@ web_security_writer_state_t web_security_writer_state(web_security_state_t *stat
         return WEB_SECURITY_WRITER_INVALID_SESSION;
     }
 
-    clear_writer_if_session_inactive(state, now_ms);
-    if (state->writer_token[0] == '\0') {
-        return WEB_SECURITY_WRITER_READ_ONLY;
-    }
-    if (strncmp(state->writer_token, token, WEB_SECURITY_TOKEN_BUF_LEN) == 0) {
-        return WEB_SECURITY_WRITER_ACTIVE;
-    }
-    return WEB_SECURITY_WRITER_BUSY;
+    return WEB_SECURITY_WRITER_ACTIVE;
 }
 
 bool web_security_origin_allowed(const char *origin, const char *host)

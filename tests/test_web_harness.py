@@ -75,22 +75,22 @@ class HarnessServerTest(unittest.TestCase):
         self.assertEqual(response.status, 303)
         self.assertEqual(response.getheader("Location"), "/login")
 
-    def test_writer_flow_requires_csrf_and_updates_status(self) -> None:
+    def test_login_replaces_previous_session_and_enables_input(self) -> None:
         session, csrf = self.login()
-
-        rejected = self.request("POST", "/api/write/acquire", headers={"Cookie": f"kvm_session={session}"})
-        self.assertEqual(rejected.status, 403)
-
-        accepted = self.request(
-            "POST",
-            "/api/write/acquire",
-            headers={"Cookie": f"kvm_session={session}", "X-CSRF-Token": csrf},
-        )
-        self.assertEqual(accepted.status, 200)
 
         status = self.request("GET", "/terminal-status.json", headers={"Cookie": f"kvm_session={session}"})
         self.assertEqual(status.status, 200)
         self.assertIn('"writer_state":"write-active"', status.read().decode())
+
+        second_session, _second_csrf = self.login()
+        self.assertNotEqual(session, second_session)
+
+        old_status = self.request("GET", "/terminal-status.json", headers={"Cookie": f"kvm_session={session}"})
+        self.assertEqual(old_status.status, 401)
+
+        new_status = self.request("GET", "/terminal-status.json", headers={"Cookie": f"kvm_session={second_session}"})
+        self.assertEqual(new_status.status, 200)
+        self.assertIn('"writer_state":"write-active"', new_status.read().decode())
 
     def test_emergency_lock_invalidates_session(self) -> None:
         session, csrf = self.login()

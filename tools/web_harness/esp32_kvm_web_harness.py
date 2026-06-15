@@ -28,7 +28,6 @@ class HarnessState:
     password: str
     usb_connected: bool = True
     sessions: dict[str, str] = field(default_factory=dict)
-    writer_token: str | None = None
     locked: bool = False
 
     @property
@@ -38,6 +37,7 @@ class HarnessState:
     def create_session(self) -> tuple[str, str]:
         token = secrets.token_hex(16)
         csrf = secrets.token_hex(16)
+        self.sessions.clear()
         self.sessions[token] = csrf
         self.locked = False
         return token, csrf
@@ -49,7 +49,6 @@ class HarnessState:
 
     def invalidate_all(self) -> None:
         self.sessions.clear()
-        self.writer_token = None
         self.locked = True
 
 
@@ -115,29 +114,11 @@ class KvmHarnessHandler(http.server.BaseHTTPRequestHandler):
             token = self.session_token()
             if token is not None:
                 self.state.sessions.pop(token, None)
-                if self.state.writer_token == token:
-                    self.state.writer_token = None
             self.send_response(HTTPStatus.SEE_OTHER)
             self.no_store_headers()
             self.send_header("Location", "/login")
             self.send_header("Set-Cookie", f"{SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0")
             self.end_headers()
-        elif self.path == "/api/write/acquire":
-            if not self.require_csrf():
-                return
-            token = self.session_token()
-            if self.state.writer_token not in (None, token):
-                self.send_text("writer busy", HTTPStatus.CONFLICT)
-                return
-            self.state.writer_token = token
-            self.send_text("ok")
-        elif self.path == "/api/write/release":
-            if not self.require_csrf():
-                return
-            token = self.session_token()
-            if self.state.writer_token == token:
-                self.state.writer_token = None
-            self.send_text("ok")
         elif self.path == "/api/emergency-lock":
             if not self.require_csrf():
                 return
@@ -168,11 +149,7 @@ class KvmHarnessHandler(http.server.BaseHTTPRequestHandler):
             return "locked"
         if token is None or token not in self.state.sessions:
             return "invalid-session"
-        if self.state.writer_token == token:
-            return "write-active"
-        if self.state.writer_token is not None:
-            return "writer-busy"
-        return "read-only"
+        return "write-active"
 
     def require_session_redirect(self) -> bool:
         if self.csrf_token() is not None:
@@ -270,22 +247,19 @@ def terminal_page(csrf: str, usb_connected: bool) -> str:
     usb = "true" if usb_connected else "false"
     return f"""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Serial console</title><style>
-:root{{--bg:#050b09;--panel:#0b1814;--line:#1f5b4b;--hot:#7dffe1;--warn:#ffcf7a;--bad:#ff875c;--text:#e9fff8;--muted:#8bb5aa}}
-html,body{{margin:0;height:100%;background:radial-gradient(circle at 20% -10%,#143a30 0,#050b09 45%);color:var(--text);font:15px ui-monospace,SFMono-Regular,Menlo,monospace}}
-body{{display:grid;grid-template-rows:auto 1fr auto;overflow:hidden}}#bar{{position:sticky;top:0;z-index:2;padding:10px 12px;background:rgba(5,11,9,.96);border-bottom:1px solid var(--line);box-shadow:0 10px 28px #0008}}
-#top{{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}}#brand{{font-weight:800;letter-spacing:.04em}}.pill{{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:7px 10px;background:#07110e;color:var(--muted)}}
-#mode{{font-weight:800;color:var(--hot)}}#mode.write{{color:#050b09;background:var(--hot)}}#mode.busy,#mode.usb{{color:#160b00;background:var(--warn)}}#mode.locked{{color:#1b0500;background:var(--bad)}}
-#actions,#keys{{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}}button{{min-height:42px;background:#102a23;color:var(--text);border:1px solid var(--line);border-radius:12px;padding:9px 12px;font:inherit;font-weight:700}}
-button.primary{{background:#123d32;border-color:var(--hot)}}button.danger{{border-color:var(--bad);color:#ffd2c0}}button:disabled{{opacity:.45}}
-#term{{white-space:pre-wrap;overflow:auto;padding:12px;box-sizing:border-box;background:#020604}}#input{{width:100%;height:48px;box-sizing:border-box;border:0;border-top:1px solid var(--line);background:#07110e;color:#fff;padding:12px;font:16px ui-monospace,SFMono-Regular,Menlo,monospace}}
-a{{color:var(--hot)}}@media(max-width:640px){{html,body{{font-size:14px}}#bar{{padding:8px}}button{{flex:1 1 27%;min-height:46px;padding:10px 8px}}#term{{padding:10px}}#input{{height:52px}}}}
-</style></head><body><div id="bar"><div id="top"><span id="brand">Serial console</span><span id="mode" class="pill">Input locked</span>
-<span id="state" class="pill">Connecting stream</span><a href="/diagnostics">Diagnostics</a></div>
-<div id="actions"><button class="primary" id="write">Unlock input</button><button id="release">Lock input</button>
-<button class="danger" id="panic">Emergency lock</button><button class="danger" id="logout">Logout</button></div>
-<div id="keys"><button data-k="\\u0003">Ctrl+C</button><button data-k="\\u0004">Ctrl+D</button><button data-k="\\r">Enter</button><button data-k="\\u001b">Esc</button><button data-k="\\t">Tab</button></div>
-</div><div id="term">Waiting for serial output.\\r\\nIf the server is at a login prompt, unlock input and press Enter.</div><input id="input" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Unlock input to type commands" disabled>
-<script>const CSRF='{csrf}';let canWrite=false,usbConnected={usb},writerState='read-only',locked=false,connected=false;</script></body></html>"""
+:root{{--line:#18352d;--hot:#8fffe4;--bad:#ff8b68;--text:#eafff8;--muted:#78958d}}
+*{{box-sizing:border-box}}html,body{{margin:0;height:100%;background:#030504;color:var(--text);font:14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:hidden}}
+#hud{{position:fixed;right:12px;top:12px;z-index:5;display:flex;align-items:center;gap:8px;padding:7px;border:1px solid #1f4b3f;border-radius:999px;background:rgba(4,10,8,.82);box-shadow:0 14px 40px #000b}}
+.pill{{border:1px solid var(--line);border-radius:999px;padding:5px 9px;color:var(--muted);background:#050907;font-size:12px}}button,a{{font:inherit;color:var(--text)}}button{{border:1px solid var(--line);border-radius:10px;background:#0a1813;padding:6px 10px;font-weight:700}}button.danger{{border-color:var(--bad);color:#ffd4c7}}
+#keys{{display:none;position:fixed;right:12px;top:62px;z-index:4;width:min(310px,calc(100vw - 24px));padding:8px;border:1px solid var(--line);border-radius:14px;background:#06100d;box-shadow:0 20px 50px #000b}}
+#keys.open{{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}}#keys a{{grid-column:1/-1;text-align:center;color:var(--hot);text-decoration:none;padding:7px}}
+#terminal{{position:fixed;inset:0;outline:none;overflow:auto;white-space:pre-wrap;word-break:break-word;padding:18px 18px 70px;background:radial-gradient(circle at 70% -30%,#112b23 0,#030504 42%);line-height:1.38}}
+#kbd{{position:fixed;inset:0;opacity:.01;color:transparent;background:transparent;border:0;resize:none}}
+</style></head><body><div id="hud"><span id="state" class="pill">Stream OK</span><div id="menu"><button id="menuBtn">More</button><div id="keys">
+<button data-k="\\u0003">Ctrl+C</button><button data-k="\\u0004">Ctrl+D</button><button data-k="\\r">Enter</button><button data-k="\\u001b">Esc</button><button data-k="\\t">Tab</button>
+<button class="danger" id="panic">Emergency lock</button><button class="danger" id="logout">Sign out</button><a href="/diagnostics">Diagnostics</a></div></div></div>
+<div id="terminal" tabindex="0">Control active. Press Enter to wake console.</div><textarea id="kbd"></textarea>
+<script>const CSRF='{csrf}';let canWrite=true,usbConnected={usb},writerState='write-active',locked=false,connected=true;</script></body></html>"""
 
 
 def create_server(address: tuple[str, int], password: str = "alpha zoom", quiet: bool = True) -> ReusableThreadingHTTPServer:

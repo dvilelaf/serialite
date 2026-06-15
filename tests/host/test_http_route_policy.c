@@ -28,8 +28,6 @@ static void test_allows_known_routes_and_methods(void)
     CHECK(http_route_policy_allowed("/config", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/config.json", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/macros", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
-    CHECK(http_route_policy_allowed("/api/write/acquire", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_ALLOW);
-    CHECK(http_route_policy_allowed("/api/write/release", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/api/emergency-lock", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/api/ota", HTTP_ROUTE_METHOD_POST, OTA_UPDATE_MAX_IMAGE_BYTES) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/api/reboot", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_ALLOW);
@@ -56,7 +54,6 @@ static void test_rejects_oversized_bodies(void)
 {
     CHECK(http_route_policy_allowed("/login", HTTP_ROUTE_METHOD_POST, HTTP_ROUTE_LOGIN_BODY_MAX) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/login", HTTP_ROUTE_METHOD_POST, HTTP_ROUTE_LOGIN_BODY_MAX + 1) == HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE);
-    CHECK(http_route_policy_allowed("/api/write/acquire", HTTP_ROUTE_METHOD_POST, 1) == HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE);
     CHECK(http_route_policy_allowed("/api/emergency-lock", HTTP_ROUTE_METHOD_POST, 1) == HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE);
     CHECK(http_route_policy_allowed("/api/ota", HTTP_ROUTE_METHOD_POST, OTA_UPDATE_MAX_IMAGE_BYTES + 1) == HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE);
     CHECK(http_route_policy_allowed("/api/reboot", HTTP_ROUTE_METHOD_POST, 1) == HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE);
@@ -89,8 +86,6 @@ static void test_security_classifies_public_and_authenticated_routes(void)
 static void test_security_classifies_mutating_and_websocket_routes(void)
 {
     CHECK(http_route_policy_security("/logout", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_MUTATING_AUTH_CSRF_ORIGIN);
-    CHECK(http_route_policy_security("/api/write/acquire", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_MUTATING_AUTH_CSRF_ORIGIN);
-    CHECK(http_route_policy_security("/api/write/release", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_MUTATING_AUTH_CSRF_ORIGIN);
     CHECK(http_route_policy_security("/api/emergency-lock", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_MUTATING_AUTH_CSRF_ORIGIN);
     CHECK(http_route_policy_security("/api/ota", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_MUTATING_AUTH_CSRF_ORIGIN);
     CHECK(http_route_policy_security("/api/reboot", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_MUTATING_AUTH_CSRF_ORIGIN);

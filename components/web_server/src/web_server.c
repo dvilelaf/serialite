@@ -840,11 +840,11 @@ static esp_err_t about_handler(httpd_req_t *req)
         "<h1>About ESP32-KVM</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/macros\">Macros</a> | <a href=\"/credentials\">Credentials</a> | <a href=\"/ota\">Firmware</a></p>"
         "<p>Serial rescue console over local WiFi AP. It is not HDMI KVM, HID remote input, virtual media, power control, cloud access, or command automation.</p>"
         "<dl><dt>Firmware</dt><dd>%s</dd><dt>Project</dt><dd>%s</dd><dt>Build date</dt><dd>%s %s</dd>"
-        "<dt>IDF</dt><dd>%s</dd><dt>Security model</dt><dd>Local AP, web auth, CSRF, Origin checks, single writer, RAM diagnostics.</dd>"
+        "<dt>IDF</dt><dd>%s</dd><dt>Security model</dt><dd>Local AP, web auth, CSRF, Origin checks, one active web session, RAM diagnostics.</dd>"
         "<dt>HTTPS fingerprint mode</dt><dd>%s. See docs/https-fingerprint.md; operators must compare the browser certificate SHA-256 fingerprint with the AMOLED fingerprint before trusting TLS.</dd>"
         "<dt>Production build</dt><dd>Requires Secure Boot, Flash Encryption, encrypted NVS for persisted secrets, and closed debug/JTAG. Treat unsigned debug builds as lab-only.</dd>"
         "<dt>Scrollback</dt><dd>%u/%u bytes retained, %llu old bytes dropped.</dd>"
-        "<dt>Emergency lock</dt><dd>Hold BOOT for 3 seconds to invalidate web sessions, release write control, and close WebSockets.</dd>"
+        "<dt>Emergency lock</dt><dd>Hold BOOT for 3 seconds to invalidate the web session and close WebSockets.</dd>"
         "<dt>Factory reset</dt><dd>Hold BOOT for 10 seconds. This clears project NVS config and reboots.</dd></dl>"
         "</main></body></html>",
         app != NULL ? app->version : "unknown",
@@ -886,12 +886,12 @@ static esp_err_t runbook_handler(httpd_req_t *req)
         "<h2>Antes de escribir</h2><ol>"
         "<li>Confirma que estas conectado al AP local correcto y fisicamente junto al servidor.</li>"
         "<li>Comprueba en Status que USB esta conectado y que no hay drops creciendo rapidamente.</li>"
-        "<li>Abre Terminal en modo solo lectura y espera salida antes de pedir escritura.</li>"
+        "<li>Abre Terminal y espera salida antes de enviar comandos.</li>"
         "</ol><h2>Recuperar acceso</h2><ol>"
-        "<li>Pulsa <code>Unlock input</code> solo si necesitas enviar comandos.</li>"
+        "<li>La sesion web activa tiene control de teclado automaticamente.</li>"
         "<li>Usa comandos de diagnostico de bajo riesgo primero: <code>ip addr</code>, <code>ip route</code>, <code>systemctl status</code>, <code>journalctl -xb</code>.</li>"
         "<li>Evita pegar bloques largos. El paste grande se confirma y se trocea, pero sigue ejecutandose en la consola fisica.</li>"
-        "<li>Bloquea la entrada con <code>Lock input</code> al terminar.</li>"
+        "<li>Cierra sesion al terminar. Un nuevo login reemplaza la sesion anterior.</li>"
         "</ol><h2>Si algo falla</h2><ol>"
         "<li>Si USB aparece desconectado, revisa cable, puerto y que el servidor exponga consola CDC ACM.</li>"
         "<li>Si hay rate limit, espera unos segundos y reduce recargas/conexiones.</li>"
@@ -938,7 +938,7 @@ static esp_err_t macros_page_handler(httpd_req_t *req)
         "button{border:1px solid #1f5b4b;border-radius:12px;background:#102a23;color:#e9fff8;padding:10px 12px;font:inherit;font-weight:700}"
         "button:disabled{opacity:.45}code{color:#bffff0}a{color:#7dffe1}.macro{border-top:1px solid #174436;padding:12px 0}</style></head><body><main>"
         "<h1>Safe macros</h1><p><a href=\"/terminal\">Terminal</a> | <a href=\"/\">Status</a> | <a href=\"/runbook\">Runbook</a></p>"
-        "<p>Macros are visible for audit but disabled by default. They never run automatically and require explicit confirmation, USB connected, demo off, and active write control.</p>"
+        "<p>Macros are visible for audit but disabled by default. They never run automatically and require explicit confirmation, USB connected, demo off, and the active web session.</p>"
         "<p>Status: macros=%s, USB=%s, demo=%s, writer=%s.</p>",
         s_macros_enabled ? "enabled" : "disabled",
         usb.connected ? "connected" : "disconnected",
@@ -995,7 +995,7 @@ static esp_err_t login_get_handler(httpd_req_t *req)
         return redirect_to(req, "/");
     }
 
-    char login_page[1900];
+    char login_page[2400];
     const int written = snprintf(
         login_page,
         sizeof(login_page),
@@ -1004,15 +1004,16 @@ static esp_err_t login_get_handler(httpd_req_t *req)
         "*{box-sizing:border-box}body{margin:0;min-height:100svh;background:linear-gradient(180deg,#020504,#07130f);color:#eafff8;font:16px sans-serif;display:grid;place-items:center;padding:18px}"
         "main{width:100%%;max-width:380px;border:1px solid #174436;border-radius:22px;padding:22px;background:#030807;box-shadow:0 18px 50px #0009}"
         "h1{margin:0 0 8px;font-size:24px}input,button{border-radius:12px;padding:13px;margin-top:12px;font:inherit}"
-        ".field{position:relative}input{width:100%%;background:#000;color:#fff;border:1px solid #245c4c;padding-right:50px}button{width:100%%;background:#0c3429;color:#bffff0;border:1px solid #2ee6b8;font-weight:700}"
-        "#togglePassword{position:absolute;right:7px;top:7px;width:38px;height:38px;margin:0;padding:0;border-radius:10px;background:#07130f;color:#bffff0;border:1px solid #245c4c}"
+        ".field{position:relative}input{width:100%%;background:#000;color:#fff;border:1px solid #245c4c;padding-right:58px}button{width:100%%;background:#0c3429;color:#bffff0;border:1px solid #2ee6b8;font-weight:700}"
+        "#togglePassword{position:absolute;right:7px;top:50%%;transform:translateY(-50%%);width:40px;height:40px;margin:0;padding:0;border-radius:10px;background:#07130f;color:#bffff0;border:1px solid #245c4c;line-height:1}"
+        "#togglePassword.active{background:#12382e;border-color:#2ee6b8;color:#fff}"
         "p{color:#8bb5aa;line-height:1.4;margin:8px 0 14px}</style></head><body><main><h1>Serial console</h1>"
         "<p>Enter the web password without spaces.</p>"
         "<form method=\"post\" action=\"/login\"><div class=\"field\"><input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" placeholder=\"Web password\" autofocus>"
-        "<button id=\"togglePassword\" type=\"button\" aria-label=\"Show password\">&#128065;</button></div>"
+        "<button id=\"togglePassword\" type=\"button\" aria-label=\"Show password\" aria-pressed=\"false\">&#128065;</button></div>"
         "<button type=\"submit\">Unlock console</button></form></main>"
         "<script>const password=document.getElementById('password'),togglePassword=document.getElementById('togglePassword');"
-        "togglePassword.onclick=()=>{password.type=password.type==='password'?'text':'password';togglePassword.setAttribute('aria-label',password.type==='password'?'Show password':'Hide password')};</script></body></html>");
+        "togglePassword.onclick=()=>{const shown=password.type==='password';password.type=shown?'text':'password';togglePassword.classList.toggle('active',shown);togglePassword.setAttribute('aria-pressed',shown?'true':'false');togglePassword.setAttribute('aria-label',shown?'Hide password':'Show password')};</script></body></html>");
     if (written < 0 || written >= (int)sizeof(login_page)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "login overflow");
     }
@@ -1118,7 +1119,7 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "body{overflow:hidden}"
         "#hud{position:fixed;right:12px;top:12px;z-index:5;display:flex;align-items:center;gap:8px;padding:7px;border:1px solid #1f4b3f;border-radius:999px;background:rgba(4,10,8,.82);backdrop-filter:blur(14px);box-shadow:0 14px 40px #000b}"
         ".pill{border:1px solid var(--line);border-radius:999px;padding:5px 9px;color:var(--muted);background:#050907;font-size:12px;letter-spacing:.04em}.stream{display:flex;align-items:center;gap:7px}.dot{width:9px;height:9px;border-radius:50%%;background:var(--warn);box-shadow:0 0 12px var(--warn)}.dot.ok{background:#43ff9b;box-shadow:0 0 14px #43ff9b}.dot.bad{background:var(--bad);box-shadow:0 0 14px var(--bad)}"
-        "#control{display:flex;align-items:center;gap:8px;min-width:126px;justify-content:space-between;border-radius:999px;padding:4px 6px 4px 11px}.switch{width:34px;height:20px;border-radius:999px;background:#24342f;position:relative}.switch:after{content:'';position:absolute;left:3px;top:3px;width:14px;height:14px;border-radius:50%%;background:#78958d;transition:.16s}.write .switch{background:#1f7d62}.write .switch:after{left:17px;background:#eafff8}.busy,.usb{border-color:var(--warn);color:var(--warn)}.locked{border-color:var(--bad);color:var(--bad)}"
+        ".usb{border-color:var(--warn);color:var(--warn)}.locked{border-color:var(--bad);color:var(--bad)}"
         "button,a{font:inherit;color:var(--text)}button{border:1px solid var(--line);border-radius:10px;background:#0a1813;padding:6px 10px;font-weight:700}button.primary{border-color:var(--hot)}button.danger{border-color:var(--bad);color:#ffd4c7}button:disabled{opacity:.42}"
         "#menu{position:relative}#keys{display:none;position:fixed;right:12px;top:62px;z-index:4;width:min(310px,calc(100vw - 24px));max-height:calc(100svh - 74px);overflow:auto;padding:8px;border:1px solid var(--line);border-radius:14px;background:#06100d;box-shadow:0 20px 50px #000b}"
         "#keys.open{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}#keys a{grid-column:1/-1;text-align:center;color:var(--hot);text-decoration:none;padding:7px}"
@@ -1126,31 +1127,28 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "#terminal:focus{box-shadow:inset 0 0 0 1px #21483d}.hint{color:var(--muted)}#kbd{position:fixed;inset:0;opacity:.01;color:transparent;background:transparent;border:0;resize:none;caret-color:transparent;pointer-events:none}"
         "@media(max-width:640px){#hud{right:8px;top:8px;gap:6px;padding:6px}.pill{font-size:11px;padding:5px 7px}button{padding:7px 9px}#terminal{padding:12px 12px 76px;font-size:13px}}"
         "</style></head><body><div id=\"hud\"><span id=\"state\" class=\"pill stream\"><span id=\"streamDot\" class=\"dot\"></span><span id=\"streamText\">STREAM ...</span></span>"
-        "<button class=\"primary\" id=\"control\"><span id=\"controlText\">%s</span><span id=\"controlSwitch\" class=\"switch\"></span></button>"
         "<div id=\"menu\"><button id=\"menuBtn\" aria-label=\"More controls\">More</button><div id=\"keys\">"
         "<button data-k=\"\\u0003\">%s</button><button data-k=\"\\u0004\">%s</button><button data-k=\"\\r\">%s</button>"
         "<button data-k=\"\\u001b\">%s</button><button data-k=\"\\t\">%s</button><button data-k=\"\\u001b[A\">%s</button>"
         "<button data-k=\"\\u001b[B\">%s</button><button data-k=\"\\u001b[D\">%s</button><button data-k=\"\\u001b[C\">%s</button>"
         "<button class=\"danger\" id=\"panic\">Emergency lock</button><button class=\"danger\" id=\"logout\">Sign out</button><a href=\"/diagnostics\">Diagnostics</a></div></div></div>"
-        "<div id=\"terminal\" tabindex=\"0\"><span class=\"hint\">Take control, then press Enter to wake console.</span></div>"
+        "<div id=\"terminal\" tabindex=\"0\"><span class=\"hint\">Control active. Press Enter to wake console.</span></div>"
         "<textarea id=\"kbd\" autocapitalize=\"none\" autocomplete=\"off\" spellcheck=\"false\"></textarea>"
         "<script>"
-        "const CSRF='%s';let canWrite=false,usbConnected=%s,writerState='read-only',locked=false,connected=false,empty=true;"
+        "const CSRF='%s';let canWrite=false,usbConnected=%s,writerState='write-active',locked=false,connected=false,empty=true;"
         "const CHUNK=%u,PASTE_CONFIRM=%u,PASTE_MAX=%u;"
-        "const terminal=document.getElementById('terminal'),kbd=document.getElementById('kbd'),state=document.getElementById('state'),streamText=document.getElementById('streamText'),streamDot=document.getElementById('streamDot'),controlBtn=document.getElementById('control'),controlText=document.getElementById('controlText');"
-        "function controlLabel(){if(locked)return'%s';if(!usbConnected)return'%s';if(writerState==='write-active')return'%s';if(writerState==='writer-busy')return'%s';return'%s'}"
+        "const terminal=document.getElementById('terminal'),kbd=document.getElementById('kbd'),state=document.getElementById('state'),streamText=document.getElementById('streamText'),streamDot=document.getElementById('streamDot');"
         "function setStream(text,ok){streamText.textContent=text;streamDot.className='dot '+(ok?'ok':'bad')}"
-        "function render(){const label=controlLabel();controlText.textContent=label;controlBtn.className='primary '+(writerState==='write-active'?'write':writerState==='writer-busy'?'busy':!usbConnected?'usb':locked?'locked':'');"
-        "canWrite=connected&&usbConnected&&writerState==='write-active'&&!locked;kbd.disabled=!canWrite;kbd.style.pointerEvents=canWrite?'auto':'none';document.querySelectorAll('#keys button[data-k]').forEach(b=>b.disabled=!canWrite);controlBtn.disabled=locked||!connected||!usbConnected||writerState==='writer-busy';terminal.setAttribute('aria-label',canWrite?'Serial terminal, keyboard control active':'Serial terminal, watching only')}"
+        "function render(){canWrite=connected&&usbConnected&&writerState==='write-active'&&!locked;kbd.disabled=!canWrite;kbd.style.pointerEvents=canWrite?'auto':'none';document.querySelectorAll('#keys button[data-k]').forEach(b=>b.disabled=!canWrite);terminal.setAttribute('aria-label',canWrite?'Serial terminal, keyboard control active':'Serial terminal unavailable')}"
         "let ws,backoff=500;function appendTerminalData(t){if(empty){terminal.textContent='';empty=false}let s=terminal.textContent;"
         "for(const ch of t){if(ch==='\\b'||ch==='\\u007f'){if(s.length)s=s.slice(0,-1)}else if(ch==='\\r'){}else{s+=ch}}"
         "terminal.textContent=s;terminal.scrollTop=terminal.scrollHeight;if(terminal.textContent.length>65536)terminal.textContent=terminal.textContent.slice(-49152)}"
         "function connect(){setStream('Stream ...',false);connected=false;render();const scheme=location.protocol==='https:'?'wss://':'ws://';ws=new WebSocket(scheme+location.host+'/ws');ws.binaryType='arraybuffer';"
-        "ws.onopen=()=>{setStream('Stream OK',true);connected=true;writerState='read-only';backoff=500;render();refreshStatus();terminal.focus()};"
+        "ws.onopen=()=>{setStream('Stream OK',true);connected=true;writerState='write-active';backoff=500;render();refreshStatus();terminal.focus()};"
         "ws.onmessage=e=>{if(e.data instanceof ArrayBuffer)appendTerminalData(new TextDecoder().decode(e.data));else appendTerminalData(e.data)};"
-        "ws.onclose=()=>{connected=false;writerState='read-only';if(locked)return;setStream('Stream off',false);render();refreshStatus();setTimeout(connect,backoff);backoff=Math.min(backoff*2,5000)};"
+        "ws.onclose=()=>{connected=false;writerState='write-active';if(locked)return;setStream('Stream off',false);render();refreshStatus();setTimeout(connect,backoff);backoff=Math.min(backoff*2,5000)};"
         "ws.onerror=()=>ws.close()}"
-        "async function refreshStatus(){try{const r=await fetch('/terminal-status.json',{cache:'no-store'});if(r.status===401||r.redirected){locked=true;setStream('Session expired',false);render();return}if(!r.ok)return;const s=await r.json();usbConnected=!!s.usb_connected;writerState=s.writer_state||'read-only';locked=writerState==='locked';render()}catch(e){}}"
+        "async function refreshStatus(){try{const r=await fetch('/terminal-status.json',{cache:'no-store'});if(r.status===401||r.redirected){locked=true;setStream('Session expired',false);render();return}if(!r.ok)return;const s=await r.json();usbConnected=!!s.usb_connected;writerState=s.writer_state||'write-active';locked=writerState==='locked';render()}catch(e){}}"
         "async function post(u){const r=await fetch(u,{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();await refreshStatus();if(!r.ok)alert(t||('Request failed: '+r.status));return r.ok}"
         "let pending='',flushTimer=0;function flushSend(){if(!(canWrite&&ws&&ws.readyState===1)){pending='';flushTimer=0;return}const data=pending;pending='';flushTimer=0;if(!data)return;if(data.length<=CHUNK){ws.send(data);return}for(let i=0;i<data.length;i+=CHUNK)ws.send(data.slice(i,i+CHUNK))}"
         "function send(data){if(!(canWrite&&ws&&ws.readyState===1))return;if(pending.length+data.length>CHUNK)flushSend();pending+=data;if(!flushTimer)flushTimer=setTimeout(flushSend,20)}"
@@ -1164,13 +1162,10 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "kbd.addEventListener('paste',e=>{const t=(e.clipboardData||window.clipboardData).getData('text');e.preventDefault();safePaste(t)});"
         "document.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>send(b.dataset.k));"
         "document.getElementById('menuBtn').onclick=()=>document.getElementById('keys').classList.toggle('open');"
-        "controlBtn.onclick=async()=>{if(writerState==='write-active'){await post('/api/write/release');writerState='read-only';render();return}"
-        "if(confirm('Take keyboard control?\\n\\nEvery key you press will be sent to the attached server.')){const ok=await post('/api/write/acquire');if(ok){writerState='write-active';render();focusTerminal()}else if(writerState==='read-only')writerState='writer-busy';render()}};"
         "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock closes all web sessions and releases keyboard control. Continue?')){const ok=await post('/api/emergency-lock');if(ok){locked=true;if(ws){ws.onclose=null;ws.close()}location='/login'}}};"
         "document.getElementById('logout').onclick=async()=>{locked=true;if(ws){ws.onclose=null;ws.close()}await post('/logout');location='/login'};"
         "render();refreshStatus();setInterval(refreshStatus,2000);connect();terminal.focus();"
         "</script></body></html>",
-        WEB_TERMINAL_ACTION_UNLOCK,
         WEB_TERMINAL_KEY_CTRL_C,
         WEB_TERMINAL_KEY_CTRL_D,
         WEB_TERMINAL_KEY_ENTER,
@@ -1184,12 +1179,7 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         usb.connected ? "true" : "false",
         (unsigned)WEB_INPUT_POLICY_FRAME_MAX,
         (unsigned)WEB_PASTE_CONFIRM_BYTES,
-        (unsigned)WEB_PASTE_MAX_BYTES,
-        WEB_TERMINAL_STATUS_LOCKED,
-        WEB_TERMINAL_STATUS_USB_DISCONNECTED,
-        WEB_TERMINAL_ACTION_LOCK,
-        WEB_TERMINAL_STATUS_WRITER_BUSY,
-        WEB_TERMINAL_ACTION_UNLOCK);
+        (unsigned)WEB_PASTE_MAX_BYTES);
     if (written < 0 || written >= (int)sizeof(terminal_page)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "terminal overflow");
     }
@@ -1322,51 +1312,6 @@ static esp_err_t macro_run_handler(httpd_req_t *req)
 
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "macro queued");
     return httpd_resp_sendstr(req, "queued");
-}
-
-static esp_err_t write_acquire_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(
-        require_mutating_auth_csrf_origin(req, "write acquire rejected: origin", "write acquire rejected: csrf", session_token),
-        TAG,
-        "write acquire auth failed");
-    xSemaphoreTake(s_demo_writer_lock, portMAX_DELAY);
-    if (!web_demo_policy_can_acquire_writer(demo_serial_runtime_get_status().active)) {
-        xSemaphoreGive(s_demo_writer_lock);
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "write acquire rejected: demo active");
-        httpd_resp_set_status(req, "409 Conflict");
-        return httpd_resp_send(req, "demo active", HTTPD_RESP_USE_STRLEN);
-    }
-    if (!web_security_acquire_writer(&s_security, session_token, now_ms())) {
-        xSemaphoreGive(s_demo_writer_lock);
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "write acquire rejected: busy");
-        httpd_resp_set_status(req, "409 Conflict");
-        return httpd_resp_send(req, "writer busy", HTTPD_RESP_USE_STRLEN);
-    }
-    xSemaphoreGive(s_demo_writer_lock);
-    runtime_status_set_writer_active(true);
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), "write control acquired");
-    return httpd_resp_sendstr(req, "ok");
-}
-
-static esp_err_t write_release_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(
-        require_mutating_auth_csrf_origin(req, "write release rejected: origin", "write release rejected: csrf", session_token),
-        TAG,
-        "write release auth failed");
-    web_security_release_writer(&s_security, session_token);
-    runtime_status_set_writer_active(false);
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), "write control released");
-    return httpd_resp_sendstr(req, "ok");
 }
 
 static esp_err_t emergency_lock_handler(httpd_req_t *req)
@@ -2001,8 +1946,8 @@ static esp_err_t websocket_handler(httpd_req_t *req)
     }
 
     if (!web_security_can_write(&s_security, session_token, now_ms())) {
-        ESP_LOGW(TAG, "dropping websocket input without write lock");
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input dropped: read-only");
+        ESP_LOGW(TAG, "dropping websocket input without active session");
+        event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input dropped: inactive session");
         web_route_trace_mark("/ws", "done");
         return ESP_OK;
     }
@@ -2268,18 +2213,6 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         .handler = logout_handler,
         .user_ctx = NULL,
     };
-    const httpd_uri_t write_acquire_uri = {
-        .uri = "/api/write/acquire",
-        .method = HTTP_POST,
-        .handler = write_acquire_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t write_release_uri = {
-        .uri = "/api/write/release",
-        .method = HTTP_POST,
-        .handler = write_release_handler,
-        .user_ctx = NULL,
-    };
     const httpd_uri_t emergency_lock_uri = {
         .uri = "/api/emergency-lock",
         .method = HTTP_POST,
@@ -2322,8 +2255,6 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ota_page_uri), fail, TAG, "ota page handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_uri), fail, TAG, "diagnostics handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_json_uri), fail, TAG, "diagnostics json handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &write_acquire_uri), fail, TAG, "write acquire handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &write_release_uri), fail, TAG, "write release handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &emergency_lock_uri), fail, TAG, "emergency lock handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &demo_start_uri), fail, TAG, "demo start handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &demo_stop_uri), fail, TAG, "demo stop handler failed");

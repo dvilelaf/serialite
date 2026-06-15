@@ -89,7 +89,14 @@ static void check_login_can_reveal_password(void)
     CHECK(strstr(login, "id=\\\"password\\\"") != NULL && strstr(login, "id=\\\"password\\\"") < next_function);
     CHECK(strstr(login, "id=\\\"togglePassword\\\"") != NULL && strstr(login, "id=\\\"togglePassword\\\"") < next_function);
     CHECK(strstr(login, "aria-label=\\\"Show password\\\"") != NULL && strstr(login, "aria-label=\\\"Show password\\\"") < next_function);
-    CHECK(strstr(login, "password.type==='password'?'text':'password'") != NULL && strstr(login, "password.type==='password'?'text':'password'") < next_function);
+    CHECK(strstr(login, "aria-pressed=\\\"false\\\"") != NULL && strstr(login, "aria-pressed=\\\"false\\\"") < next_function);
+    CHECK(strstr(login, "padding-right:58px") != NULL && strstr(login, "padding-right:58px") < next_function);
+    CHECK(strstr(login, "top:50%%") != NULL && strstr(login, "top:50%%") < next_function);
+    CHECK(strstr(login, "transform:translateY(-50%%)") != NULL && strstr(login, "transform:translateY(-50%%)") < next_function);
+    CHECK(strstr(login, "const shown=password.type==='password'") != NULL && strstr(login, "const shown=password.type==='password'") < next_function);
+    CHECK(strstr(login, "password.type=shown?'text':'password'") != NULL && strstr(login, "password.type=shown?'text':'password'") < next_function);
+    CHECK(strstr(login, "togglePassword.classList.toggle('active',shown)") != NULL && strstr(login, "togglePassword.classList.toggle('active',shown)") < next_function);
+    CHECK(strstr(login, "aria-pressed',shown?'true':'false'") != NULL && strstr(login, "aria-pressed',shown?'true':'false'") < next_function);
     free(web_server);
 }
 
@@ -102,13 +109,14 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "id=\\\"bar\\\"") == NULL);
     CHECK(strstr(web_server, "id=\\\"hud\\\"") != NULL);
     CHECK(strstr(web_server, "id=\\\"streamDot\\\"") != NULL);
-    CHECK(strstr(web_server, "id=\\\"controlSwitch\\\"") != NULL);
+    CHECK(strstr(web_server, "id=\\\"controlSwitch\\\"") == NULL);
     CHECK(strstr(web_server, "id=\\\"mode\\\"") == NULL);
     CHECK(strstr(web_server, "id=\\\"release\\\"") == NULL);
-    CHECK(strstr(web_server, "id=\\\"control\\\"") != NULL);
-    CHECK(strstr(web_server, "controlBtn.onclick") != NULL);
-    CHECK(strstr(web_server, "/api/write/acquire") != NULL);
-    CHECK(strstr(web_server, "/api/write/release") != NULL);
+    CHECK(strstr(web_server, "id=\\\"control\\\"") == NULL);
+    CHECK(strstr(web_server, "controlBtn.onclick") == NULL);
+    CHECK(strstr(web_server, "/api/write/acquire") == NULL);
+    CHECK(strstr(web_server, "/api/write/release") == NULL);
+    CHECK(strstr(web_server, "Control active") != NULL);
     CHECK(strstr(web_server, "terminal.focus()") != NULL);
     CHECK(strstr(web_server, "document.addEventListener('keydown',handleKey)") != NULL);
     CHECK(strstr(web_server, "terminal.addEventListener('keydown'") != NULL);
@@ -192,12 +200,10 @@ int main(void)
 {
     CHECK(web_terminal_contract_has_required_statuses());
     CHECK(web_terminal_contract_has_mobile_keys());
-    CHECK(strcmp(WEB_TERMINAL_STATUS_READ_ONLY, "WATCH") == 0);
+    CHECK(strcmp(WEB_TERMINAL_STATUS_READ_ONLY, "SESSION") == 0);
     CHECK(strcmp(WEB_TERMINAL_STATUS_WRITE_ACTIVE, "CONTROL") == 0);
-    CHECK(strcmp(WEB_TERMINAL_STATUS_WRITER_BUSY, "BUSY") == 0);
+    CHECK(strcmp(WEB_TERMINAL_STATUS_WRITER_BUSY, "REPLACED") == 0);
     CHECK(strcmp(WEB_TERMINAL_STATUS_USB_DISCONNECTED, "USB OFF") == 0);
-    CHECK(strcmp(WEB_TERMINAL_ACTION_UNLOCK, "Take control") == 0);
-    CHECK(strcmp(WEB_TERMINAL_ACTION_LOCK, "Release control") == 0);
     check_pair_code_removed_from_normal_login();
     check_error_handler_does_not_recurse_via_send_err();
     check_login_can_reveal_password();
