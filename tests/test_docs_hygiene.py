@@ -22,12 +22,15 @@ class DocsHygieneTest(unittest.TestCase):
             with self.subTest(path=path.relative_to(REPO_ROOT)):
                 self.assertNotIn("/home/david", path.read_text())
 
-    def test_readme_points_to_current_script_names(self) -> None:
+    def test_readme_is_a_short_main_branch_quickstart(self) -> None:
         readme = (REPO_ROOT / "README.md").read_text()
 
-        self.assertIn("setup-linux-serial-console.sh", readme)
-        self.assertIn("scripts/package-release.sh", readme)
+        self.assertIn("https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/host/setup-linux-serial-console.sh", readme)
         self.assertIn("docs/development.md", readme)
+        self.assertNotIn("vX.Y.Z", readme)
+        self.assertNotIn("Firmware Releases", readme)
+        self.assertNotIn("Host Setup", readme)
+        self.assertNotIn("scripts/package-release.sh", readme)
         self.assertNotIn("scripts/verify.sh", readme)
         self.assertNotIn("verify_production_profile.py", readme)
 
