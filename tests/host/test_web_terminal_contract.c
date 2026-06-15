@@ -106,6 +106,19 @@ static void check_terminal_output_interprets_backspace(void)
     free(web_server);
 }
 
+static void check_diagnostics_has_clear_terminal_return(void)
+{
+    char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
+    const char *diagnostics = strstr(web_server, "static esp_err_t diagnostics_handler");
+    CHECK(diagnostics != NULL);
+    const char *next_function = strstr(diagnostics + 1, "static esp_err_t diagnostics_json_handler");
+    CHECK(next_function != NULL);
+    const char *back = strstr(diagnostics, "Back to terminal");
+    CHECK(back != NULL && back < next_function);
+    CHECK(strstr(back, "href=\\\"/terminal\\\"") != NULL && strstr(back, "href=\\\"/terminal\\\"") < next_function);
+    free(web_server);
+}
+
 static void check_usb_serial_jtag_is_not_secondary_console(void)
 {
     char *defaults = read_repo_source_file("sdkconfig.defaults");
@@ -170,6 +183,7 @@ int main(void)
     check_error_handler_does_not_recurse_via_send_err();
     check_terminal_is_terminal_first_not_command_composer();
     check_terminal_output_interprets_backspace();
+    check_diagnostics_has_clear_terminal_return();
     check_usb_serial_jtag_is_not_secondary_console();
     check_lvgl_access_secrets_are_secrets_only();
     check_lvgl_access_secret_layout_avoids_overlap();

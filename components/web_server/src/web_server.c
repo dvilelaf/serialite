@@ -1801,8 +1801,10 @@ static esp_err_t diagnostics_handler(httpd_req_t *req)
         "body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px}"
         "code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}"
         ".card{border:1px solid #174436;border-radius:16px;padding:14px;margin:12px 0;background:#030807}"
+        ".back{display:inline-block;border:1px solid #7dffe1;border-radius:999px;padding:9px 13px;color:#e9fff8;text-decoration:none;background:#0a1813;font-weight:700}"
         "dt{color:#7dffe1}dd{margin:0 0 8px 0}</style></head><body>"
-        "<h1>Diagnostics</h1><p><a href=\"/terminal\">Terminal</a> | <a href=\"/\">Status</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/diagnostics.json\">JSON</a></p>"
+        "<p><a class=\"back\" href=\"/terminal\">Back to terminal</a></p>"
+        "<h1>Diagnostics</h1><p><a href=\"/\">Status</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/diagnostics.json\">JSON</a></p>"
         "<section class=\"card\"><h2>Runtime</h2><dl>"
         "<dt>Uptime ms</dt><dd>%llu</dd>"
         "<dt>Reset reason</dt><dd>%d</dd>"
@@ -1866,7 +1868,7 @@ static esp_err_t diagnostics_handler(httpd_req_t *req)
         written += add;
     }
 
-    const char tail[] = "</pre></section></body></html>";
+    const char tail[] = "</pre></section><p><a class=\"back\" href=\"/terminal\">Back to terminal</a></p></body></html>";
     if ((size_t)written + sizeof(tail) > sizeof(body)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "diagnostics overflow");
     }
