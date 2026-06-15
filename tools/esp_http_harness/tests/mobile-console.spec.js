@@ -35,6 +35,8 @@ test('mobile operator opens xterm console and terminal controls work end-to-end'
   await page.locator('#consoleNotice').evaluate((el) => el.classList.remove('hidden'));
   await expect(page.locator('#consoleNotice')).toHaveCSS('transform', /matrix\(1, 0, 0, 1, -/);
   await page.locator('#consoleNotice').evaluate((el) => el.classList.add('hidden'));
+  await expect(page.getByRole('button', { name: 'Fullscreen' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'More controls' })).toHaveText('+');
   await page.locator('#terminal').click();
   await page.keyboard.type('whoami');
   await page.keyboard.press('Enter');
@@ -46,7 +48,7 @@ test('mobile operator opens xterm console and terminal controls work end-to-end'
   expect(failedRequests).toEqual([]);
 
   page.on('dialog', (dialog) => dialog.accept());
-  await page.getByRole('button', { name: 'More' }).click();
+  await page.getByRole('button', { name: 'More controls' }).click();
   await page.getByRole('button', { name: 'Emergency lock' }).click();
   await expect
     .poll(async () => {
