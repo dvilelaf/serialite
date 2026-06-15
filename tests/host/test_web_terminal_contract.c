@@ -99,6 +99,23 @@ static void check_usb_serial_jtag_is_not_secondary_console(void)
     free(defaults);
 }
 
+static void check_lvgl_access_secrets_are_secrets_only(void)
+{
+    char *lvgl_ui = read_repo_source_file("components/lvgl_ui/src/lvgl_ui.c");
+    const char *secrets = strstr(lvgl_ui, "lv_obj_t *secrets = add_card");
+    CHECK(secrets != NULL);
+    const char *end = strstr(secrets, "strlcpy(s_ctx.wifi_ssid");
+    CHECK(end != NULL);
+
+    CHECK(strstr(secrets, "WiFi password") != NULL && strstr(secrets, "WiFi password") < end);
+    CHECK(strstr(secrets, "Web password") != NULL && strstr(secrets, "Web password") < end);
+    CHECK(strstr(secrets, "lv_qrcode_create(secrets)") != NULL && strstr(secrets, "lv_qrcode_create(secrets)") < end);
+    CHECK(strstr(secrets, "display_url") == NULL || strstr(secrets, "display_url") > end);
+    CHECK(strstr(secrets, "http://") == NULL || strstr(secrets, "http://") > end);
+    CHECK(strstr(secrets, "OPEN") == NULL || strstr(secrets, "OPEN") > end);
+    free(lvgl_ui);
+}
+
 int main(void)
 {
     CHECK(web_terminal_contract_has_required_statuses());
@@ -113,5 +130,6 @@ int main(void)
     check_error_handler_does_not_recurse_via_send_err();
     check_terminal_is_terminal_first_not_command_composer();
     check_usb_serial_jtag_is_not_secondary_console();
+    check_lvgl_access_secrets_are_secrets_only();
     return 0;
 }

@@ -74,6 +74,7 @@ typedef struct {
     lv_obj_t *battery_label;
     lv_obj_t *wifi_qr;
     lv_obj_t *wifi_placeholder;
+    lv_obj_t *wifi_password_label;
     lv_obj_t *web_password_label;
     lv_obj_t *ssid_label;
     lv_obj_t *secret_hint_label;
@@ -324,6 +325,10 @@ static void set_secret_labels(bool reveal)
         secret_display_text(s_ctx.web_password, reveal, text, sizeof(text))) {
         lv_label_set_text(s_ctx.web_password_label, text);
     }
+    if (s_ctx.wifi_password_label != NULL &&
+        secret_display_text(s_ctx.wifi_password, reveal, text, sizeof(text))) {
+        lv_label_set_text(s_ctx.wifi_password_label, text);
+    }
     if (s_ctx.secret_hint_label != NULL) {
         if (reveal && secret_display_reveal_hint(SECRET_REVEAL_TIMEOUT_US / 1000ULL, text, sizeof(text))) {
             lv_label_set_text(s_ctx.secret_hint_label, text);
@@ -555,11 +560,17 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     lv_obj_set_pos(s_ctx.wifi_qr, UI_CARD_PAD, 0);
     lv_obj_add_flag(s_ctx.wifi_qr, LV_OBJ_FLAG_HIDDEN);
 
+    lv_obj_t *wifi_title = add_label(secrets, "WiFi password", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), UI_SECRET_RIGHT_W);
+    lv_obj_set_pos(wifi_title, UI_SECRET_RIGHT_X, 0);
+
+    s_ctx.wifi_password_label = add_label(secrets, password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_SECRET_RIGHT_W);
+    lv_obj_set_pos(s_ctx.wifi_password_label, UI_SECRET_RIGHT_X, 22);
+
     lv_obj_t *web_title = add_label(secrets, "Web password", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), UI_SECRET_RIGHT_W);
-    lv_obj_set_pos(web_title, UI_SECRET_RIGHT_X, 8);
+    lv_obj_set_pos(web_title, UI_SECRET_RIGHT_X, 78);
 
     s_ctx.web_password_label = add_label(secrets, web_password, &lv_font_montserrat_20, lv_color_hex(UI_COLOR_TEXT), UI_SECRET_RIGHT_W);
-    lv_obj_set_pos(s_ctx.web_password_label, UI_SECRET_RIGHT_X, 36);
+    lv_obj_set_pos(s_ctx.web_password_label, UI_SECRET_RIGHT_X, 100);
 
     strlcpy(s_ctx.wifi_ssid, ssid, sizeof(s_ctx.wifi_ssid));
     strlcpy(s_ctx.wifi_password, password, sizeof(s_ctx.wifi_password));
