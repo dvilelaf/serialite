@@ -345,8 +345,33 @@ static bool require_auth_or_redirect(httpd_req_t *req, char out_token[WEB_SECURI
     if (request_authenticated(req, out_token)) {
         return true;
     }
-    (void)redirect_to(req, "/login");
+    (void)redirect_to(req, "/terminal");
     return false;
+}
+
+static bool ensure_web_session(httpd_req_t *req, char out_token[WEB_SECURITY_TOKEN_BUF_LEN])
+{
+    if (request_authenticated(req, out_token)) {
+        return true;
+    }
+
+    const web_security_login_result_t result = web_security_login(
+        &s_security,
+        now_ms(),
+        security_random,
+        NULL);
+    if (result != WEB_SECURITY_LOGIN_OK) {
+        event_log_append(EVENT_LOG_ERROR, now_ms(), "session creation failed");
+        return false;
+    }
+
+    strlcpy(out_token, s_security.session_token, WEB_SECURITY_TOKEN_BUF_LEN);
+    runtime_status_set_locked(false);
+    char cookie[96];
+    snprintf(cookie, sizeof(cookie), "kvm_session=%s; HttpOnly; SameSite=Strict; Path=/", s_security.session_token);
+    httpd_resp_set_hdr(req, "Set-Cookie", cookie);
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), "session auto-created");
+    return true;
 }
 
 static bool url_decode(char *value)
@@ -750,69 +775,8 @@ static esp_err_t index_handler(httpd_req_t *req)
     web_route_trace_mark("/", "enter");
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!require_auth_or_redirect(req, session_token)) {
-        return ESP_OK;
-    }
-
-    const usb_console_status_t usb = usb_console_get_status();
-    const wifi_ap_status_t wifi = wifi_ap_get_status();
-    const terminal_bridge_status_t bridge = terminal_bridge_get_status();
-    const demo_serial_runtime_status_t demo = demo_serial_runtime_get_status();
-    const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
-    if (csrf == NULL) {
-        return redirect_to(req, "/login");
-    }
-
-    char body[1600];
-    const int written = snprintf(
-        body,
-        sizeof(body),
-        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>ESP32-KVM</title><style>body{background:#050b09;color:#e9fff8;font:16px sans-serif;margin:24px}"
-        "a,button{color:#7dffe1}.card{border:1px solid #164235;border-radius:16px;padding:16px;max-width:720px}</style></head><body>"
-        "<div class=\"card\">"
-        "<h1>ESP32-KVM</h1>"
-        "<p><strong>Serial rescue console. Not HDMI KVM.</strong></p>"
-        "<p>WiFi AP: %s</p>"
-        "<p>IP: %s</p>"
-        "<p>Clientes: %u</p>"
-        "<p>USB: %s</p>"
-        "<p>Demo serial: %s, bytes=%llu</p>"
-        "<p>RX bytes: %llu</p>"
-        "<p>TX bytes: %llu</p>"
-        "<p>Bridge USB RX: %llu</p>"
-        "<p>Bridge USB TX: %llu</p>"
-        "<p>Scrollback: %u/%u bytes, dropped old=%llu</p>"
-        "<p><a href=\"/terminal\">Abrir terminal</a></p>"
-        "<p><a href=\"/diagnostics\">Diagnostico</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/macros\">Macros</a> | <a href=\"/credentials\">Credentials</a> | <a href=\"/config\">Config</a> | <a href=\"/ota\">Firmware</a> | <a href=\"/about\">About</a></p>"
-        "<p><a href=\"/logout\" onclick=\"event.preventDefault();fetch('/logout',{method:'POST',headers:{'X-CSRF-Token':'%s'}}).then(()=>location='/login')\">Logout</a></p>"
-        "</div>"
-        "</body></html>",
-        wifi.started ? "activo" : "inactivo",
-        wifi.ip_addr,
-        wifi.connected_clients,
-        usb.connected ? "conectado" : "desconectado",
-        demo.active ? "activo" : "inactivo",
-        (unsigned long long)demo.bytes_emitted,
-        (unsigned long long)usb.bytes_received,
-        (unsigned long long)usb.bytes_sent,
-        (unsigned long long)bridge.bytes_from_usb,
-        (unsigned long long)bridge.bytes_to_usb,
-        (unsigned)bridge.scrollback_retained,
-        (unsigned)bridge.scrollback_capacity,
-        (unsigned long long)bridge.scrollback_dropped_oldest,
-        csrf);
-
-    if (written < 0 || written >= (int)sizeof(body)) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "status overflow");
-    }
-
-    send_no_store_headers(req);
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
     web_route_trace_mark("/", "done");
-    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+    return redirect_to(req, "/terminal");
 }
 
 static esp_err_t about_handler(httpd_req_t *req)
@@ -912,12 +876,12 @@ static esp_err_t macros_page_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!require_auth_or_redirect(req, session_token)) {
-        return ESP_OK;
+    if (!ensure_web_session(req, session_token)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "session creation failed");
     }
     const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
     if (csrf == NULL) {
-        return redirect_to(req, "/login");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "session unavailable");
     }
 
     const web_macro_descriptor_t *macros = NULL;
@@ -985,69 +949,6 @@ static esp_err_t macros_page_handler(httpd_req_t *req)
     return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
 }
 
-static esp_err_t login_get_handler(httpd_req_t *req)
-{
-    web_route_trace_mark("/login", "enter");
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    if (request_authenticated(req, (char[WEB_SECURITY_TOKEN_BUF_LEN]){0})) {
-        return redirect_to(req, "/");
-    }
-
-    char login_page[2400];
-    const int written = snprintf(
-        login_page,
-        sizeof(login_page),
-        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>KVM Login</title><style>"
-        "*{box-sizing:border-box}body{margin:0;min-height:100svh;background:linear-gradient(180deg,#020504,#07130f);color:#eafff8;font:16px sans-serif;display:grid;place-items:center;padding:18px}"
-        "main{width:100%%;max-width:380px;border:1px solid #174436;border-radius:22px;padding:22px;background:#030807;box-shadow:0 18px 50px #0009}"
-        "h1{margin:0 0 8px;font-size:24px}p{color:#8bb5aa;line-height:1.4;margin:8px 0 18px}button{width:100%%;border-radius:12px;padding:13px;margin-top:12px;font:inherit;background:#0c3429;color:#bffff0;border:1px solid #2ee6b8;font-weight:700}"
-        ".note{font-size:13px;color:#6b8f85}</style></head><body><main><h1>Serial console</h1>"
-        "<p>This opens a local web session on the KVM access point. Authenticate in the Linux terminal when prompted.</p>"
-        "<form method=\"post\" action=\"/login\"><button type=\"submit\">Open console</button></form>"
-        "<p class=\"note\">Only one web session is active. A new login replaces the previous session.</p></main></body></html>");
-    if (written < 0 || written >= (int)sizeof(login_page)) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "login overflow");
-    }
-
-    send_no_store_headers(req);
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    web_route_trace_mark("/login", "done");
-    return httpd_resp_send(req, login_page, HTTPD_RESP_USE_STRLEN);
-}
-
-static esp_err_t login_post_handler(httpd_req_t *req)
-{
-    web_route_trace_mark("/login POST", "enter");
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    const web_security_login_result_t result = web_security_login(
-        &s_security,
-        now_ms(),
-        security_random,
-        NULL);
-
-    if (result == WEB_SECURITY_LOGIN_LOCKED) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "login locked after repeated failures");
-        httpd_resp_set_status(req, "429 Too Many Requests");
-        return httpd_resp_send(req, "login temporarily locked", HTTPD_RESP_USE_STRLEN);
-    }
-    if (result != WEB_SECURITY_LOGIN_OK) {
-        event_log_append(EVENT_LOG_ERROR, now_ms(), "session creation failed");
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "session creation failed");
-    }
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), "login ok");
-    runtime_status_set_locked(false);
-    char cookie[96];
-    snprintf(cookie, sizeof(cookie), "kvm_session=%s; HttpOnly; SameSite=Strict; Path=/", s_security.session_token);
-    httpd_resp_set_hdr(req, "Set-Cookie", cookie);
-    web_route_trace_mark("/login POST", "done");
-    return redirect_to(req, "/terminal");
-}
-
 static esp_err_t logout_handler(httpd_req_t *req)
 {
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
@@ -1056,7 +957,7 @@ static esp_err_t logout_handler(httpd_req_t *req)
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
     if (!request_authenticated(req, session_token)) {
-        return redirect_to(req, "/login");
+        return redirect_to(req, "/terminal");
     }
     if (!csrf_header_valid(req, session_token)) {
         return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid csrf");
@@ -1065,7 +966,7 @@ static esp_err_t logout_handler(httpd_req_t *req)
     runtime_status_set_writer_active(false);
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "logout");
     httpd_resp_set_hdr(req, "Set-Cookie", "kvm_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
-    return redirect_to(req, "/login");
+    return redirect_to(req, "/terminal");
 }
 
 static esp_err_t terminal_handler(httpd_req_t *req)
@@ -1075,12 +976,12 @@ static esp_err_t terminal_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!require_auth_or_redirect(req, session_token)) {
-        return ESP_OK;
+    if (!ensure_web_session(req, session_token)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "session creation failed");
     }
     const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
     if (csrf == NULL) {
-        return redirect_to(req, "/login");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "session unavailable");
     }
 
     const usb_console_status_t usb = usb_console_get_status();
@@ -1109,7 +1010,7 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "<button data-k=\"\\u001b\">%s</button><button data-k=\"\\t\">%s</button><button data-k=\"\\u001b[A\">%s</button>"
         "<button data-k=\"\\u001b[B\">%s</button><button data-k=\"\\u001b[D\">%s</button><button data-k=\"\\u001b[C\">%s</button>"
         "<button class=\"danger\" id=\"panic\">Emergency lock</button><button class=\"danger\" id=\"logout\">Sign out</button><a href=\"/diagnostics\">Diagnostics</a></div></div></div>"
-        "<div id=\"terminal\" tabindex=\"0\"><span class=\"hint\">Control active. Press Enter to wake console.</span></div>"
+        "<div id=\"terminal\" tabindex=\"0\"><span class=\"hint\">Serial console ready.</span></div>"
         "<textarea id=\"kbd\" autocapitalize=\"none\" autocomplete=\"off\" spellcheck=\"false\"></textarea>"
         "<script>"
         "const CSRF='%s';let canWrite=false,usbConnected=%s,writerState='write-active',locked=false,connected=false,empty=true;"
@@ -1139,8 +1040,8 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "kbd.addEventListener('paste',e=>{const t=(e.clipboardData||window.clipboardData).getData('text');e.preventDefault();safePaste(t)});"
         "document.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>send(b.dataset.k));"
         "document.getElementById('menuBtn').onclick=()=>document.getElementById('keys').classList.toggle('open');"
-        "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock closes all web sessions and releases keyboard control. Continue?')){const ok=await post('/api/emergency-lock');if(ok){locked=true;if(ws){ws.onclose=null;ws.close()}location='/login'}}};"
-        "document.getElementById('logout').onclick=async()=>{locked=true;if(ws){ws.onclose=null;ws.close()}await post('/logout');location='/login'};"
+        "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock closes the web session. Continue?')){const ok=await post('/api/emergency-lock');if(ok){locked=true;if(ws){ws.onclose=null;ws.close()}location='/terminal'}}};"
+        "document.getElementById('logout').onclick=async()=>{locked=true;if(ws){ws.onclose=null;ws.close()}await post('/logout');location='/terminal'};"
         "render();refreshStatus();setInterval(refreshStatus,2000);connect();terminal.focus();"
         "</script></body></html>",
         WEB_TERMINAL_KEY_CTRL_C,
@@ -1321,7 +1222,7 @@ static esp_err_t credentials_page_handler(httpd_req_t *req)
     }
     const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
     if (csrf == NULL) {
-        return redirect_to(req, "/login");
+        return redirect_to(req, "/terminal");
     }
 
     char body[2800];
@@ -1341,7 +1242,7 @@ static esp_err_t credentials_page_handler(httpd_req_t *req)
         "const CSRF='%s',out=document.getElementById('out'),reboot=document.getElementById('reboot');let rebootPending=%s;"
         "function say(s){out.textContent+=s+'\\n'}"
         "document.getElementById('rotate').onclick=async()=>{if(!confirm('Rotate WiFi password now? Existing web sessions will be invalidated.'))return;"
-        "const r=await fetch('/api/credentials/rotate',{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();say(r.status+' '+t);if(r.ok){say('Session invalidated. Press BOOT, read the AMOLED WiFi password, then reconnect after reboot.');setTimeout(()=>location='/login',2500)}};"
+        "const r=await fetch('/api/credentials/rotate',{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();say(r.status+' '+t);if(r.ok){say('Session invalidated. Press BOOT, read the AMOLED WiFi password, then reconnect after reboot.');setTimeout(()=>location='/terminal',2500)}};"
         "reboot.onclick=async()=>{if(!rebootPending){say('no pending credential reboot');return}if(confirm('Reboot now to apply the new WiFi password?')){const r=await fetch('/api/reboot',{method:'POST',headers:{'X-CSRF-Token':CSRF}});say(r.status+' '+await r.text())}};"
         "</script></main></body></html>",
         s_credential_reboot_pending ? "" : "disabled",
@@ -1413,7 +1314,7 @@ static esp_err_t config_page_handler(httpd_req_t *req)
     }
     const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
     if (csrf == NULL) {
-        return redirect_to(req, "/login");
+        return redirect_to(req, "/terminal");
     }
 
     char body[3000];
@@ -1528,7 +1429,7 @@ static esp_err_t ota_page_handler(httpd_req_t *req)
     }
     const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
     if (csrf == NULL) {
-        return redirect_to(req, "/login");
+        return redirect_to(req, "/terminal");
     }
 
     const ota_update_status_t ota = ota_update_get_status();
@@ -2148,18 +2049,6 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         .handler = diagnostics_json_handler,
         .user_ctx = NULL,
     };
-    const httpd_uri_t login_get_uri = {
-        .uri = "/login",
-        .method = HTTP_GET,
-        .handler = login_get_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t login_post_uri = {
-        .uri = "/login",
-        .method = HTTP_POST,
-        .handler = login_post_handler,
-        .user_ctx = NULL,
-    };
     const httpd_uri_t logout_uri = {
         .uri = "/logout",
         .method = HTTP_POST,
@@ -2194,8 +2083,6 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
 
     esp_err_t ret = ESP_OK;
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &index_uri), fail, TAG, "index handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &login_get_uri), fail, TAG, "login get handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &login_post_uri), fail, TAG, "login post handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &logout_uri), fail, TAG, "logout handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &terminal_uri), fail, TAG, "terminal handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &terminal_status_uri), fail, TAG, "terminal status handler failed");

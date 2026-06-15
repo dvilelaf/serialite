@@ -79,18 +79,13 @@ static void check_error_handler_does_not_recurse_via_send_err(void)
     free(web_server);
 }
 
-static void check_login_does_not_request_web_password(void)
+static void check_login_screen_removed_from_primary_flow(void)
 {
     char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
-    const char *login = strstr(web_server, "static esp_err_t login_get_handler");
-    CHECK(login != NULL);
-    const char *next_function = strstr(login + 1, "static esp_err_t login_post_handler");
-    CHECK(next_function != NULL);
-    CHECK(strstr(login, "id=\\\"password\\\"") == NULL || strstr(login, "id=\\\"password\\\"") > next_function);
-    CHECK(strstr(login, "id=\\\"togglePassword\\\"") == NULL || strstr(login, "id=\\\"togglePassword\\\"") > next_function);
-    CHECK(strstr(login, "Web password") == NULL || strstr(login, "Web password") > next_function);
-    CHECK(strstr(login, "Enter the web password") == NULL || strstr(login, "Enter the web password") > next_function);
-    CHECK(strstr(login, "Open console") != NULL && strstr(login, "Open console") < next_function);
+    CHECK(strstr(web_server, "static esp_err_t login_get_handler") == NULL);
+    CHECK(strstr(web_server, "static esp_err_t login_post_handler") == NULL);
+    CHECK(strstr(web_server, "Open console") == NULL);
+    CHECK(strstr(web_server, "KVM Login") == NULL);
     free(web_server);
 }
 
@@ -110,7 +105,9 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "controlBtn.onclick") == NULL);
     CHECK(strstr(web_server, "/api/write/acquire") == NULL);
     CHECK(strstr(web_server, "/api/write/release") == NULL);
-    CHECK(strstr(web_server, "Control active") != NULL);
+    CHECK(strstr(web_server, "Control active") == NULL);
+    CHECK(strstr(web_server, "Press Enter to wake console") == NULL);
+    CHECK(strstr(web_server, "Serial console ready") != NULL);
     CHECK(strstr(web_server, "terminal.focus()") != NULL);
     CHECK(strstr(web_server, "document.addEventListener('keydown',handleKey)") != NULL);
     CHECK(strstr(web_server, "terminal.addEventListener('keydown'") != NULL);
@@ -200,7 +197,7 @@ int main(void)
     CHECK(strcmp(WEB_TERMINAL_STATUS_USB_DISCONNECTED, "USB OFF") == 0);
     check_pair_code_removed_from_normal_login();
     check_error_handler_does_not_recurse_via_send_err();
-    check_login_does_not_request_web_password();
+    check_login_screen_removed_from_primary_flow();
     check_terminal_is_terminal_first_not_command_composer();
     check_terminal_output_interprets_backspace();
     check_diagnostics_has_clear_terminal_return();

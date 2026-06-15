@@ -33,39 +33,34 @@ class HarnessServerTest(unittest.TestCase):
         conn.request(method, path, body=body, headers=headers or {})
         return conn.getresponse()
 
-    def login(self) -> tuple[str, str]:
-        response = self.request(
-            "POST",
-            "/login",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        self.assertEqual(response.status, 303)
-        cookie = SimpleCookie(response.getheader("Set-Cookie"))
-        session = cookie["kvm_session"].value
-
-        terminal = self.request("GET", "/terminal", headers={"Cookie": f"kvm_session={session}"})
+    def open_terminal(self) -> tuple[str, str, str]:
+        terminal = self.request("GET", "/terminal")
         html = terminal.read().decode()
         self.assertEqual(terminal.status, 200)
+        cookie = SimpleCookie(terminal.getheader("Set-Cookie"))
+        session = cookie["kvm_session"].value
         csrf = html.split("const CSRF='", 1)[1].split("'", 1)[0]
-        return session, csrf
+        return session, csrf, html
 
-    def test_login_creates_session_without_web_password(self) -> None:
-        session, _csrf = self.login()
+    def test_terminal_creates_session_without_login_screen(self) -> None:
+        session, _csrf, html = self.open_terminal()
         self.assertTrue(session)
+        self.assertNotIn("Open console", html)
+        self.assertNotIn("Control active", html)
 
-    def test_terminal_requires_auth(self) -> None:
-        response = self.request("GET", "/terminal")
+    def test_index_goes_directly_to_terminal(self) -> None:
+        response = self.request("GET", "/")
         self.assertEqual(response.status, 303)
-        self.assertEqual(response.getheader("Location"), "/login")
+        self.assertEqual(response.getheader("Location"), "/terminal")
 
-    def test_login_replaces_previous_session_and_enables_input(self) -> None:
-        session, csrf = self.login()
+    def test_opening_terminal_replaces_previous_session_and_enables_input(self) -> None:
+        session, csrf, _html = self.open_terminal()
 
         status = self.request("GET", "/terminal-status.json", headers={"Cookie": f"kvm_session={session}"})
         self.assertEqual(status.status, 200)
         self.assertIn('"writer_state":"write-active"', status.read().decode())
 
-        second_session, _second_csrf = self.login()
+        second_session, _second_csrf, _second_html = self.open_terminal()
         self.assertNotEqual(session, second_session)
 
         old_status = self.request("GET", "/terminal-status.json", headers={"Cookie": f"kvm_session={session}"})
@@ -76,7 +71,7 @@ class HarnessServerTest(unittest.TestCase):
         self.assertIn('"writer_state":"write-active"', new_status.read().decode())
 
     def test_emergency_lock_invalidates_session(self) -> None:
-        session, csrf = self.login()
+        session, csrf, _html = self.open_terminal()
         response = self.request(
             "POST",
             "/api/emergency-lock",

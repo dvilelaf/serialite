@@ -66,13 +66,10 @@ class KvmHarnessHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/":
-            self.redirect("/terminal" if self.session_token() else "/login")
-        elif self.path == "/login":
-            self.send_html(login_page())
+            self.redirect("/terminal")
         elif self.path == "/terminal":
-            if not self.require_session_redirect():
-                return
-            self.send_html(terminal_page(self.csrf_token() or "", self.state.usb_connected))
+            token = self.ensure_session()
+            self.send_html(terminal_page(self.state.csrf_for(token) or "", self.state.usb_connected))
         elif self.path == "/terminal-status.json":
             if not self.require_session_json():
                 return
@@ -92,14 +89,7 @@ class KvmHarnessHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, "not found")
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path == "/login":
-            token, _csrf = self.state.create_session()
-            self.send_response(HTTPStatus.SEE_OTHER)
-            self.no_store_headers()
-            self.send_header("Location", "/terminal")
-            self.send_header("Set-Cookie", f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/")
-            self.end_headers()
-        elif self.path == "/logout":
+        if self.path == "/logout":
             if not self.require_csrf():
                 return
             token = self.session_token()
@@ -107,7 +97,7 @@ class KvmHarnessHandler(http.server.BaseHTTPRequestHandler):
                 self.state.sessions.pop(token, None)
             self.send_response(HTTPStatus.SEE_OTHER)
             self.no_store_headers()
-            self.send_header("Location", "/login")
+            self.send_header("Location", "/terminal")
             self.send_header("Set-Cookie", f"{SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0")
             self.end_headers()
         elif self.path == "/api/emergency-lock":
@@ -145,8 +135,16 @@ class KvmHarnessHandler(http.server.BaseHTTPRequestHandler):
     def require_session_redirect(self) -> bool:
         if self.csrf_token() is not None:
             return True
-        self.redirect("/login")
+        self.redirect("/terminal")
         return False
+
+    def ensure_session(self) -> str:
+        token = self.session_token()
+        if self.state.csrf_for(token) is not None and token is not None:
+            return token
+        token, _csrf = self.state.create_session()
+        self._set_cookie = f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/"
+        return token
 
     def require_session_json(self) -> bool:
         if self.csrf_token() is not None:
@@ -181,6 +179,9 @@ class KvmHarnessHandler(http.server.BaseHTTPRequestHandler):
         encoded = body.encode("utf-8")
         self.send_response(status)
         self.no_store_headers()
+        if hasattr(self, "_set_cookie"):
+            self.send_header("Set-Cookie", self._set_cookie)
+            delattr(self, "_set_cookie")
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
@@ -221,17 +222,6 @@ class KvmHarnessHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(struct.pack("!BB", 0x81, len(payload)) + payload)
 
 
-def login_page() -> str:
-    return """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>KVM Login</title><style>
-*{box-sizing:border-box}body{margin:0;min-height:100svh;background:linear-gradient(180deg,#020504,#07130f);color:#eafff8;font:16px sans-serif;display:grid;place-items:center;padding:18px}
-main{width:100%;max-width:380px;border:1px solid #174436;border-radius:22px;padding:22px;background:#030807;box-shadow:0 18px 50px #0009}
-h1{margin:0 0 8px;font-size:24px}button{width:100%;border-radius:12px;padding:13px;margin-top:12px;font:inherit;background:#0c3429;color:#bffff0;border:1px solid #2ee6b8;font-weight:700}
-p{color:#8bb5aa;line-height:1.4;margin:8px 0 14px}</style></head><body><main><h1>Serial console</h1>
-<p>This opens a local web session on the KVM access point. Authenticate in the Linux terminal when prompted.</p>
-<form method="post" action="/login"><button type="submit">Open console</button></form></main></body></html>"""
-
-
 def terminal_page(csrf: str, usb_connected: bool) -> str:
     usb = "true" if usb_connected else "false"
     return f"""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -247,7 +237,7 @@ def terminal_page(csrf: str, usb_connected: bool) -> str:
 </style></head><body><div id="hud"><span id="state" class="pill">Stream OK</span><div id="menu"><button id="menuBtn">More</button><div id="keys">
 <button data-k="\\u0003">Ctrl+C</button><button data-k="\\u0004">Ctrl+D</button><button data-k="\\r">Enter</button><button data-k="\\u001b">Esc</button><button data-k="\\t">Tab</button>
 <button class="danger" id="panic">Emergency lock</button><button class="danger" id="logout">Sign out</button><a href="/diagnostics">Diagnostics</a></div></div></div>
-<div id="terminal" tabindex="0">Control active. Press Enter to wake console.</div><textarea id="kbd"></textarea>
+<div id="terminal" tabindex="0">Serial console ready.</div><textarea id="kbd"></textarea>
 <script>const CSRF='{csrf}';let canWrite=true,usbConnected={usb},writerState='write-active',locked=false,connected=true;</script></body></html>"""
 
 
@@ -267,7 +257,7 @@ def main() -> int:
 
     server = create_server((args.host, args.port), quiet=not args.verbose)
     host, port = server.server_address
-    print(f"ESP32-KVM Web harness: http://{host}:{port}/login")
+    print(f"ESP32-KVM Web harness: http://{host}:{port}/terminal")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -14,8 +14,6 @@
 static void test_allows_known_routes_and_methods(void)
 {
     CHECK(http_route_policy_allowed("/", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
-    CHECK(http_route_policy_allowed("/login", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
-    CHECK(http_route_policy_allowed("/login", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/logout", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/terminal", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/terminal-status.json", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
@@ -42,6 +40,8 @@ static void test_allows_known_routes_and_methods(void)
 static void test_rejects_unknown_routes_and_wrong_methods(void)
 {
     CHECK(http_route_policy_allowed("/admin", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_REJECT_NOT_FOUND);
+    CHECK(http_route_policy_allowed("/login", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_REJECT_NOT_FOUND);
+    CHECK(http_route_policy_allowed("/login", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_REJECT_NOT_FOUND);
     CHECK(http_route_policy_allowed("/terminal", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_REJECT_METHOD);
     CHECK(http_route_policy_allowed("/terminal-status.json", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_REJECT_METHOD);
     CHECK(http_route_policy_allowed("/logout", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_REJECT_METHOD);
@@ -52,8 +52,6 @@ static void test_rejects_unknown_routes_and_wrong_methods(void)
 
 static void test_rejects_oversized_bodies(void)
 {
-    CHECK(http_route_policy_allowed("/login", HTTP_ROUTE_METHOD_POST, HTTP_ROUTE_LOGIN_BODY_MAX) == HTTP_ROUTE_POLICY_ALLOW);
-    CHECK(http_route_policy_allowed("/login", HTTP_ROUTE_METHOD_POST, HTTP_ROUTE_LOGIN_BODY_MAX + 1) == HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE);
     CHECK(http_route_policy_allowed("/api/emergency-lock", HTTP_ROUTE_METHOD_POST, 1) == HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE);
     CHECK(http_route_policy_allowed("/api/ota", HTTP_ROUTE_METHOD_POST, OTA_UPDATE_MAX_IMAGE_BYTES + 1) == HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE);
     CHECK(http_route_policy_allowed("/api/reboot", HTTP_ROUTE_METHOD_POST, 1) == HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE);
@@ -66,9 +64,6 @@ static void test_rejects_oversized_bodies(void)
 
 static void test_security_classifies_public_and_authenticated_routes(void)
 {
-    CHECK(http_route_policy_security("/login", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_PUBLIC);
-    CHECK(http_route_policy_security("/login", HTTP_ROUTE_METHOD_POST) == HTTP_ROUTE_SECURITY_PUBLIC);
-
     CHECK(http_route_policy_security("/", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
     CHECK(http_route_policy_security("/terminal", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
     CHECK(http_route_policy_security("/terminal-status.json", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
