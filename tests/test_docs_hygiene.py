@@ -25,7 +25,7 @@ class DocsHygieneTest(unittest.TestCase):
     def test_readme_is_a_short_main_branch_quickstart(self) -> None:
         readme = (REPO_ROOT / "README.md").read_text()
 
-        self.assertIn("https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/host/setup-linux-serial-console.sh", readme)
+        self.assertIn("sudo sh -c 'curl -4fsSL https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/host/setup-linux-serial-console.sh | sh'", readme)
         self.assertIn("docs/development.md", readme)
         self.assertNotIn("vX.Y.Z", readme)
         self.assertNotIn("Firmware Releases", readme)

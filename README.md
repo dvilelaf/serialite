@@ -13,7 +13,7 @@ It is not a video KVM: no HDMI, no remote HID, no virtual media.
 2. On the server, run:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/host/setup-linux-serial-console.sh | sudo sh
+   sudo sh -c 'curl -4fsSL https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/host/setup-linux-serial-console.sh | sh'
    ```
 
 3. Join the WiFi network:
