@@ -9,3 +9,4 @@ sdkconfig.old
 *.swp
 .vscode/
 .idea/
+test-results/

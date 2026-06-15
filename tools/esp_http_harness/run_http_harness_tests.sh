@@ -140,3 +140,14 @@ for i in $(seq 1 "$ITERATIONS"); do
 done
 
 echo "http harness ok (${ITERATIONS} iterations)"
+
+if [ "${ESP32_KVM_SKIP_BROWSER_TEST:-0}" != "1" ]; then
+    if command -v npm >/dev/null 2>&1; then
+        if [ ! -d node_modules/@playwright/test ]; then
+            npm install
+        fi
+        ESP32_KVM_HTTP_HARNESS_BASE_URL="http://127.0.0.1:${PORT}" npm run test:browser
+    else
+        echo "npm not found; skipping browser smoke test" >&2
+    fi
+fi

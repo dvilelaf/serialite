@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test:browser": "playwright test --reporter=line"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0"
+  }
+}
