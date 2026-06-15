@@ -1003,12 +1003,16 @@ static esp_err_t login_get_handler(httpd_req_t *req)
         "<title>KVM Login</title><style>"
         "*{box-sizing:border-box}body{margin:0;min-height:100svh;background:linear-gradient(180deg,#020504,#07130f);color:#eafff8;font:16px sans-serif;display:grid;place-items:center;padding:18px}"
         "main{width:100%%;max-width:380px;border:1px solid #174436;border-radius:22px;padding:22px;background:#030807;box-shadow:0 18px 50px #0009}"
-        "h1{margin:0 0 8px;font-size:24px}input,button{width:100%%;border-radius:12px;padding:13px;margin-top:12px;font:inherit}"
-        "input{background:#000;color:#fff;border:1px solid #245c4c}button{background:#0c3429;color:#bffff0;border:1px solid #2ee6b8;font-weight:700}"
+        "h1{margin:0 0 8px;font-size:24px}input,button{border-radius:12px;padding:13px;margin-top:12px;font:inherit}"
+        ".field{position:relative}input{width:100%%;background:#000;color:#fff;border:1px solid #245c4c;padding-right:50px}button{width:100%%;background:#0c3429;color:#bffff0;border:1px solid #2ee6b8;font-weight:700}"
+        "#togglePassword{position:absolute;right:7px;top:7px;width:38px;height:38px;margin:0;padding:0;border-radius:10px;background:#07130f;color:#bffff0;border:1px solid #245c4c}"
         "p{color:#8bb5aa;line-height:1.4;margin:8px 0 14px}</style></head><body><main><h1>Serial console</h1>"
         "<p>Enter the web password without spaces.</p>"
-        "<form method=\"post\" action=\"/login\"><input name=\"password\" type=\"password\" autocomplete=\"current-password\" placeholder=\"Web password\" autofocus>"
-        "<button type=\"submit\">Unlock console</button></form></main></body></html>");
+        "<form method=\"post\" action=\"/login\"><div class=\"field\"><input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" placeholder=\"Web password\" autofocus>"
+        "<button id=\"togglePassword\" type=\"button\" aria-label=\"Show password\">&#128065;</button></div>"
+        "<button type=\"submit\">Unlock console</button></form></main>"
+        "<script>const password=document.getElementById('password'),togglePassword=document.getElementById('togglePassword');"
+        "togglePassword.onclick=()=>{password.type=password.type==='password'?'text':'password';togglePassword.setAttribute('aria-label',password.type==='password'?'Show password':'Hide password')};</script></body></html>");
     if (written < 0 || written >= (int)sizeof(login_page)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "login overflow");
     }

@@ -79,6 +79,20 @@ static void check_error_handler_does_not_recurse_via_send_err(void)
     free(web_server);
 }
 
+static void check_login_can_reveal_password(void)
+{
+    char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
+    const char *login = strstr(web_server, "static esp_err_t login_get_handler");
+    CHECK(login != NULL);
+    const char *next_function = strstr(login + 1, "static esp_err_t login_post_handler");
+    CHECK(next_function != NULL);
+    CHECK(strstr(login, "id=\\\"password\\\"") != NULL && strstr(login, "id=\\\"password\\\"") < next_function);
+    CHECK(strstr(login, "id=\\\"togglePassword\\\"") != NULL && strstr(login, "id=\\\"togglePassword\\\"") < next_function);
+    CHECK(strstr(login, "aria-label=\\\"Show password\\\"") != NULL && strstr(login, "aria-label=\\\"Show password\\\"") < next_function);
+    CHECK(strstr(login, "password.type==='password'?'text':'password'") != NULL && strstr(login, "password.type==='password'?'text':'password'") < next_function);
+    free(web_server);
+}
+
 static void check_terminal_is_terminal_first_not_command_composer(void)
 {
     char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
@@ -186,6 +200,7 @@ int main(void)
     CHECK(strcmp(WEB_TERMINAL_ACTION_LOCK, "Release control") == 0);
     check_pair_code_removed_from_normal_login();
     check_error_handler_does_not_recurse_via_send_err();
+    check_login_can_reveal_password();
     check_terminal_is_terminal_first_not_command_composer();
     check_terminal_output_interprets_backspace();
     check_diagnostics_has_clear_terminal_return();
