@@ -1,0 +1,1 @@
+idf_component_register(SRCS "terminal_bridge.c" INCLUDE_DIRS "include" REQUIRES freertos)

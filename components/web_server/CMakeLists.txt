@@ -32,3 +32,7 @@ idf_component_register(
         usb_console
         terminal_bridge
 )
+
+if(CONFIG_IDF_TARGET_LINUX)
+    target_sources(${COMPONENT_LIB} PRIVATE "src/esp_timer_linux_compat.c")
+endif()

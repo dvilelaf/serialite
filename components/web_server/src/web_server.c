@@ -2053,9 +2053,14 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     }
     if (server == NULL) {
         httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
+#ifdef CONFIG_IDF_TARGET_LINUX
+        http_config.server_port = 8080;
+        http_config.stack_size = 64 * 1024;
+#else
+        http_config.stack_size = WEB_HTTPD_STACK_SIZE;
+#endif
         http_config.lru_purge_enable = true;
         http_config.max_uri_handlers = WEB_HTTPD_MAX_URI_HANDLERS;
-        http_config.stack_size = WEB_HTTPD_STACK_SIZE;
         ESP_RETURN_ON_ERROR(httpd_start(&server, &http_config), TAG, "httpd_start failed");
     }
     s_server = server;
