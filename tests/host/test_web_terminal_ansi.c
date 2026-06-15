@@ -23,7 +23,7 @@ static size_t filter_text(web_terminal_ansi_state_t *state, const char *input, c
     return written;
 }
 
-static void test_strips_sgr_and_cursor_csi_sequences(void)
+static void test_preserves_sgr_and_cursor_csi_sequences(void)
 {
     web_terminal_ansi_state_t state;
     web_terminal_ansi_init(&state);
@@ -31,7 +31,7 @@ static void test_strips_sgr_and_cursor_csi_sequences(void)
     char output[128];
     filter_text(&state, "boot \x1b[31mFAIL\x1b[0m\r\n\x1b[2Jready", output, sizeof(output));
 
-    CHECK(strcmp(output, "boot FAIL\r\nready") == 0);
+    CHECK(strcmp(output, "boot \x1b[31mFAIL\x1b[0m\r\n\x1b[2Jready") == 0);
 }
 
 static void test_handles_split_escape_sequences_across_chunks(void)
@@ -44,7 +44,18 @@ static void test_handles_split_escape_sequences_across_chunks(void)
     CHECK(strcmp(output, "A") == 0);
 
     written += filter_text(&state, "2mB\x1b[0mC", output + written, sizeof(output) - written);
-    CHECK(strcmp(output, "ABC") == 0);
+    CHECK(strcmp(output, "A\x1b[32mB\x1b[0mC") == 0);
+}
+
+static void test_preserves_full_screen_terminal_sequences(void)
+{
+    web_terminal_ansi_state_t state;
+    web_terminal_ansi_init(&state);
+
+    char output[128];
+    filter_text(&state, "\x1b[?1049h\x1b[Htop\x1b[2Khtop\x1b[?25l", output, sizeof(output));
+
+    CHECK(strcmp(output, "\x1b[?1049h\x1b[Htop\x1b[2Khtop\x1b[?25l") == 0);
 }
 
 static void test_strips_osc_title_sequences(void)
@@ -85,8 +96,9 @@ static void test_respects_output_capacity(void)
 
 int main(void)
 {
-    test_strips_sgr_and_cursor_csi_sequences();
+    test_preserves_sgr_and_cursor_csi_sequences();
     test_handles_split_escape_sequences_across_chunks();
+    test_preserves_full_screen_terminal_sequences();
     test_strips_osc_title_sequences();
     test_preserves_safe_terminal_controls_only();
     test_respects_output_capacity();

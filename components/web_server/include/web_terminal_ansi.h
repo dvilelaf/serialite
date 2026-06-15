@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 typedef enum {
@@ -13,6 +14,9 @@ typedef enum {
 
 typedef struct {
     web_terminal_ansi_mode_t mode;
+    uint8_t sequence[64];
+    size_t sequence_len;
+    bool sequence_dropped;
 } web_terminal_ansi_state_t;
 
 void web_terminal_ansi_init(web_terminal_ansi_state_t *state);

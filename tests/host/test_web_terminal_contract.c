@@ -115,7 +115,11 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "term.onData(data=>send(data))") != NULL);
     CHECK(strstr(web_server, "term.write") != NULL);
     CHECK(strstr(web_server, "attachCustomKeyEventHandler") != NULL);
+    CHECK(strstr(web_server, "addEventListener('keydown',captureTerminalShortcuts,true)") != NULL);
+    CHECK(strstr(web_server, "e.preventDefault();e.stopPropagation();send('\\\\u000c')") != NULL);
     CHECK(strstr(web_server, "send('\\\\u000c')") != NULL);
+    CHECK(strstr(web_server, "streamText.textContent=ok?'OK':'ERROR'") != NULL);
+    CHECK(strstr(web_server, "state.classList.toggle('expanded')") != NULL);
     CHECK(strstr(web_server, "ws.send(data)") != NULL);
     free(web_server);
 }
