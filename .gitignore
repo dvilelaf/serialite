@@ -1,6 +1,7 @@
 .DS_Store
 build/
 build-host-tests/
+dist/
 managed_components/
 sdkconfig
 sdkconfig.old

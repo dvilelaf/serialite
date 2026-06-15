@@ -3,9 +3,14 @@
 
 from __future__ import annotations
 
+import pathlib
+import sys
 import unittest
 
-import verify_production_profile as profile
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+import lint_production_profile as profile
 
 
 class ProductionProfilePolicyTest(unittest.TestCase):
@@ -59,6 +64,16 @@ class ProductionProfilePolicyTest(unittest.TestCase):
                     profile.verify_signing_key_path(key_path)
 
         profile.verify_signing_key_path("/run/secrets/esp32-kvm/prod-kvm-2026.pem")
+
+    def test_flash_size_comes_from_sdkconfig_defaults(self) -> None:
+        assignments = profile.parse_sdkconfig_assignments(
+            """
+            CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+            CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+            """
+        )
+
+        self.assertEqual(profile.flash_size_from_assignments(assignments), 16 * 1024 * 1024)
 
 
 if __name__ == "__main__":

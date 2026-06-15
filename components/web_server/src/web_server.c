@@ -1112,7 +1112,7 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "<div class=\"diag-head\"><h2>System Health</h2><button id=\"closeDiagnostics\" aria-label=\"Close diagnostics\">x</button></div>"
         "<div id=\"diagnosticsBody\"><section class=\"diag-card\"><h3>Status</h3><div class=\"diag-row\"><span>Loading</span><b>...</b></div></section></div>"
         "</aside>"
-        "<section id=\"consoleNotice\" class=\"hidden\" role=\"status\" aria-live=\"polite\"><h2>No serial console detected</h2><p>The USB link is up, but the Linux host has not sent a login prompt or console output yet.</p><p>On the host, enable the serial getty:</p><code>sudo systemctl start serial-getty@ttyACM0.service</code></section>"
+        "<section id=\"consoleNotice\" class=\"hidden\" role=\"status\" aria-live=\"polite\"><h2>No serial console detected</h2><p>The USB link is up, but the Linux host has not sent a login prompt or console output yet.</p><p>On the host, run the ESP32-KVM setup script or start the installed getty:</p><code>sudo systemctl start esp32-kvm-serial-console.service</code></section>"
         "<script src=\"/assets/xterm.js\"></script><script>"), TAG, "terminal body chunk failed");
     ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
         "const CSRF='%s';let canWrite=false,usbConnected=%s,writerState='write-active',locked=false,connected=false,empty=true,lastRx=0,lastInput=0,openedAt=0;"

@@ -244,7 +244,7 @@ El repo debe conservar un entrypoint reproducible:
 
 ```bash
 source /path/to/esp-idf/export.sh
-./scripts/verify.sh
+./scripts/dev-verify.sh
 ```
 
 Este comando ejecuta:

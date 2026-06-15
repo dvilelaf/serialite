@@ -13,7 +13,7 @@ import sys
 import tempfile
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-FLASH_SIZE = 0x400000
+DEFAULT_FLASH_SIZE = 0x400000
 MIN_OTA_SLOT_SIZE = 0x1E0000
 PROD_DEFAULTS = REPO_ROOT / "sdkconfig.prod.defaults"
 SDKCONFIG_DEFAULTS = "sdkconfig.defaults;sdkconfig.prod.defaults"
@@ -46,14 +46,14 @@ REQUIRED_PROD_SYMBOLS = {
 
 def parse_size(value: str) -> int:
     value = value.strip()
-    match = re.fullmatch(r"([0-9]+)([KkMm]?)", value)
+    match = re.fullmatch(r"([0-9]+)([KkMm](?:[Bb])?)?", value)
     if match is None:
         return int(value, 0)
     number = int(match.group(1))
-    suffix = match.group(2).lower()
-    if suffix == "k":
+    suffix = (match.group(2) or "").lower()
+    if suffix in ("k", "kb"):
         return number * 1024
-    if suffix == "m":
+    if suffix in ("m", "mb"):
         return number * 1024 * 1024
     return number
 
@@ -96,6 +96,13 @@ def parse_sdkconfig_assignments(text: str) -> dict[str, str]:
     return assignments
 
 
+def flash_size_from_assignments(assignments: dict[str, str]) -> int:
+    value = assignments.get("CONFIG_ESPTOOLPY_FLASHSIZE")
+    if value:
+        return parse_size(value)
+    return DEFAULT_FLASH_SIZE
+
+
 def verify_required_prod_symbols(assignments: dict[str, str]) -> None:
     for symbol, expected in REQUIRED_PROD_SYMBOLS.items():
         require(assignments.get(symbol) == expected, f"production profile missing effective {symbol}={expected}")
@@ -123,6 +130,8 @@ def verify_signing_key_path(key_path: str) -> None:
 
 def verify_partition_table() -> None:
     rows = parse_partitions(REPO_ROOT / "partitions.csv")
+    defaults_assignments = parse_sdkconfig_assignments((REPO_ROOT / "sdkconfig.defaults").read_text())
+    flash_size = flash_size_from_assignments(defaults_assignments)
     names = {row["name"] for row in rows}
     require("otadata" in names, "partition table must include otadata for OTA rollback")
 
@@ -141,7 +150,7 @@ def verify_partition_table() -> None:
         used.append((offset, offset + size, row["name"]))
     used.sort()
     for idx, (start, end, name) in enumerate(used):
-        require(end <= FLASH_SIZE, f"{name} exceeds 4MB flash")
+        require(end <= flash_size, f"{name} exceeds configured flash size {flash_size:#x}")
         if idx > 0:
             prev_end = used[idx - 1][1]
             require(start >= prev_end, f"{name} overlaps previous partition")

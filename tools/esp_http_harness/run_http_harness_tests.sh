@@ -9,10 +9,18 @@ ITERATIONS="${ESP32_KVM_HTTP_HARNESS_ITERATIONS:-20}"
 cd "$HARNESS_DIR"
 
 if ! command -v idf.py >/dev/null 2>&1; then
-    if [ -f /home/david/esp-idf/export.sh ]; then
+    if [ -n "${ESP_IDF_EXPORT:-}" ] && [ -f "$ESP_IDF_EXPORT" ]; then
         # shellcheck disable=SC1091
-        source /home/david/esp-idf/export.sh >/tmp/esp-idf-export.log 2>&1
+        source "$ESP_IDF_EXPORT" >/tmp/esp-idf-export.log 2>&1
+    elif [ -n "${IDF_PATH:-}" ] && [ -f "$IDF_PATH/export.sh" ]; then
+        # shellcheck disable=SC1091
+        source "$IDF_PATH/export.sh" >/tmp/esp-idf-export.log 2>&1
     fi
+fi
+
+if ! command -v idf.py >/dev/null 2>&1; then
+    echo "idf.py not found. Source ESP-IDF export.sh first, or set ESP_IDF_EXPORT=/path/to/esp-idf/export.sh." >&2
+    exit 127
 fi
 
 idf.py --preview build >/tmp/esp32-kvm-http-harness-build.log

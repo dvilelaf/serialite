@@ -36,6 +36,6 @@
 **Files:**
 - Verify repo only.
 
-- [ ] Run `./scripts/verify.sh && git diff --check`.
+- [ ] Run `./scripts/dev-verify.sh && git diff --check`.
 - [ ] Flash to `/dev/ttyACM0`.
 - [ ] Observe AP and absence of immediate reboot markers.

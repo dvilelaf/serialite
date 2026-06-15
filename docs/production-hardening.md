@@ -151,7 +151,7 @@ Estas limitaciones son deliberadas para reducir superficie de ataque y mantener 
 
 Antes de declarar un build apto para produccion:
 
-1. `./scripts/verify.sh` debe pasar.
+1. `./scripts/dev-verify.sh` debe pasar.
 2. `git diff --check` no debe reportar errores.
 3. El firmware debe flashear y enumerar como `/dev/ttyACM*`.
 4. El AP `KVM` debe aparecer protegido por WPA2.
