@@ -120,6 +120,14 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "send('\\\\u000c')") != NULL);
     CHECK(strstr(web_server, "streamText.textContent=ok?'OK':'ERROR'") != NULL);
     CHECK(strstr(web_server, "state.classList.toggle('expanded')") != NULL);
+    CHECK(strstr(web_server, "No serial console detected") != NULL);
+    CHECK(strstr(web_server, "sudo systemctl start serial-getty@ttyACM0.service") != NULL);
+    CHECK(strstr(web_server, "checkConsoleSilence") != NULL);
+    CHECK(strstr(web_server, "hideConsoleNotice()") != NULL);
+    CHECK(strstr(web_server, "background:'#002B36'") != NULL);
+    CHECK(strstr(web_server, "foreground:'#93A1A1'") != NULL);
+    CHECK(strstr(web_server, "cursor:'#839496'") != NULL);
+    CHECK(strstr(web_server, "brightWhite:'#fdf6e3'") != NULL);
     CHECK(strstr(web_server, "ws.send(data)") != NULL);
     free(web_server);
 }
