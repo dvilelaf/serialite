@@ -143,6 +143,8 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "aria-label=\\\"More controls\\\"") != NULL);
     CHECK(strstr(web_server, ">+</button>") != NULL);
     CHECK(strstr(web_server, "class=\\\"round icon-btn\\\"") != NULL);
+    CHECK(strstr(web_server, "aria-label=\\\"Close controls\\\"") != NULL);
+    CHECK(strstr(web_server, "Lucide x") != NULL);
     CHECK(strstr(web_server, "No serial console detected") != NULL);
     CHECK(strstr(web_server, "sudo systemctl start serialite-serial-console.service") != NULL);
     CHECK(strstr(web_server, "checkConsoleSilence") != NULL);

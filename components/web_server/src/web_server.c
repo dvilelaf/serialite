@@ -1086,7 +1086,7 @@ static esp_err_t terminal_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(httpd_resp_sendstr_chunk(req,
         "<button id=\"fullscreenBtn\" class=\"round icon-btn\" aria-label=\"Fullscreen\" title=\"Fullscreen\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><!-- Lucide maximize-2 --><polyline points=\"15 3 21 3 21 9\"></polyline><polyline points=\"9 21 3 21 3 15\"></polyline><line x1=\"21\" x2=\"14\" y1=\"3\" y2=\"10\"></line><line x1=\"3\" x2=\"10\" y1=\"21\" y2=\"14\"></line></svg></button>"
         "<div id=\"menu\"><button id=\"menuBtn\" class=\"round\" aria-label=\"More controls\" title=\"More controls\">+</button><div id=\"keys\" aria-label=\"Operator actions\">"
-        "<div class=\"actions-head\"><strong>Actions</strong><button id=\"closeMenuBtn\" class=\"actions-close\" aria-label=\"Close controls\">x</button></div>"
+        "<div class=\"actions-head\"><strong>Actions</strong><button id=\"closeMenuBtn\" class=\"actions-close icon-btn\" aria-label=\"Close controls\" title=\"Close controls\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><!-- Lucide x --><path d=\"M18 6 6 18\"></path><path d=\"m6 6 12 12\"></path></svg></button></div>"
         "<section class=\"action-section\"><h3>Keys</h3><div class=\"action-grid\">"), TAG, "terminal controls chunk failed");
     ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
         "<button data-k=\"ctrl-c\">%s</button><button data-k=\"ctrl-d\">%s</button><button data-k=\"ctrl-l\">%s</button>"
