@@ -146,6 +146,11 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "No serial console detected") != NULL);
     CHECK(strstr(web_server, "sudo systemctl start serial-getty@ttyACM0.service") != NULL);
     CHECK(strstr(web_server, "checkConsoleSilence") != NULL);
+    CHECK(strstr(web_server, "async function recoverSession()") != NULL);
+    CHECK(strstr(web_server, "fetch('/terminal',{cache:'no-store'})") != NULL);
+    CHECK(strstr(web_server, "if(r.status===200){location.reload();return}") != NULL);
+    CHECK(strstr(web_server, "if(r.status===423){locked=true;setStream('Locked by device',false);render();return}") != NULL);
+    CHECK(strstr(web_server, "await recoverSession();return") != NULL);
     CHECK(strstr(web_server, "hideConsoleNotice()") != NULL);
     CHECK(strstr(web_server, "background:'#002B36'") != NULL);
     CHECK(strstr(web_server, "foreground:'#93A1A1'") != NULL);
