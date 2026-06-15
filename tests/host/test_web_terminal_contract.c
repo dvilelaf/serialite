@@ -118,8 +118,14 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "addEventListener('keydown',captureTerminalShortcuts,true)") != NULL);
     CHECK(strstr(web_server, "e.preventDefault();e.stopPropagation();send('\\\\u000c')") != NULL);
     CHECK(strstr(web_server, "send('\\\\u000c')") != NULL);
-    CHECK(strstr(web_server, "streamText.textContent=ok?'OK':'ERROR'") != NULL);
-    CHECK(strstr(web_server, "state.classList.toggle('expanded')") != NULL);
+    CHECK(strstr(web_server, "state.dataset.compact=ok?'OK':'ERROR'") != NULL);
+    CHECK(strstr(web_server, "streamText.textContent=streamExpanded()?state.dataset.detail:state.dataset.compact") != NULL);
+    CHECK(strstr(web_server, "state.onclick=()=>{state.classList.add('expanded');renderStreamLabel()}") != NULL);
+    CHECK(strstr(web_server, "state.onmouseleave=()=>{state.classList.remove('expanded');renderStreamLabel()}") != NULL);
+    CHECK(strstr(web_server, "ws.onmessage=e=>{lastRx=Date.now();hideConsoleNotice();setStream('Stream OK',true)") != NULL);
+    CHECK(strstr(web_server, "Fit TTY") != NULL);
+    CHECK(strstr(web_server, "function fitHostTty()") != NULL);
+    CHECK(strstr(web_server, "send(`stty rows ${term.rows} cols ${term.cols}\\\\r`)") != NULL);
     CHECK(strstr(web_server, "No serial console detected") != NULL);
     CHECK(strstr(web_server, "sudo systemctl start serial-getty@ttyACM0.service") != NULL);
     CHECK(strstr(web_server, "checkConsoleSilence") != NULL);
