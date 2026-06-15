@@ -23,7 +23,7 @@ Usage:
 Enables a persistent Linux serial login on the Serialite USB serial device.
 
 Recommended install from a tagged release:
-  sudo sh -c 'curl -4fsSL https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/host/setup-linux-serial-console.sh | sh'
+  sudo sh -c 'curl -4fsSL -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/dvilelaf/serialite/contents/tools/host/setup-linux-serial-console.sh?ref=main" | sh'
 EOF
 }
 
@@ -71,7 +71,7 @@ require_root() {
 This setup changes systemd and udev state, so it must run as root.
 
 Use:
-  sudo sh -c 'curl -4fsSL https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/host/setup-linux-serial-console.sh | sh'
+  sudo sh -c 'curl -4fsSL -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/dvilelaf/serialite/contents/tools/host/setup-linux-serial-console.sh?ref=main" | sh'
 
 Or download a tagged release, review this script, then run:
   sudo sh ./setup-linux-serial-console.sh
@@ -290,7 +290,7 @@ Device:  ${symlink_path}
 Join WiFi KVM and open http://192.168.4.1
 
 Undo:
-  sudo sh -c 'curl -4fsSL https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/host/setup-linux-serial-console.sh | sh -s -- --uninstall'
+  sudo sh -c 'curl -4fsSL -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/dvilelaf/serialite/contents/tools/host/setup-linux-serial-console.sh?ref=main" | sh -s -- --uninstall'
 EOF
 }
 
