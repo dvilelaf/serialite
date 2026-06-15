@@ -10,6 +10,7 @@
 
 #define WEB_TERMINAL_KEY_CTRL_C "Ctrl+C"
 #define WEB_TERMINAL_KEY_CTRL_D "Ctrl+D"
+#define WEB_TERMINAL_KEY_CTRL_L "Ctrl+L"
 #define WEB_TERMINAL_KEY_ENTER "Enter"
 #define WEB_TERMINAL_KEY_ESC "Esc"
 #define WEB_TERMINAL_KEY_TAB "Tab"

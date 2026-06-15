@@ -14,6 +14,8 @@
 static void test_allows_known_routes_and_methods(void)
 {
     CHECK(http_route_policy_allowed("/", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
+    CHECK(http_route_policy_allowed("/assets/xterm.js", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
+    CHECK(http_route_policy_allowed("/assets/xterm.css", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/logout", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/terminal", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/terminal-status.json", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
@@ -65,6 +67,8 @@ static void test_rejects_oversized_bodies(void)
 static void test_security_classifies_public_and_authenticated_routes(void)
 {
     CHECK(http_route_policy_security("/", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
+    CHECK(http_route_policy_security("/assets/xterm.js", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_PUBLIC);
+    CHECK(http_route_policy_security("/assets/xterm.css", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_PUBLIC);
     CHECK(http_route_policy_security("/terminal", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
     CHECK(http_route_policy_security("/terminal-status.json", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);
     CHECK(http_route_policy_security("/diagnostics", HTTP_ROUTE_METHOD_GET) == HTTP_ROUTE_SECURITY_AUTH_REQUIRED);

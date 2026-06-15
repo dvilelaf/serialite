@@ -108,19 +108,24 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "Control active") == NULL);
     CHECK(strstr(web_server, "Press Enter to wake console") == NULL);
     CHECK(strstr(web_server, "Serial console ready") != NULL);
-    CHECK(strstr(web_server, "terminal.focus()") != NULL);
-    CHECK(strstr(web_server, "document.addEventListener('keydown',handleKey)") != NULL);
-    CHECK(strstr(web_server, "terminal.addEventListener('keydown'") != NULL);
+    CHECK(strstr(web_server, "/assets/xterm.js") != NULL);
+    CHECK(strstr(web_server, "/assets/xterm.css") != NULL);
+    CHECK(strstr(web_server, "new KvmTerminal.Terminal") != NULL);
+    CHECK(strstr(web_server, "new KvmTerminal.FitAddon") != NULL);
+    CHECK(strstr(web_server, "term.onData(data=>send(data))") != NULL);
+    CHECK(strstr(web_server, "term.write") != NULL);
+    CHECK(strstr(web_server, "attachCustomKeyEventHandler") != NULL);
+    CHECK(strstr(web_server, "send('\\\\u000c')") != NULL);
     CHECK(strstr(web_server, "ws.send(data)") != NULL);
     free(web_server);
 }
 
-static void check_terminal_output_interprets_backspace(void)
+static void check_terminal_output_uses_xterm_renderer(void)
 {
     char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
-    CHECK(strstr(web_server, "function appendTerminalData(t)") != NULL);
-    CHECK(strstr(web_server, "ch==='\\\\b'||ch==='\\\\u007f'") != NULL);
-    CHECK(strstr(web_server, "s=s.slice(0,-1)") != NULL);
+    CHECK(strstr(web_server, "function appendTerminalData(t)") == NULL);
+    CHECK(strstr(web_server, "terminal.textContent") == NULL);
+    CHECK(strstr(web_server, "new Uint8Array(e.data)") != NULL);
     free(web_server);
 }
 
@@ -199,7 +204,7 @@ int main(void)
     check_error_handler_does_not_recurse_via_send_err();
     check_login_screen_removed_from_primary_flow();
     check_terminal_is_terminal_first_not_command_composer();
-    check_terminal_output_interprets_backspace();
+    check_terminal_output_uses_xterm_renderer();
     check_diagnostics_has_clear_terminal_return();
     check_usb_serial_jtag_is_not_secondary_console();
     check_lvgl_access_secrets_are_secrets_only();

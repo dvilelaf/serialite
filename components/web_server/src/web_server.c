@@ -42,6 +42,11 @@
 
 static const char *TAG = "web_server";
 
+extern const uint8_t _binary_xterm_js_start[] asm("_binary_xterm_js_start");
+extern const uint8_t _binary_xterm_js_end[] asm("_binary_xterm_js_end");
+extern const uint8_t _binary_xterm_css_start[] asm("_binary_xterm_css_start");
+extern const uint8_t _binary_xterm_css_end[] asm("_binary_xterm_css_end");
+
 #define WEB_MAX_WS_CLIENTS 4
 #define WEB_TX_QUEUE_DEPTH 16
 #define WEB_TX_CHUNK_MAX 256
@@ -227,7 +232,7 @@ static void send_no_store_headers(httpd_req_t *req)
     httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
     httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
     httpd_resp_set_hdr(req, "X-Frame-Options", "DENY");
-    httpd_resp_set_hdr(req, "Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'");
+    httpd_resp_set_hdr(req, "Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'");
 }
 
 static esp_err_t enforce_http_rate_limit(httpd_req_t *req)
@@ -340,6 +345,35 @@ static esp_err_t redirect_to(httpd_req_t *req, const char *location)
     return httpd_resp_send(req, "", 0);
 }
 
+static esp_err_t send_embedded_asset(
+    httpd_req_t *req,
+    const uint8_t *start,
+    const uint8_t *end,
+    const char *content_type)
+{
+    const size_t len = (size_t)(end - start);
+    httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=31536000, immutable");
+    httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
+    httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
+    httpd_resp_set_hdr(req, "X-Frame-Options", "DENY");
+    httpd_resp_set_type(req, content_type);
+    return httpd_resp_send(req, (const char *)start, len);
+}
+
+static esp_err_t xterm_js_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+    return send_embedded_asset(req, _binary_xterm_js_start, _binary_xterm_js_end, "application/javascript; charset=utf-8");
+}
+
+static esp_err_t xterm_css_handler(httpd_req_t *req)
+{
+    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
+    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+    return send_embedded_asset(req, _binary_xterm_css_start, _binary_xterm_css_end, "text/css; charset=utf-8");
+}
+
 static bool require_auth_or_redirect(httpd_req_t *req, char out_token[WEB_SECURITY_TOKEN_BUF_LEN])
 {
     if (request_authenticated(req, out_token)) {
@@ -349,8 +383,15 @@ static bool require_auth_or_redirect(httpd_req_t *req, char out_token[WEB_SECURI
     return false;
 }
 
-static bool ensure_web_session(httpd_req_t *req, char out_token[WEB_SECURITY_TOKEN_BUF_LEN])
+static bool ensure_web_session(
+    httpd_req_t *req,
+    char out_token[WEB_SECURITY_TOKEN_BUF_LEN],
+    char out_cookie[96],
+    bool *out_created)
 {
+    if (out_created != NULL) {
+        *out_created = false;
+    }
     if (request_authenticated(req, out_token)) {
         return true;
     }
@@ -367,9 +408,12 @@ static bool ensure_web_session(httpd_req_t *req, char out_token[WEB_SECURITY_TOK
 
     strlcpy(out_token, s_security.session_token, WEB_SECURITY_TOKEN_BUF_LEN);
     runtime_status_set_locked(false);
-    char cookie[96];
-    snprintf(cookie, sizeof(cookie), "kvm_session=%s; HttpOnly; SameSite=Strict; Path=/", s_security.session_token);
-    httpd_resp_set_hdr(req, "Set-Cookie", cookie);
+    if (out_cookie != NULL) {
+        snprintf(out_cookie, 96, "kvm_session=%s; HttpOnly; SameSite=Strict; Path=/", s_security.session_token);
+    }
+    if (out_created != NULL) {
+        *out_created = true;
+    }
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "session auto-created");
     return true;
 }
@@ -876,7 +920,9 @@ static esp_err_t macros_page_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!ensure_web_session(req, session_token)) {
+    char session_cookie[96] = {0};
+    bool session_created = false;
+    if (!ensure_web_session(req, session_token, session_cookie, &session_created)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "session creation failed");
     }
     const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
@@ -945,6 +991,9 @@ static esp_err_t macros_page_handler(httpd_req_t *req)
     }
 
     send_no_store_headers(req);
+    if (session_created) {
+        httpd_resp_set_hdr(req, "Set-Cookie", session_cookie);
+    }
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
 }
@@ -976,7 +1025,9 @@ static esp_err_t terminal_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!ensure_web_session(req, session_token)) {
+    char session_cookie[96] = {0};
+    bool session_created = false;
+    if (!ensure_web_session(req, session_token, session_cookie, &session_created)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "session creation failed");
     }
     const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
@@ -991,6 +1042,7 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         terminal_page,
         sizeof(terminal_page),
         "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<link rel=\"stylesheet\" href=\"/assets/xterm.css\">"
         "<title>Serial console</title><style>"
         ":root{--bg:#030504;--bar:#07100d;--line:#18352d;--hot:#8fffe4;--warn:#ffd07a;--bad:#ff8b68;--text:#eafff8;--muted:#78958d}"
         "*{box-sizing:border-box}html,body{margin:0;height:100%%;background:#030504;color:var(--text);font:14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}"
@@ -1001,51 +1053,48 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "button,a{font:inherit;color:var(--text)}button{border:1px solid var(--line);border-radius:10px;background:#0a1813;padding:6px 10px;font-weight:700}button.primary{border-color:var(--hot)}button.danger{border-color:var(--bad);color:#ffd4c7}button:disabled{opacity:.42}"
         "#menu{position:relative}#keys{display:none;position:fixed;right:12px;top:62px;z-index:4;width:min(310px,calc(100vw - 24px));max-height:calc(100svh - 74px);overflow:auto;padding:8px;border:1px solid var(--line);border-radius:14px;background:#06100d;box-shadow:0 20px 50px #000b}"
         "#keys.open{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}#keys a{grid-column:1/-1;text-align:center;color:var(--hot);text-decoration:none;padding:7px}"
-        "#terminal{position:fixed;inset:0;outline:none;overflow:auto;white-space:pre-wrap;word-break:break-word;padding:18px 18px 70px;background:radial-gradient(circle at 70%% -30%%,#112b23 0,#030504 42%%);line-height:1.38;caret-color:transparent}"
-        "#terminal:focus{box-shadow:inset 0 0 0 1px #21483d}.hint{color:var(--muted)}#kbd{position:fixed;inset:0;opacity:.01;color:transparent;background:transparent;border:0;resize:none;caret-color:transparent;pointer-events:none}"
+        "#terminal{position:fixed;inset:0;outline:none;padding:14px 14px 64px;background:radial-gradient(circle at 70%% -30%%,#112b23 0,#030504 42%%)}"
+        "#terminal:focus{box-shadow:inset 0 0 0 1px #21483d}.xterm{height:100%%}.xterm-viewport{background:transparent!important}.xterm-screen{background:transparent!important}"
         "@media(max-width:640px){#hud{right:8px;top:8px;gap:6px;padding:6px}.pill{font-size:11px;padding:5px 7px}button{padding:7px 9px}#terminal{padding:12px 12px 76px;font-size:13px}}"
         "</style></head><body><div id=\"hud\"><span id=\"state\" class=\"pill stream\"><span id=\"streamDot\" class=\"dot\"></span><span id=\"streamText\">STREAM ...</span></span>"
         "<div id=\"menu\"><button id=\"menuBtn\" aria-label=\"More controls\">More</button><div id=\"keys\">"
-        "<button data-k=\"\\u0003\">%s</button><button data-k=\"\\u0004\">%s</button><button data-k=\"\\r\">%s</button>"
-        "<button data-k=\"\\u001b\">%s</button><button data-k=\"\\t\">%s</button><button data-k=\"\\u001b[A\">%s</button>"
-        "<button data-k=\"\\u001b[B\">%s</button><button data-k=\"\\u001b[D\">%s</button><button data-k=\"\\u001b[C\">%s</button>"
+        "<button data-k=\"\\u0003\">%s</button><button data-k=\"\\u0004\">%s</button><button data-k=\"\\u000c\">%s</button>"
+        "<button data-k=\"\\r\">%s</button><button data-k=\"\\u001b\">%s</button><button data-k=\"\\t\">%s</button>"
+        "<button data-k=\"\\u001b[A\">%s</button><button data-k=\"\\u001b[B\">%s</button><button data-k=\"\\u001b[D\">%s</button><button data-k=\"\\u001b[C\">%s</button>"
         "<button class=\"danger\" id=\"panic\">Emergency lock</button><button class=\"danger\" id=\"logout\">Sign out</button><a href=\"/diagnostics\">Diagnostics</a></div></div></div>"
-        "<div id=\"terminal\" tabindex=\"0\"><span class=\"hint\">Serial console ready.</span></div>"
-        "<textarea id=\"kbd\" autocapitalize=\"none\" autocomplete=\"off\" spellcheck=\"false\"></textarea>"
-        "<script>"
+        "<div id=\"terminal\" tabindex=\"0\"></div>"
+        "<script src=\"/assets/xterm.js\"></script><script>"
         "const CSRF='%s';let canWrite=false,usbConnected=%s,writerState='write-active',locked=false,connected=false,empty=true;"
         "const CHUNK=%u,PASTE_CONFIRM=%u,PASTE_MAX=%u;"
-        "const terminal=document.getElementById('terminal'),kbd=document.getElementById('kbd'),state=document.getElementById('state'),streamText=document.getElementById('streamText'),streamDot=document.getElementById('streamDot');"
+        "const terminal=document.getElementById('terminal'),state=document.getElementById('state'),streamText=document.getElementById('streamText'),streamDot=document.getElementById('streamDot');"
+        "const term=new KvmTerminal.Terminal({cursorBlink:true,convertEol:false,scrollback:2000,fontFamily:'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',fontSize:14,theme:{background:'#030504',foreground:'#eafff8',cursor:'#8fffe4',black:'#030504',red:'#ff8b68',green:'#43ff9b',yellow:'#ffd07a',blue:'#80bfff',magenta:'#ff9bdf',cyan:'#8fffe4',white:'#eafff8',brightBlack:'#78958d'}});"
+        "const fit=new KvmTerminal.FitAddon();term.loadAddon(fit);term.open(terminal);fit.fit();term.write('Serial console ready.\\r\\n');addEventListener('resize',()=>fit.fit());"
         "function setStream(text,ok){streamText.textContent=text;streamDot.className='dot '+(ok?'ok':'bad')}"
-        "function render(){canWrite=connected&&usbConnected&&writerState==='write-active'&&!locked;kbd.disabled=!canWrite;kbd.style.pointerEvents=canWrite?'auto':'none';document.querySelectorAll('#keys button[data-k]').forEach(b=>b.disabled=!canWrite);terminal.setAttribute('aria-label',canWrite?'Serial terminal, keyboard control active':'Serial terminal unavailable')}"
-        "let ws,backoff=500;function appendTerminalData(t){if(empty){terminal.textContent='';empty=false}let s=terminal.textContent;"
-        "for(const ch of t){if(ch==='\\b'||ch==='\\u007f'){if(s.length)s=s.slice(0,-1)}else if(ch==='\\r'){}else{s+=ch}}"
-        "terminal.textContent=s;terminal.scrollTop=terminal.scrollHeight;if(terminal.textContent.length>65536)terminal.textContent=terminal.textContent.slice(-49152)}"
+        "function render(){canWrite=connected&&usbConnected&&writerState==='write-active'&&!locked;term.options.disableStdin=!canWrite;document.querySelectorAll('#keys button[data-k]').forEach(b=>b.disabled=!canWrite);terminal.setAttribute('aria-label',canWrite?'Serial terminal, keyboard control active':'Serial terminal unavailable')}"
+        "let ws,backoff=500;"
         "function connect(){setStream('Stream ...',false);connected=false;render();const scheme=location.protocol==='https:'?'wss://':'ws://';ws=new WebSocket(scheme+location.host+'/ws');ws.binaryType='arraybuffer';"
-        "ws.onopen=()=>{setStream('Stream OK',true);connected=true;writerState='write-active';backoff=500;render();refreshStatus();terminal.focus()};"
-        "ws.onmessage=e=>{if(e.data instanceof ArrayBuffer)appendTerminalData(new TextDecoder().decode(e.data));else appendTerminalData(e.data)};"
+        "ws.onopen=()=>{setStream('Stream OK',true);connected=true;writerState='write-active';backoff=500;render();refreshStatus();term.focus()};"
+        "ws.onmessage=e=>{if(empty){term.clear();empty=false}if(e.data instanceof ArrayBuffer)term.write(new Uint8Array(e.data));else term.write(e.data)};"
         "ws.onclose=()=>{connected=false;writerState='write-active';if(locked)return;setStream('Stream off',false);render();refreshStatus();setTimeout(connect,backoff);backoff=Math.min(backoff*2,5000)};"
         "ws.onerror=()=>ws.close()}"
         "async function refreshStatus(){try{const r=await fetch('/terminal-status.json',{cache:'no-store'});if(r.status===401||r.redirected){locked=true;setStream('Session expired',false);render();return}if(!r.ok)return;const s=await r.json();usbConnected=!!s.usb_connected;writerState=s.writer_state||'write-active';locked=writerState==='locked';render()}catch(e){}}"
         "async function post(u){const r=await fetch(u,{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();await refreshStatus();if(!r.ok)alert(t||('Request failed: '+r.status));return r.ok}"
         "let pending='',flushTimer=0;function flushSend(){if(!(canWrite&&ws&&ws.readyState===1)){pending='';flushTimer=0;return}const data=pending;pending='';flushTimer=0;if(!data)return;if(data.length<=CHUNK){ws.send(data);return}for(let i=0;i<data.length;i+=CHUNK)ws.send(data.slice(i,i+CHUNK))}"
         "function send(data){if(!(canWrite&&ws&&ws.readyState===1))return;if(pending.length+data.length>CHUNK)flushSend();pending+=data;if(!flushTimer)flushTimer=setTimeout(flushSend,20)}"
-        "function focusTerminal(){terminal.focus();if(canWrite)kbd.focus({preventScroll:true})}"
-        "function keyToData(e){if(e.ctrlKey&&e.key.toLowerCase()==='c')return'\\u0003';if(e.ctrlKey&&e.key.toLowerCase()==='d')return'\\u0004';if(e.key==='Enter')return'\\r';if(e.key==='Backspace')return'\\u007f';if(e.key==='Tab')return'\\t';if(e.key==='Escape')return'\\u001b';if(e.key==='ArrowUp')return'\\u001b[A';if(e.key==='ArrowDown')return'\\u001b[B';if(e.key==='ArrowLeft')return'\\u001b[D';if(e.key==='ArrowRight')return'\\u001b[C';if(!e.ctrlKey&&!e.metaKey&&!e.altKey&&e.key.length===1)return e.key;return''}"
-        "function handleKey(e){if(e.defaultPrevented)return;const data=keyToData(e);if(data){send(data);e.preventDefault();e.stopPropagation()}}"
+        "function focusTerminal(){terminal.focus();term.focus()}"
         "function safePaste(t){if(!canWrite)return;if(t.length>PASTE_MAX){alert('Paste too large; max '+PASTE_MAX+' bytes');return}"
         "if((t.length>PASTE_CONFIRM||t.includes('\\n'))&&!confirm('Send '+t.length+' bytes to the physical console?'))return;send(t)}"
-        "terminal.addEventListener('keydown',handleKey);kbd.addEventListener('keydown',handleKey);document.addEventListener('keydown',handleKey);kbd.addEventListener('input',()=>{if(kbd.value){send(kbd.value);kbd.value=''}});"
+        "term.onData(data=>send(data));term.attachCustomKeyEventHandler(e=>{if(e.ctrlKey&&e.key.toLowerCase()==='l'){send('\\u000c');return false}return true});"
         "terminal.addEventListener('click',focusTerminal);terminal.addEventListener('paste',e=>{const t=(e.clipboardData||window.clipboardData).getData('text');e.preventDefault();safePaste(t)});"
-        "kbd.addEventListener('paste',e=>{const t=(e.clipboardData||window.clipboardData).getData('text');e.preventDefault();safePaste(t)});"
         "document.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>send(b.dataset.k));"
         "document.getElementById('menuBtn').onclick=()=>document.getElementById('keys').classList.toggle('open');"
         "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock closes the web session. Continue?')){const ok=await post('/api/emergency-lock');if(ok){locked=true;if(ws){ws.onclose=null;ws.close()}location='/terminal'}}};"
         "document.getElementById('logout').onclick=async()=>{locked=true;if(ws){ws.onclose=null;ws.close()}await post('/logout');location='/terminal'};"
-        "render();refreshStatus();setInterval(refreshStatus,2000);connect();terminal.focus();"
+        "render();refreshStatus();setInterval(refreshStatus,2000);connect();term.focus();"
         "</script></body></html>",
         WEB_TERMINAL_KEY_CTRL_C,
         WEB_TERMINAL_KEY_CTRL_D,
+        WEB_TERMINAL_KEY_CTRL_L,
         WEB_TERMINAL_KEY_ENTER,
         WEB_TERMINAL_KEY_ESC,
         WEB_TERMINAL_KEY_TAB,
@@ -1063,6 +1112,9 @@ static esp_err_t terminal_handler(httpd_req_t *req)
     }
 
     send_no_store_headers(req);
+    if (session_created) {
+        httpd_resp_set_hdr(req, "Set-Cookie", session_cookie);
+    }
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     web_route_trace_mark("/terminal", "done");
     return httpd_resp_send(req, terminal_page, HTTPD_RESP_USE_STRLEN);
@@ -1953,6 +2005,18 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
         .handler = index_handler,
         .user_ctx = NULL,
     };
+    const httpd_uri_t xterm_js_uri = {
+        .uri = "/assets/xterm.js",
+        .method = HTTP_GET,
+        .handler = xterm_js_handler,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t xterm_css_uri = {
+        .uri = "/assets/xterm.css",
+        .method = HTTP_GET,
+        .handler = xterm_css_handler,
+        .user_ctx = NULL,
+    };
     const httpd_uri_t terminal_uri = {
         .uri = "/terminal",
         .method = HTTP_GET,
@@ -2083,6 +2147,8 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
 
     esp_err_t ret = ESP_OK;
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &index_uri), fail, TAG, "index handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &xterm_js_uri), fail, TAG, "xterm js handler failed");
+    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &xterm_css_uri), fail, TAG, "xterm css handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &logout_uri), fail, TAG, "logout handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &terminal_uri), fail, TAG, "terminal handler failed");
     ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &terminal_status_uri), fail, TAG, "terminal status handler failed");

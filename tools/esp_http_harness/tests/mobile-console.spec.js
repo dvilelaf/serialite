@@ -1,6 +1,6 @@
 const { test, expect } = require('@playwright/test');
 
-test('mobile operator auth and terminal controls work end-to-end', async ({ page }) => {
+test('mobile operator opens xterm console and terminal controls work end-to-end', async ({ page }) => {
   const consoleErrors = [];
   const pageErrors = [];
   const failedRequests = [];
@@ -19,21 +19,26 @@ test('mobile operator auth and terminal controls work end-to-end', async ({ page
     }
   });
 
-  await page.goto('/login');
-  await expect(page.getByRole('heading', { name: 'Serial console' })).toBeVisible();
-  await expect(page.getByPlaceholder('Web password')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Open console' }).click();
-
+  await page.goto('/');
   await expect(page).toHaveURL(/\/terminal$/);
+  await expect(page.getByPlaceholder('Web password')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open console' })).toHaveCount(0);
+
   await expect(page.locator('#state')).toBeVisible();
-  await expect(page.locator('#terminal')).toContainText(/Control active|harness login:/);
+  await expect(page.locator('.xterm')).toBeVisible();
+  await expect(page.locator('#terminal')).toContainText(/Serial console ready|harness login:/);
   await expect(page.locator('#input')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Send' })).toHaveCount(0);
-  await expect(page.locator('#state')).toContainText('STREAM OK');
-  await page.locator('#terminal').focus();
+  await expect(page.locator('#state')).toContainText('Stream OK');
+  await page.locator('#terminal').click();
   await page.keyboard.type('whoami');
   await page.keyboard.press('Enter');
   await expect(page.locator('#terminal')).toContainText('whoami');
+  await page.keyboard.press('Control+L');
+
+  expect(consoleErrors).toEqual([]);
+  expect(pageErrors).toEqual([]);
+  expect(failedRequests).toEqual([]);
 
   page.on('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'More' }).click();
@@ -45,7 +50,6 @@ test('mobile operator auth and terminal controls work end-to-end', async ({ page
     })
     .toBe(401);
 
-  expect(consoleErrors).toEqual([]);
   expect(pageErrors).toEqual([]);
   expect(failedRequests).toEqual([]);
 });

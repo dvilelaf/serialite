@@ -29,6 +29,7 @@ bool web_terminal_contract_has_mobile_keys(void)
     static const char *const keys[] = {
         WEB_TERMINAL_KEY_CTRL_C,
         WEB_TERMINAL_KEY_CTRL_D,
+        WEB_TERMINAL_KEY_CTRL_L,
         WEB_TERMINAL_KEY_ENTER,
         WEB_TERMINAL_KEY_ESC,
         WEB_TERMINAL_KEY_TAB,

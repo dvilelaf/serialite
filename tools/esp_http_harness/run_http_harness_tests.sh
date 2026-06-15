@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HARNESS_DIR="$ROOT_DIR/tools/esp_http_harness"
 PORT="${ESP32_KVM_HTTP_HARNESS_PORT:-8080}"
-PASSWORD="${ESP32_KVM_HTTP_HARNESS_PASSWORD:-alpha zoom}"
 ITERATIONS="${ESP32_KVM_HTTP_HARNESS_ITERATIONS:-20}"
 
 cd "$HARNESS_DIR"
@@ -20,7 +19,6 @@ idf.py --preview build >/tmp/esp32-kvm-http-harness-build.log
 
 log_file="$(mktemp /tmp/esp32-kvm-http-harness.XXXXXX.log)"
 cookie_file="$(mktemp /tmp/esp32-kvm-http-harness.XXXXXX.cookies)"
-compact_cookie_file="$(mktemp /tmp/esp32-kvm-http-harness.XXXXXX.compact.cookies)"
 pid=""
 
 cleanup() {
@@ -28,7 +26,7 @@ cleanup() {
         kill "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
     fi
-    rm -f "$cookie_file" "$compact_cookie_file"
+    rm -f "$cookie_file"
 }
 trap cleanup EXIT
 
@@ -36,7 +34,7 @@ trap cleanup EXIT
 pid=$!
 
 for _ in $(seq 1 100); do
-    if curl -fsS --max-time 1 -o /dev/null "http://127.0.0.1:${PORT}/login" 2>/dev/null; then
+    if curl -fsS --max-time 1 -o /dev/null "http://127.0.0.1:${PORT}/terminal" 2>/dev/null; then
         break
     fi
     if ! kill -0 "$pid" 2>/dev/null; then
@@ -108,14 +106,11 @@ for i in $(seq 1 "$ITERATIONS"); do
     if [ "$i" = 1 ]; then
         expect_status "root redirect" "HTTP/1.1 303 See Other" "/"
         expect_status "favicon 404" "HTTP/1.1 404 Not Found" "/favicon.ico"
-        expect_status "login page" "HTTP/1.1 200 OK" "/login"
-        expect_status "login post" "HTTP/1.1 303 See Other" "/login" -c "$cookie_file" -X POST
-        expect_status "second login post" "HTTP/1.1 303 See Other" "/login" -c "$compact_cookie_file" -X POST
+        expect_status "terminal creates session" "HTTP/1.1 200 OK" "/terminal" -c "$cookie_file"
     else
         expect_status_or_rate_limit "root redirect" "HTTP/1.1 303 See Other" "/"
         expect_status_or_rate_limit "favicon 404" "HTTP/1.1 404 Not Found" "/favicon.ico"
-        expect_status_or_rate_limit "login page" "HTTP/1.1 200 OK" "/login"
-        expect_status_or_rate_limit "login post" "HTTP/1.1 303 See Other" "/login" -c "$cookie_file" -X POST
+        expect_status_or_rate_limit "terminal creates session" "HTTP/1.1 200 OK" "/terminal" -c "$cookie_file"
     fi
 
     root_status="$(curl_status "/" -b "$cookie_file")"
@@ -123,24 +118,13 @@ for i in $(seq 1 "$ITERATIONS"); do
     terminal_json_status="$(curl_status "/terminal-status.json" -b "$cookie_file")"
 
     case "$root_status" in
-        "HTTP/1.1 200 OK"|"HTTP/1.1 429 Too Many Requests") ;;
+            "HTTP/1.1 303 See Other"|"HTTP/1.1 429 Too Many Requests") ;;
         *)
             echo "auth root: unexpected '${root_status}'" >&2
             cat "$log_file" >&2
             exit 1
             ;;
     esac
-    if [ "$i" = 1 ]; then
-        compact_root_status="$(curl_status "/" -b "$compact_cookie_file")"
-        case "$compact_root_status" in
-            "HTTP/1.1 200 OK") ;;
-            *)
-                echo "compact auth root: unexpected '${compact_root_status}'" >&2
-                cat "$log_file" >&2
-                exit 1
-                ;;
-        esac
-    fi
     case "$terminal_status" in
         "HTTP/1.1 200 OK"|"HTTP/1.1 429 Too Many Requests") ;;
         *)

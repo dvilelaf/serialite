@@ -14,6 +14,9 @@ idf_component_register(
         "src/web_transport_policy.c"
     INCLUDE_DIRS
         "include"
+    EMBED_FILES
+        "assets/xterm.js"
+        "assets/xterm.css"
     REQUIRES
         app_watchdog
         credentials
