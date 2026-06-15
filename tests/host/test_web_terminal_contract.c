@@ -126,7 +126,14 @@ static void check_lvgl_access_secret_layout_avoids_overlap(void)
 
     const char *hint_pos = strstr(secrets, "lv_obj_set_pos(s_ctx.secret_hint_label");
     CHECK(hint_pos != NULL && hint_pos < end);
-    CHECK(strstr(hint_pos, "UI_BOTTOM_CONTENT_W - 96, 0") != NULL);
+    CHECK(strstr(hint_pos, "UI_SECRET_HINT_X, 0") != NULL);
+
+    CHECK(strstr(lvgl_ui, "#define UI_SECRET_TEXT_X (UI_SECRET_RIGHT_X - 8)") != NULL);
+    CHECK(strstr(lvgl_ui, "#define UI_SECRET_HINT_X (UI_BOTTOM_CONTENT_W - 88)") != NULL);
+    CHECK(strstr(secrets, "lv_obj_set_pos(wifi_title, UI_SECRET_TEXT_X, 0)") != NULL);
+    CHECK(strstr(secrets, "lv_obj_set_pos(s_ctx.wifi_password_label, UI_SECRET_TEXT_X, 22)") != NULL);
+    CHECK(strstr(secrets, "lv_obj_set_pos(web_title, UI_SECRET_TEXT_X, 78)") != NULL);
+    CHECK(strstr(secrets, "lv_obj_set_pos(s_ctx.web_password_label, UI_SECRET_TEXT_X, 100)") != NULL);
 
     const char *web_label = strstr(secrets, "s_ctx.web_password_label = add_label");
     CHECK(web_label != NULL && web_label < end);

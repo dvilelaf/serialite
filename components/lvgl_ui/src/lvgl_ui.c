@@ -48,6 +48,9 @@ static const char *TAG = "lvgl_ui";
 #define UI_SECRET_LEFT_W 150
 #define UI_SECRET_RIGHT_X 172
 #define UI_SECRET_RIGHT_W (UI_BOTTOM_CONTENT_W - UI_SECRET_RIGHT_X)
+#define UI_SECRET_TEXT_X (UI_SECRET_RIGHT_X - 8)
+#define UI_SECRET_TEXT_W (UI_BOTTOM_CONTENT_W - UI_SECRET_TEXT_X)
+#define UI_SECRET_HINT_X (UI_BOTTOM_CONTENT_W - 88)
 #define UI_ACCESS_CONTENT_W (UI_ACCESS_W - (UI_CARD_PAD * 2))
 #define UI_STATUS_CONTENT_W (UI_STATUS_W - (UI_CARD_PAD * 2))
 #define UI_BOTTOM_CONTENT_W (UI_LANDSCAPE_W - (UI_SCREEN_PAD * 2) - (UI_CARD_PAD * 2))
@@ -539,7 +542,7 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
 
     lv_obj_t *secrets = add_card(screen, UI_SCREEN_PAD, UI_BOTTOM_Y, UI_LANDSCAPE_W - (UI_SCREEN_PAD * 2), UI_BOTTOM_H);
     s_ctx.secret_hint_label = add_label(secrets, "", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), 96);
-    lv_obj_set_pos(s_ctx.secret_hint_label, UI_BOTTOM_CONTENT_W - 96, 0);
+    lv_obj_set_pos(s_ctx.secret_hint_label, UI_SECRET_HINT_X, 0);
     lv_obj_add_flag(s_ctx.secret_hint_label, LV_OBJ_FLAG_HIDDEN);
 
     s_ctx.wifi_placeholder = lv_obj_create(secrets);
@@ -560,17 +563,17 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     lv_obj_set_pos(s_ctx.wifi_qr, UI_CARD_PAD, 0);
     lv_obj_add_flag(s_ctx.wifi_qr, LV_OBJ_FLAG_HIDDEN);
 
-    lv_obj_t *wifi_title = add_label(secrets, "WiFi password", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), UI_SECRET_RIGHT_W);
-    lv_obj_set_pos(wifi_title, UI_SECRET_RIGHT_X, 0);
+    lv_obj_t *wifi_title = add_label(secrets, "WiFi password", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), UI_SECRET_TEXT_W);
+    lv_obj_set_pos(wifi_title, UI_SECRET_TEXT_X, 0);
 
-    s_ctx.wifi_password_label = add_label(secrets, password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_SECRET_RIGHT_W);
-    lv_obj_set_pos(s_ctx.wifi_password_label, UI_SECRET_RIGHT_X, 22);
+    s_ctx.wifi_password_label = add_label(secrets, password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_SECRET_TEXT_W);
+    lv_obj_set_pos(s_ctx.wifi_password_label, UI_SECRET_TEXT_X, 22);
 
-    lv_obj_t *web_title = add_label(secrets, "Web password", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), UI_SECRET_RIGHT_W);
-    lv_obj_set_pos(web_title, UI_SECRET_RIGHT_X, 78);
+    lv_obj_t *web_title = add_label(secrets, "Web password", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), UI_SECRET_TEXT_W);
+    lv_obj_set_pos(web_title, UI_SECRET_TEXT_X, 78);
 
-    s_ctx.web_password_label = add_label(secrets, web_password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_SECRET_RIGHT_W);
-    lv_obj_set_pos(s_ctx.web_password_label, UI_SECRET_RIGHT_X, 100);
+    s_ctx.web_password_label = add_label(secrets, web_password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_SECRET_TEXT_W);
+    lv_obj_set_pos(s_ctx.web_password_label, UI_SECRET_TEXT_X, 100);
 
     strlcpy(s_ctx.wifi_ssid, ssid, sizeof(s_ctx.wifi_ssid));
     strlcpy(s_ctx.wifi_password, password, sizeof(s_ctx.wifi_password));
