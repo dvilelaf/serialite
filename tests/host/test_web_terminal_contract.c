@@ -79,17 +79,39 @@ static void check_error_handler_does_not_recurse_via_send_err(void)
     free(web_server);
 }
 
+static void check_terminal_is_terminal_first_not_command_composer(void)
+{
+    char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
+    CHECK(strstr(web_server, "<input id=\\\"input\\\"") == NULL);
+    CHECK(strstr(web_server, "id=\\\"send\\\"") == NULL);
+    CHECK(strstr(web_server, "sendInput()") == NULL);
+    CHECK(strstr(web_server, "terminal.focus()") != NULL);
+    CHECK(strstr(web_server, "terminal.addEventListener('keydown'") != NULL);
+    CHECK(strstr(web_server, "ws.send(data)") != NULL);
+    free(web_server);
+}
+
+static void check_usb_serial_jtag_is_not_secondary_console(void)
+{
+    char *defaults = read_repo_source_file("sdkconfig.defaults");
+    CHECK(strstr(defaults, "CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y") == NULL);
+    CHECK(strstr(defaults, "CONFIG_ESP_CONSOLE_SECONDARY_NONE=y") != NULL);
+    free(defaults);
+}
+
 int main(void)
 {
     CHECK(web_terminal_contract_has_required_statuses());
     CHECK(web_terminal_contract_has_mobile_keys());
-    CHECK(strcmp(WEB_TERMINAL_STATUS_READ_ONLY, "Input locked") == 0);
-    CHECK(strcmp(WEB_TERMINAL_STATUS_WRITE_ACTIVE, "Input enabled") == 0);
-    CHECK(strcmp(WEB_TERMINAL_STATUS_WRITER_BUSY, "Input busy") == 0);
-    CHECK(strcmp(WEB_TERMINAL_STATUS_USB_DISCONNECTED, "USB lost") == 0);
-    CHECK(strcmp(WEB_TERMINAL_ACTION_UNLOCK, "Unlock input") == 0);
-    CHECK(strcmp(WEB_TERMINAL_ACTION_LOCK, "Lock input") == 0);
+    CHECK(strcmp(WEB_TERMINAL_STATUS_READ_ONLY, "WATCH") == 0);
+    CHECK(strcmp(WEB_TERMINAL_STATUS_WRITE_ACTIVE, "CONTROL") == 0);
+    CHECK(strcmp(WEB_TERMINAL_STATUS_WRITER_BUSY, "BUSY") == 0);
+    CHECK(strcmp(WEB_TERMINAL_STATUS_USB_DISCONNECTED, "USB OFF") == 0);
+    CHECK(strcmp(WEB_TERMINAL_ACTION_UNLOCK, "Take control") == 0);
+    CHECK(strcmp(WEB_TERMINAL_ACTION_LOCK, "Release") == 0);
     check_pair_code_removed_from_normal_login();
     check_error_handler_does_not_recurse_via_send_err();
+    check_terminal_is_terminal_first_not_command_composer();
+    check_usb_serial_jtag_is_not_secondary_console();
     return 0;
 }

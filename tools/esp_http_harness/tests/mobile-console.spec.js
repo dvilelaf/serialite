@@ -35,22 +35,27 @@ test('mobile operator auth and terminal controls work end-to-end', async ({ page
   await expect(page).toHaveURL(/\/terminal$/);
   await expect(page.locator('#mode')).toBeVisible();
   await expect(page.locator('#state')).toBeVisible();
-  await expect(page.locator('#term')).toContainText(/Waiting for serial output|harness login:/);
-  await expect(page.locator('#input')).toBeDisabled();
-  await expect(page.locator('#state')).toContainText('Stream live');
+  await expect(page.locator('#terminal')).toContainText(/Take control, then press Enter|harness login:/);
+  await expect(page.locator('#input')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Send' })).toHaveCount(0);
+  await expect(page.locator('#state')).toContainText('STREAM OK');
+  await page.locator('#terminal').focus();
+  await page.keyboard.type('secret-before-control');
+  await expect(page.locator('#terminal')).not.toContainText('secret-before-control');
 
   page.on('dialog', (dialog) => dialog.accept());
 
-  await page.getByRole('button', { name: 'Unlock input' }).click();
-  await expect(page.locator('#mode')).toContainText('Input enabled');
-  await expect(page.locator('#input')).toBeEnabled();
-  await page.locator('#input').fill('whoami');
-  await page.getByRole('button', { name: 'Send' }).click();
-  await expect(page.locator('#term')).toContainText('whoami');
+  await page.getByRole('button', { name: 'Take control' }).click();
+  await expect(page.locator('#mode')).toContainText('CONTROL');
+  await page.locator('#terminal').focus();
+  await page.keyboard.type('whoami');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#terminal')).toContainText('whoami');
 
-  await page.getByRole('button', { name: 'Lock input', exact: true }).click();
-  await expect(page.locator('#input')).toBeDisabled();
+  await page.getByRole('button', { name: 'Release', exact: true }).click();
+  await expect(page.locator('#mode')).toContainText('WATCH');
 
+  await page.getByRole('button', { name: 'More' }).click();
   await page.getByRole('button', { name: 'Emergency lock' }).click();
   await expect
     .poll(async () => {
