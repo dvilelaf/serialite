@@ -216,6 +216,22 @@ static void check_terminal_page_is_streamed_without_large_stack_buffer(void)
     free(web_server);
 }
 
+static void check_stale_web_clients_are_purged_when_wifi_is_empty(void)
+{
+    char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
+    CHECK(strstr(web_server, "static void clear_ws_fds(void)") != NULL);
+
+    const char *guard = strstr(web_server, "static void ap_guard_task");
+    CHECK(guard != NULL);
+    const char *next_function = strstr(guard + 1, "static void bridge_output_cb");
+    CHECK(next_function != NULL);
+    const char *wifi_empty_purge = strstr(guard, "if (wifi.connected_clients == 0 && count_ws_clients() > 0)");
+    CHECK(wifi_empty_purge != NULL && wifi_empty_purge < next_function);
+    const char *clear_call = strstr(wifi_empty_purge, "clear_ws_fds()");
+    CHECK(clear_call != NULL && clear_call < next_function);
+    free(web_server);
+}
+
 static void check_diagnostics_has_clear_terminal_return(void)
 {
     char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
@@ -295,6 +311,7 @@ int main(void)
     check_lock_requires_physical_unlock();
     check_credential_rotation_reboots_automatically();
     check_terminal_page_is_streamed_without_large_stack_buffer();
+    check_stale_web_clients_are_purged_when_wifi_is_empty();
     check_diagnostics_has_clear_terminal_return();
     check_usb_serial_jtag_is_not_secondary_console();
     check_lvgl_access_secrets_are_secrets_only();

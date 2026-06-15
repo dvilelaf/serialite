@@ -571,6 +571,20 @@ static void remove_ws_fd(int fd)
     }
 }
 
+static void clear_ws_fds(void)
+{
+    if (s_ws_fds_lock != NULL) {
+        xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
+    }
+    for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
+        s_ws_clients[i].fd = -1;
+        memset(s_ws_clients[i].session_token, 0, sizeof(s_ws_clients[i].session_token));
+    }
+    if (s_ws_fds_lock != NULL) {
+        xSemaphoreGive(s_ws_fds_lock);
+    }
+}
+
 static esp_err_t add_ws_fd(int fd, const char *session_token)
 {
     if (session_token == NULL) {
@@ -705,6 +719,10 @@ static void ap_guard_task(void *arg)
     // Registering it would create a false-positive reboot loop while the AP is healthy.
     while (true) {
         const wifi_ap_status_t wifi = wifi_ap_get_status();
+        if (wifi.connected_clients == 0 && count_ws_clients() > 0) {
+            clear_ws_fds();
+            event_log_append(EVENT_LOG_INFO, now_ms(), "websocket clients cleared after WiFi disconnect");
+        }
         const ap_exposure_policy_result_t result = ap_exposure_policy_evaluate(
             &s_ap_exposure_policy,
             wifi.started,
