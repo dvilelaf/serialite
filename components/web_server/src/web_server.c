@@ -863,13 +863,13 @@ static esp_err_t about_handler(httpd_req_t *req)
         ".card{border:1px solid #174436;border-radius:16px;padding:14px;background:#030807;max-width:760px}"
         "dt{color:#7dffe1}dd{margin:0 0 8px 0}a{color:#7dffe1}</style></head><body><main class=\"card\">"
         "<h1>About Serialite</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/macros\">Macros</a> | <a href=\"/ota\">Firmware</a></p>"
-        "<p>Serial rescue console over local WiFi AP. It is not HDMI KVM, HID remote input, virtual media, power control, cloud access, or command automation.</p>"
+        "<p>Serial rescue console over local WiFi AP. It is not HDMI KVM, HID remote input, virtual media, host power control, cloud access, or command automation.</p>"
         "<dl><dt>Firmware</dt><dd>%s</dd><dt>Project</dt><dd>%s</dd><dt>Build date</dt><dd>%s %s</dd>"
         "<dt>IDF</dt><dd>%s</dd><dt>Security model</dt><dd>Local AP, web auth, CSRF, Origin checks, one active web session, RAM diagnostics.</dd>"
         "<dt>HTTPS fingerprint mode</dt><dd>%s. See docs/https-fingerprint.md; operators must compare the browser certificate SHA-256 fingerprint with the AMOLED fingerprint before trusting TLS.</dd>"
         "<dt>Production build</dt><dd>Requires Secure Boot, Flash Encryption, encrypted NVS for persisted secrets, and closed debug/JTAG. Treat unsigned debug builds as lab-only.</dd>"
         "<dt>Scrollback</dt><dd>%u/%u bytes retained, %llu old bytes dropped.</dd>"
-        "<dt>Emergency lock</dt><dd>Hold PWR for 3 seconds to toggle terminal input lock.</dd>"
+        "<dt>Emergency lock</dt><dd>Tap PWR to toggle terminal input lock. Hold PWR to power off Serialite.</dd>"
         "<dt>Factory reset</dt><dd>Hold BOOT for 10 seconds. This clears project NVS config and reboots.</dd></dl>"
         "</main></body></html>",
         app != NULL ? app->version : "unknown",
@@ -920,7 +920,7 @@ static esp_err_t runbook_handler(httpd_req_t *req)
         "</ol><h2>Si algo falla</h2><ol>"
         "<li>Si USB aparece desconectado, revisa cable, puerto y que el servidor exponga consola CDC ACM.</li>"
         "<li>Si hay rate limit, espera unos segundos y reduce recargas/conexiones.</li>"
-        "<li>Si pierdes control operacional de la terminal web, manten PWR 3s para invalidar sesiones y cerrar WebSockets.</li>"
+        "<li>Si pierdes control operacional de la terminal web, pulsa PWR para bloquear o desbloquear el input.</li>"
         "<li>Si las credenciales son desconocidas, pulsa BOOT para revelar temporales o manten BOOT 10s para factory reset.</li>"
         "<li>Usa Diagnostics para copiar contadores y eventos sin exponer passwords.</li>"
         "</ol><h2>Limites</h2><p>Esto es consola serie local. No hay HDMI, HID, virtual media, power cycle ni acceso cloud.</p>"
@@ -1158,7 +1158,7 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "ws.onclose=()=>{connected=false;writerState='write-active';if(locked)return;setStream('Stream off',false);render();refreshStatus();setTimeout(connect,backoff);backoff=Math.min(backoff*2,5000)};"
         "ws.onerror=()=>ws.close()}"
         "async function recoverSession(){try{const r=await fetch('/terminal',{cache:'no-store'});if(r.status===200){location.reload();return}if(r.status===423){locked=true;setStream('Locked by device',false);render();return}}catch(e){}locked=true;setStream('Session expired',false);render()}"
-        "async function refreshStatus(){try{const r=await fetch('/terminal-status.json',{cache:'no-store'});if(r.status===401||r.redirected){await recoverSession();return}if(!r.ok)return;const s=await r.json();usbConnected=!!s.usb_connected;writerState=s.writer_state||'write-active';locked=writerState==='locked';if(locked)setStream('Input locked; hold PWR 3s to unlock',false);render()}catch(e){}}"
+        "async function refreshStatus(){try{const r=await fetch('/terminal-status.json',{cache:'no-store'});if(r.status===401||r.redirected){await recoverSession();return}if(!r.ok)return;const s=await r.json();usbConnected=!!s.usb_connected;writerState=s.writer_state||'write-active';locked=writerState==='locked';if(locked)setStream('Input locked; press PWR to unlock',false);render()}catch(e){}}"
         "async function post(u){const r=await fetch(u,{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();await refreshStatus();if(!r.ok)alert(t||('Request failed: '+r.status));return r.ok}"
         "let pending='',flushTimer=0;function flushSend(){if(!(canWrite&&ws&&ws.readyState===1)){pending='';flushTimer=0;return}const data=pending;pending='';flushTimer=0;if(!data)return;if(data.length<=CHUNK){ws.send(data);return}for(let i=0;i<data.length;i+=CHUNK)ws.send(data.slice(i,i+CHUNK))}"
         "function send(data){if(!(canWrite&&ws&&ws.readyState===1))return;lastInput=Date.now();if(pending.length+data.length>CHUNK)flushSend();pending+=data;if(!flushTimer)flushTimer=setTimeout(flushSend,20)}"
@@ -1189,7 +1189,7 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "function closeMenu(){keys.classList.remove('open');menuBtn.blur()}"
         "menuBtn.onclick=()=>keys.classList.toggle('open');document.getElementById('closeMenuBtn').onclick=closeMenu;document.getElementById('diagnosticsBtn').onclick=openDiagnostics;document.getElementById('closeDiagnostics').onclick=closeDiagnostics;diagBackdrop.onclick=closeDiagnostics;keys.onmouseleave=closeMenu;keys.onblur=e=>{if(!keys.contains(e.relatedTarget))closeMenu()};addEventListener('keydown',e=>{if(e.key==='Escape'){closeMenu();closeDiagnostics()}});state.tabIndex=0;state.onclick=()=>{state.classList.add('expanded');renderStreamLabel()};state.onmouseleave=()=>{state.classList.remove('expanded');state.blur();renderStreamLabel()};state.onfocus=renderStreamLabel;state.onblur=()=>{state.classList.remove('expanded');renderStreamLabel()};"
         "rotateWifi.onclick=async()=>{if(confirm('WiFi password will rotate now. The ESP32 will reboot automatically. Continue?')){await post('/api/credentials/rotate')}};"
-        "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock blocks terminal input. Hold PWR for 3 seconds to unlock. Continue?')){const ok=await post('/api/emergency-lock');if(ok){locked=true;setStream('Input locked; hold PWR 3s to unlock',false);render();closeMenu();focusTerminal()}}};"
+        "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock blocks terminal input. Press PWR to unlock. Continue?')){const ok=await post('/api/emergency-lock');if(ok){locked=true;setStream('Input locked; press PWR to unlock',false);render();closeMenu();focusTerminal()}}};"
         "render();refreshStatus();setInterval(refreshStatus,2000);setInterval(checkConsoleSilence,1000);connect();term.focus();"
         "</script></body></html>"), TAG, "terminal script chunk failed");
     return httpd_resp_sendstr_chunk(req, NULL);

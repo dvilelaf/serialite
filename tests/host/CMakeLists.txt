@@ -391,6 +391,17 @@ target_include_directories(test_emergency_lock_gesture PRIVATE
 
 add_test(NAME emergency_lock_gesture COMMAND test_emergency_lock_gesture)
 
+add_executable(test_power_button_gesture
+    test_power_button_gesture.c
+    ../../components/reset_control/src/power_button_gesture.c
+)
+
+target_include_directories(test_power_button_gesture PRIVATE
+    ../../components/reset_control/include
+)
+
+add_test(NAME power_button_gesture COMMAND test_power_button_gesture)
+
 add_executable(test_strict_rescue_security_contract
     test_strict_rescue_security_contract.c
 )

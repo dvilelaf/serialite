@@ -1,7 +1,6 @@
 #include "reset_control.h"
 
 #include "board_waveshare_amoled.h"
-#include "emergency_lock_gesture.h"
 #include "event_log.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -9,6 +8,8 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "power_button_gesture.h"
+#include "power_control.h"
 #include "reset_gesture.h"
 #include "storage.h"
 #include "web_server.h"
@@ -29,9 +30,9 @@ static uint64_t now_ms(void)
 static void reset_control_task(void *arg)
 {
     (void)arg;
-    emergency_lock_gesture_t lock_gesture;
+    power_button_gesture_t power_gesture;
     reset_gesture_t reset_gesture;
-    emergency_lock_gesture_init(&lock_gesture);
+    power_button_gesture_init(&power_gesture);
     reset_gesture_init(&reset_gesture);
 
     while (true) {
@@ -39,13 +40,23 @@ static void reset_control_task(void *arg)
         const bool wake_button_active = board_waveshare_amoled_wake_button_active();
         const uint64_t timestamp_ms = now_ms();
 
-        if (emergency_lock_gesture_update(&lock_gesture, lock_button_active, timestamp_ms)) {
+        const power_button_gesture_event_t power_event =
+            power_button_gesture_update(&power_gesture, lock_button_active, timestamp_ms);
+        if (power_event == POWER_BUTTON_GESTURE_SHORT_RELEASE) {
             ESP_LOGW(TAG, "emergency lock toggle gesture accepted");
             event_log_append(EVENT_LOG_SECURITY, timestamp_ms, "emergency lock toggle gesture accepted");
             const esp_err_t err = web_server_emergency_lock_toggle();
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "emergency lock toggle failed: %s", esp_err_to_name(err));
                 event_log_append(EVENT_LOG_ERROR, timestamp_ms, "emergency lock toggle failed");
+            }
+        } else if (power_event == POWER_BUTTON_GESTURE_LONG_HOLD) {
+            ESP_LOGW(TAG, "power-off gesture accepted");
+            event_log_append(EVENT_LOG_SECURITY, timestamp_ms, "power-off gesture accepted");
+            const esp_err_t err = power_control_power_off();
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "power-off failed: %s", esp_err_to_name(err));
+                event_log_append(EVENT_LOG_ERROR, timestamp_ms, "power-off failed");
             }
         }
 

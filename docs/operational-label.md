@@ -18,8 +18,9 @@ Privileged physical console
 ```text
 Use only on trusted local AP.
 Do not expose to Internet.
-No HDMI KVM, no power control, no virtual media.
-PWR 3s: emergency lock
+No HDMI KVM, no host power control, no virtual media.
+PWR tap: lock input
+PWR hold: power off
 BOOT 10s: factory reset
 ```
 
@@ -30,14 +31,14 @@ BOOT 10s: factory reset
 2. Open http://192.168.4.1 or scan the screen QR.
 3. Open the local web console.
 4. Authenticate in the Linux serial login when prompted.
-5. Sign out or hold PWR for emergency session lock.
+5. Tap PWR for emergency input lock.
 ```
 
 ## Enclosure Requirements
 
 - Keep USB-C port and both physical buttons accessible.
 - Label the BOOT button as `BOOT / WAKE / RESET`.
-- Label the PWR button as `PWR / LOCK`.
+- Label the PWR button as `PWR / LOCK / OFF`.
 - Do not cover the AMOLED QR/status area.
 - Use a tamper-evident asset tag if deployed in shared racks.
 - Prefer matte, high-contrast text readable under rack lighting.

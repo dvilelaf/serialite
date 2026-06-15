@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "src/emergency_lock_gesture.c"
+        "src/power_button_gesture.c"
         "src/reset_control.c"
         "src/reset_gesture.c"
     INCLUDE_DIRS
@@ -9,6 +10,7 @@ idf_component_register(
         board
         event_log
         esp_timer
+        power_control
         storage
         web_server
 )

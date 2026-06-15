@@ -52,6 +52,7 @@ static void test_emergency_lock_uses_pwr_not_boot(void)
     char *board_header = read_repo_source_file("components/board/include/board_waveshare_amoled.h");
     char *board = read_repo_source_file("components/board/src/board_waveshare_amoled.c");
     char *reset = read_repo_source_file("components/reset_control/src/reset_control.c");
+    char *power_control = read_repo_source_file("components/power_control/src/power_control.c");
 
     CHECK(strstr(board_header, "board_waveshare_amoled_security_button_active") != NULL);
     CHECK(strstr(board, "BOARD_PIN_POWER_BUTTON IO_EXPANDER_PIN_NUM_4") != NULL);
@@ -61,15 +62,22 @@ static void test_emergency_lock_uses_pwr_not_boot(void)
 
     CHECK(strstr(reset, "lock_button_active = board_waveshare_amoled_security_button_active()") != NULL);
     CHECK(strstr(reset, "wake_button_active = board_waveshare_amoled_wake_button_active()") != NULL);
-    CHECK(strstr(reset, "emergency_lock_gesture_update(&lock_gesture, lock_button_active") != NULL);
+    CHECK(strstr(reset, "power_button_gesture_update(&power_gesture, lock_button_active") != NULL);
+    CHECK(strstr(reset, "POWER_BUTTON_GESTURE_SHORT_RELEASE") != NULL);
+    CHECK(strstr(reset, "POWER_BUTTON_GESTURE_LONG_HOLD") != NULL);
     CHECK(strstr(reset, "web_server_emergency_lock_toggle()") != NULL);
+    CHECK(strstr(reset, "power_control_power_off()") != NULL);
     CHECK(strstr(reset, "web_server_emergency_lock()") == NULL);
     CHECK(strstr(reset, "reset_gesture_update(&reset_gesture, wake_button_active") != NULL);
     CHECK(strstr(reset, "emergency_lock_gesture_update(&lock_gesture, button_active") == NULL);
+    CHECK(strstr(power_control, "AXP2101_POWER_OFF_REG 0x10") != NULL);
+    CHECK(strstr(power_control, "AXP2101_POWER_OFF_BIT 0x01") != NULL);
+    CHECK(strstr(power_control, "i2c_master_write_to_device") != NULL);
 
     free(board_header);
     free(board);
     free(reset);
+    free(power_control);
 }
 
 int main(void)
