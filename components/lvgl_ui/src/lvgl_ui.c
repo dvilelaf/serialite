@@ -51,6 +51,9 @@ static const char *TAG = "lvgl_ui";
 #define UI_SECRET_TEXT_X (UI_SECRET_RIGHT_X - 16)
 #define UI_SECRET_TEXT_W (UI_BOTTOM_CONTENT_W - UI_SECRET_TEXT_X)
 #define UI_SECRET_HINT_X (UI_BOTTOM_CONTENT_W - 88)
+#define UI_BOTTOM_CONTENT_H (UI_BOTTOM_H - (UI_CARD_PAD * 2))
+#define UI_SECRET_QR_Y ((UI_BOTTOM_CONTENT_H - UI_SECRET_QR_SIZE) / 2)
+#define UI_SECRET_TEXT_Y ((UI_BOTTOM_CONTENT_H - 54) / 2)
 #define UI_ACCESS_CONTENT_W (UI_ACCESS_W - (UI_CARD_PAD * 2))
 #define UI_STATUS_CONTENT_W (UI_STATUS_W - (UI_CARD_PAD * 2))
 #define UI_BOTTOM_CONTENT_W (UI_LANDSCAPE_W - (UI_SCREEN_PAD * 2) - (UI_CARD_PAD * 2))
@@ -78,7 +81,6 @@ typedef struct {
     lv_obj_t *wifi_qr;
     lv_obj_t *wifi_placeholder;
     lv_obj_t *wifi_password_label;
-    lv_obj_t *web_password_label;
     lv_obj_t *ssid_label;
     lv_obj_t *secret_hint_label;
     lv_obj_t *usb_status_label;
@@ -87,7 +89,6 @@ typedef struct {
     lv_obj_t *error_status_label;
     char wifi_ssid[40];
     char wifi_password[96];
-    char web_password[96];
     uint16_t *rotate_buf;
     SemaphoreHandle_t mutex;
     int64_t last_activity_us;
@@ -324,10 +325,6 @@ static void set_secret_labels(bool reveal)
             lv_obj_remove_flag(s_ctx.wifi_placeholder, LV_OBJ_FLAG_HIDDEN);
         }
     }
-    if (s_ctx.web_password_label != NULL &&
-        secret_display_text(s_ctx.web_password, reveal, text, sizeof(text))) {
-        lv_label_set_text(s_ctx.web_password_label, text);
-    }
     if (s_ctx.wifi_password_label != NULL &&
         secret_display_text(s_ctx.wifi_password, reveal, text, sizeof(text))) {
         lv_label_set_text(s_ctx.wifi_password_label, text);
@@ -485,7 +482,6 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
 {
     const char *ssid = status->ssid != NULL ? status->ssid : "(sin ssid)";
     const char *password = status->password != NULL ? status->password : "(sin password)";
-    const char *web_password = status->web_password != NULL ? status->web_password : "(sin web password)";
     const char *https_fingerprint = status->https_fingerprint != NULL ? status->https_fingerprint : "";
     const char *web_url = status->web_url != NULL ? status->web_url : "";
     const char *ip_addr = status->ip_addr != NULL ? status->ip_addr : "192.168.4.1";
@@ -547,7 +543,7 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
 
     s_ctx.wifi_placeholder = lv_obj_create(secrets);
     lv_obj_set_size(s_ctx.wifi_placeholder, UI_SECRET_QR_SIZE, UI_SECRET_QR_SIZE);
-    lv_obj_set_pos(s_ctx.wifi_placeholder, UI_CARD_PAD, 0);
+    lv_obj_set_pos(s_ctx.wifi_placeholder, UI_CARD_PAD, UI_SECRET_QR_Y);
     lv_obj_set_style_bg_opa(s_ctx.wifi_placeholder, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_color(s_ctx.wifi_placeholder, lv_color_hex(UI_COLOR_LINE), 0);
     lv_obj_set_style_border_width(s_ctx.wifi_placeholder, 1, 0);
@@ -560,24 +556,17 @@ static void build_boot_screen(const lvgl_ui_boot_status_t *status)
     lv_qrcode_set_dark_color(s_ctx.wifi_qr, lv_color_hex(0x000000));
     lv_qrcode_set_light_color(s_ctx.wifi_qr, lv_color_hex(0xffffff));
     lv_qrcode_set_quiet_zone(s_ctx.wifi_qr, true);
-    lv_obj_set_pos(s_ctx.wifi_qr, UI_CARD_PAD, 0);
+    lv_obj_set_pos(s_ctx.wifi_qr, UI_CARD_PAD, UI_SECRET_QR_Y);
     lv_obj_add_flag(s_ctx.wifi_qr, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *wifi_title = add_label(secrets, "WiFi password", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), UI_SECRET_TEXT_W);
-    lv_obj_set_pos(wifi_title, UI_SECRET_TEXT_X, 0);
+    lv_obj_set_pos(wifi_title, UI_SECRET_TEXT_X, UI_SECRET_TEXT_Y);
 
     s_ctx.wifi_password_label = add_label(secrets, password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_SECRET_TEXT_W);
-    lv_obj_set_pos(s_ctx.wifi_password_label, UI_SECRET_TEXT_X, 22);
-
-    lv_obj_t *web_title = add_label(secrets, "Web password", &lv_font_montserrat_16, lv_color_hex(UI_COLOR_MUTED), UI_SECRET_TEXT_W);
-    lv_obj_set_pos(web_title, UI_SECRET_TEXT_X, 78);
-
-    s_ctx.web_password_label = add_label(secrets, web_password, &lv_font_montserrat_16, lv_color_hex(UI_COLOR_TEXT), UI_SECRET_TEXT_W);
-    lv_obj_set_pos(s_ctx.web_password_label, UI_SECRET_TEXT_X, 100);
+    lv_obj_set_pos(s_ctx.wifi_password_label, UI_SECRET_TEXT_X, UI_SECRET_TEXT_Y + 22);
 
     strlcpy(s_ctx.wifi_ssid, ssid, sizeof(s_ctx.wifi_ssid));
     strlcpy(s_ctx.wifi_password, password, sizeof(s_ctx.wifi_password));
-    strlcpy(s_ctx.web_password, web_password, sizeof(s_ctx.web_password));
     set_secret_labels(false);
 
     lv_screen_load(screen);
@@ -681,12 +670,10 @@ esp_err_t lvgl_ui_update_credentials(const lvgl_ui_boot_status_t *status, bool r
 
     const char *ssid = status->ssid != NULL ? status->ssid : "";
     const char *password = status->password != NULL ? status->password : "";
-    const char *web_password = status->web_password != NULL ? status->web_password : "";
     if (ssid[0] != '\0') {
         strlcpy(s_ctx.wifi_ssid, ssid, sizeof(s_ctx.wifi_ssid));
     }
     strlcpy(s_ctx.wifi_password, password, sizeof(s_ctx.wifi_password));
-    strlcpy(s_ctx.web_password, web_password, sizeof(s_ctx.web_password));
     if (s_ctx.ssid_label != NULL && ssid[0] != '\0') {
         lv_label_set_text(s_ctx.ssid_label, ssid);
     }

@@ -81,20 +81,6 @@ static void test_human_password_uses_eff_large_wordlist_endpoints(void)
     CHECK(strncmp(password, "abacus zoom abacus ", strlen("abacus zoom abacus ")) == 0);
 }
 
-static void test_web_password_uses_two_words_without_hyphens(void)
-{
-    char password[128];
-    const uint32_t values[] = {0U, 7775U};
-    struct u32_sequence sequence = {
-        .values = values,
-        .count = sizeof(values) / sizeof(values[0]),
-    };
-
-    CHECK(credentials_generate_human_web_password(password, sizeof(password), u32_sequence_random, &sequence) == CREDENTIALS_OK);
-    CHECK(strcmp(password, "abacus zoom") == 0);
-    CHECK(CREDENTIALS_WEB_PASSWORD_WORD_COUNT == 2U);
-}
-
 static void test_phrase_policy_rejects_legacy_hyphenated_secrets(void)
 {
     CHECK(credentials_human_phrase_matches_policy("alpha bravo charlie delta echo foxtrot", 6));
@@ -204,7 +190,6 @@ int main(void)
 {
     test_human_password_uses_six_words();
     test_human_password_uses_eff_large_wordlist_endpoints();
-    test_web_password_uses_two_words_without_hyphens();
     test_phrase_policy_rejects_legacy_hyphenated_secrets();
     test_human_phrase_compacts_for_operational_password();
     test_wifi_qr_payload_uses_standard_wifi_format();

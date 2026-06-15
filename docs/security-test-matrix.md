@@ -25,7 +25,7 @@ source /home/david/esp-idf/export.sh
 | Optional WiFi client mode is disabled by default and gated by physical/risk/encryption policy | `tests/host/test_wifi_client_policy.c` |
 | Optional BLE provisioning is disabled by default, requires local presence/pairing/encrypted NVS, and time-boxes radio exposure | `tests/host/test_ble_provisioning_policy.c` |
 | Secret persistence requires encrypted NVS | `tests/host/test_storage_config.c` |
-| Persisted web auth uses hash+salt, not plaintext | `tests/host/test_storage_config.c`, `tests/host/test_web_security.c` |
+| Web session uses random token, CSRF and single active session without a separate web password | `tests/host/test_web_security.c`, `tests/host/test_web_terminal_contract.c` |
 | Legacy plaintext secret scrub policy | `tests/host/test_storage_config.c` |
 | Local initial pairing code format, one-time consume and lockout | `tests/host/test_local_pairing.c` |
 | Config export/import omits secrets and validates schema/checksum | `tests/host/test_config_transfer.c`, `tests/host/test_http_route_policy.c` |
@@ -40,10 +40,10 @@ source /home/david/esp-idf/export.sh
 - AP appears as WPA2-protected `KVM`.
 - The device enumerates as ESP32-S3 USB-Serial/JTAG on `/dev/ttyACM0`.
 - `http://kvm.local` resolves only when the client is connected to the AP and supports mDNS.
-- Credential rotation shows new secrets on the AMOLED only, not in the HTTP response.
-- First web login rejects missing or incorrect local pair code, then accepts the one-time code shown on the AMOLED.
-- `/config.json` must not contain WiFi password, web password hash, salts or serial transcript data.
-- The on-screen QR opens only the local URL and does not encode WiFi/web passwords, pairing code or session token.
+- Credential rotation shows the new WiFi secret on the AMOLED only, not in the HTTP response.
+- Web login creates a local session without requesting a web password.
+- `/config.json` must not contain WiFi password or serial transcript data.
+- The on-screen QR encodes WiFi join data and does not include web session tokens.
 - Old web sessions are rejected after credential rotation.
-- After credential rotation and reboot, the AP requires the rotated WiFi password and web login accepts the rotated web password.
+- After credential rotation and reboot, the AP requires the rotated WiFi password.
 - BOOT long-press behavior must be smoke-tested on the physical board after firmware changes touching reset or lock flows.

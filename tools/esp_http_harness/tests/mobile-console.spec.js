@@ -21,16 +21,8 @@ test('mobile operator auth and terminal controls work end-to-end', async ({ page
 
   await page.goto('/login');
   await expect(page.getByRole('heading', { name: 'Serial console' })).toBeVisible();
-
-  await page.getByPlaceholder('Web password').fill('wrong password');
-  await page.getByRole('button', { name: 'Unlock console' }).click();
-  await expect(page.locator('body')).toContainText('invalid credentials');
-  consoleErrors.length = 0;
-  failedRequests.length = 0;
-
-  await page.goto('/login');
-  await page.getByPlaceholder('Web password').fill('alphazoom');
-  await page.getByRole('button', { name: 'Unlock console' }).click();
+  await expect(page.getByPlaceholder('Web password')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Open console' }).click();
 
   await expect(page).toHaveURL(/\/terminal$/);
   await expect(page.locator('#state')).toBeVisible();

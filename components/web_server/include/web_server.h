@@ -2,16 +2,12 @@
 
 #include "esp_err.h"
 #include "local_tls_identity.h"
-#include "web_password_hash.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 typedef struct {
     const char *wifi_password;
-    const char *web_password;
-    const uint8_t *web_password_salt;
-    const uint8_t *web_password_hash;
     bool reveal_on_local_display;
     bool reboot_required;
 } web_server_credential_rotation_t;
@@ -24,10 +20,6 @@ typedef esp_err_t (*web_server_export_config_fn_t)(char *out, size_t out_size, v
 typedef esp_err_t (*web_server_import_config_fn_t)(const char *json, void *ctx);
 
 typedef struct {
-    const char *web_password;
-    const uint8_t *web_password_salt;
-    const uint8_t *web_password_hash;
-    bool web_password_hash_configured;
     const local_tls_identity_t *tls_identity;
     bool tls_fingerprint_displayed_locally;
     web_server_rotate_credentials_fn_t rotate_credentials;

@@ -6,7 +6,6 @@
 typedef struct {
     const char *ssid;
     const char *password;
-    const char *web_password;
     const char *https_fingerprint;
     const char *web_url;
     const char *ip_addr;

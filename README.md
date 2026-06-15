@@ -7,27 +7,26 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - AP WiFi propio con DHCP en `192.168.4.1`.
 - Publica `http://kvm.local` por mDNS cuando el cliente lo soporta; `http://192.168.4.1` sigue siendo el fallback operativo.
 - Credenciales AP efímeras si NVS no contiene configuración válida.
-- Autenticación web obligatoria con password temporal separada de la password WiFi.
-- Terminal web en modo solo lectura por defecto; escritura requiere tomar control explícitamente.
+- Sesión web local sin password adicional; la frontera inicial es WPA2 fuerte + presencia física + autenticación Linux en la consola.
+- Terminal web con una única sesión activa; el usuario conectado tiene control de escritura automáticamente.
 - Pantalla SH8601 inicializada con LVGL 9.5.
 - Táctil FT5x06 no se inicializa en la UI actual porque la pantalla local es solo informativa.
-- UI local apaisada, oscura y solo informativa con batería, estado AP, SSID, passwords ocultas por defecto y URL.
-- QR local en pantalla para abrir la URL del portal; no contiene passwords ni tokens.
-- La pantalla local muestra estado USB, clientes WiFi/web, modo web (`read-only`, escritura activa o locked) y drops del bridge sin renderizar logs.
+- UI local apaisada, oscura y solo informativa con batería, estado AP, SSID, WiFi password oculta por defecto y URL.
+- QR local en pantalla para conectarse al AP WiFi; no contiene tokens de sesión.
+- La pantalla local muestra estado USB, clientes WiFi/web, sesión/input y drops del bridge sin renderizar logs.
 - La pantalla se apaga tras 3 minutos y se reactiva con el botón BOOT/GPIO0.
 - El AP se apaga automáticamente tras 10 minutos sin clientes WiFi ni clientes web.
-- Mantener `BOOT` durante 3 segundos invalida sesiones web, libera escritura activa y cierra WebSockets.
+- Mantener `BOOT` durante 3 segundos invalida la sesión web y cierra WebSockets.
 - Mantener `BOOT` durante 10 segundos borra la configuración NVS del proyecto y reinicia con credenciales efímeras nuevas.
 - Servidor HTTP con página de estado y terminal web en `/terminal`.
-- Terminal web móvil con barra de estado fija, estados `Read-only`/`Write active`/`Writer busy`/`USB disconnected`/`Locked` y teclas táctiles rápidas.
+- Terminal web móvil fullscreen con HUD flotante, estado de stream y teclas táctiles rápidas.
 - La vista web filtra secuencias ANSI/OSC básicas para que logs de arranque con color o control de cursor no ensucien el terminal.
 - Endpoint autenticado `/about` con versión, límites del producto y resumen de seguridad local.
 - WebSocket en `/ws`.
 - Diagnóstico local autenticado en `/diagnostics` y export JSON en `/diagnostics.json`.
 - Actualización firmware local en `/ota`: subida manual autenticada, protegida por CSRF/Origin, validada por ESP-IDF OTA y con reboot explícito.
-- Rotación local de credenciales en `/credentials`: genera nuevas passwords human-readable, no las devuelve por HTTP, las muestra en AMOLED y exige NVS Encryption para persistir WiFi.
+- Rotación local de credenciales en `/credentials`: genera nueva WiFi password human-readable, no la devuelve por HTTP, la muestra en AMOLED y exige NVS Encryption para persistir WiFi.
 - Export/import local de configuración no secreta en `/config`: JSON autenticado con schema y checksum; nunca exporta passwords, hashes ni salts.
-- Pairing local inicial: el primer login web tras arrancar exige la password web y un código de 6 dígitos mostrado en la AMOLED.
 - Log circular de eventos en RAM para auth, WebSocket, backpressure y estado operativo.
 - Task watchdog explícito para tareas críticas propias (`usb_rx`, `usb_tx`, `web_tx`, `lvgl_ui`).
 - `terminal_bridge` para fan-in/fan-out entre USB y terminal web.
@@ -39,16 +38,11 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 ## Seguridad
 
 - No hay password AP fija de fábrica.
-- La password efímera usa ocho palabras inglesas aleatorias y no se escribe en logs.
+- La password WiFi efímera usa seis palabras inglesas aleatorias y no se escribe en logs.
 - Las credenciales WiFi persistentes exigen una passphrase de producción de al menos 20 bytes.
-- La password WiFi y la password web efímeras usan ocho palabras inglesas aleatorias y no se escriben en logs.
-- La password web es distinta de la password WiFi.
-- La password web se deriva con sal y PBKDF2-HMAC-SHA256 antes de validar login; no se guarda en claro en el estado de auth.
-- Si se rota, la password web persiste como hash+sal en NVS cifrado para sobrevivir al reboot que aplica la nueva WiFi.
 - La terminal WebSocket exige sesión autenticada y valida `Origin`.
-- El primer login web tras cada arranque exige un código de pairing local de un solo uso, además de la password web.
-- El pairing local se bloquea tras intentos incorrectos repetidos; se recupera reiniciando o mediante flujo físico de recuperación.
-- La escritura hacia la consola exige lock explícito de un único cliente.
+- El login web crea una sesión local aleatoria `HttpOnly`/`SameSite=Strict`; un nuevo login reemplaza la sesión anterior.
+- La escritura hacia la consola exige una sesión web válida y única.
 - La entrada WebSocket tiene límite por frame y presupuesto por ventana para evitar DoS básico.
 - Las rutas HTTP están limitadas a endpoints conocidos con métodos y tamaños de body esperados.
 - La OTA local requiere sesión web, CSRF, `Origin` válido, tamaño compatible con slot OTA y no reinicia automáticamente tras la subida.
@@ -61,7 +55,7 @@ Consola de rescate para servidores Linux headless sobre Waveshare ESP32-S3 Touch
 - El QR de pantalla contiene solo la URL local, nunca credenciales.
 - Si la password es efímera y la pantalla no inicializa, el AP no arranca.
 - `storage_save_config()` rechaza guardar credenciales WiFi si `CONFIG_NVS_ENCRYPTION` no está activo.
-- Los buffers temporales de credenciales se borran explícitamente tras ser copiados por WiFi, UI o autenticación web.
+- Los buffers temporales de credenciales se borran explícitamente tras ser copiados por WiFi o UI.
 - Si la configuración persistente está corrupta o incompleta, el firmware no la usa: regenera credenciales efímeras y exige exposición por pantalla local para continuar.
 
 Para despliegues reales, ver [`docs/production-hardening.md`](docs/production-hardening.md). Un firmware sin Secure Boot, Flash Encryption, NVS Encryption para secretos persistentes y JTAG/debug cerrado debe considerarse build de laboratorio, no producción. El perfil de laboratorio no quema eFuses; el perfil `sdkconfig.prod.defaults` exige clave privada externa al repo para builds firmados.
@@ -93,14 +87,14 @@ idf.py -p /dev/ttyACM0 monitor
 
 1. Flashea la placa.
 2. Lee en la AMOLED el SSID `KVM`.
-3. Pulsa `BOOT` con la pantalla encendida para revelar durante 30 segundos la password WiFi y la password web temporal.
+3. Pulsa `BOOT` con la pantalla encendida para revelar durante 30 segundos la password WiFi.
 4. Conéctate al AP desde móvil o portátil.
 5. Escanea el QR de pantalla o abre `http://kvm.local` si tu sistema soporta mDNS, o `http://192.168.4.1`.
-6. Autentica con la password web y el código `Pair code` mostrado en la AMOLED. El código es de un solo uso para confirmar presencia física local.
-7. Usa `/terminal`; por defecto es solo lectura hasta pulsar `Request write`. La barra superior muestra si puedes escribir, si otro cliente tiene el lock o si USB está desconectado.
+6. Pulsa `Open console`; autentícate después en el login real de Linux si el getty lo solicita.
+7. Usa `/terminal`; la sesión web activa puede escribir directamente en la consola.
 8. Usa `/diagnostics` para estado técnico y eventos recientes sin secretos.
-9. Usa `/credentials` para rotar WiFi/web passwords. La respuesta web no contiene secretos: pulsa `BOOT` y lee las nuevas passwords en la AMOLED.
-10. Tras rotar credenciales, vuelve a iniciar sesión con la nueva web password y reinicia desde `/credentials` para aplicar la nueva WiFi password.
+9. Usa `/credentials` para rotar la WiFi password. La respuesta web no contiene secretos: pulsa `BOOT` y lee la nueva password en la AMOLED.
+10. Tras rotar credenciales, reinicia desde `/credentials` para aplicar la nueva WiFi password.
 11. Usa `/config` para exportar o importar configuración no secreta. La importación requiere reboot para aplicar cambios de AP.
 12. Usa `/ota` solo para cargar una imagen completa `.bin` generada por ESP-IDF para esta placa. En producción debe estar firmada con la clave configurada en `sdkconfig.prod.defaults`.
 13. Tras una OTA aceptada, pulsa `Reboot to pending image` cuando estés listo para reiniciar el bridge.

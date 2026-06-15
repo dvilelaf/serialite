@@ -42,8 +42,6 @@ typedef struct {
     uint32_t version;
     uint32_t checksum;
     kvm_wifi_ap_config_t wifi;
-    char web_password[WIFI_AP_PASSWORD_MAX_LEN];
-    bool web_password_valid;
 } ephemeral_rtc_cache_t;
 
 static app_credentials_context_t s_credentials_ctx;
@@ -68,8 +66,6 @@ static uint32_t ephemeral_cache_checksum(const ephemeral_rtc_cache_t *cache)
     hash = fnv1a_update(hash, &cache->magic, sizeof(cache->magic));
     hash = fnv1a_update(hash, &cache->version, sizeof(cache->version));
     hash = fnv1a_update(hash, &cache->wifi, sizeof(cache->wifi));
-    hash = fnv1a_update(hash, cache->web_password, sizeof(cache->web_password));
-    hash = fnv1a_update(hash, &cache->web_password_valid, sizeof(cache->web_password_valid));
     return hash;
 }
 
@@ -103,19 +99,6 @@ static void ephemeral_cache_store_wifi(const kvm_wifi_ap_config_t *wifi)
     s_ephemeral_rtc_cache.magic = EPHEMERAL_RTC_MAGIC;
     s_ephemeral_rtc_cache.version = EPHEMERAL_RTC_VERSION;
     s_ephemeral_rtc_cache.wifi = *wifi;
-    memset(s_ephemeral_rtc_cache.web_password, 0, sizeof(s_ephemeral_rtc_cache.web_password));
-    s_ephemeral_rtc_cache.web_password_valid = false;
-    s_ephemeral_rtc_cache.checksum = ephemeral_cache_checksum(&s_ephemeral_rtc_cache);
-}
-
-static void ephemeral_cache_store_web_password(const char *web_password)
-{
-    if (web_password == NULL || web_password[0] == '\0' || !ephemeral_cache_valid()) {
-        return;
-    }
-
-    strlcpy(s_ephemeral_rtc_cache.web_password, web_password, sizeof(s_ephemeral_rtc_cache.web_password));
-    s_ephemeral_rtc_cache.web_password_valid = true;
     s_ephemeral_rtc_cache.checksum = ephemeral_cache_checksum(&s_ephemeral_rtc_cache);
 }
 
@@ -160,18 +143,6 @@ static esp_err_t init_nvs(bool *recovered)
 static esp_err_t generate_human_password(char *out, size_t out_size)
 {
     const credentials_result_t result = credentials_generate_human_password(out, out_size, credentials_random, NULL);
-    if (result == CREDENTIALS_OK) {
-        return ESP_OK;
-    }
-    if (result == CREDENTIALS_ERR_OUTPUT_TOO_SMALL) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-    return result == CREDENTIALS_ERR_RANDOM_FAILED ? ESP_FAIL : ESP_ERR_INVALID_ARG;
-}
-
-static esp_err_t generate_human_web_password(char *out, size_t out_size)
-{
-    const credentials_result_t result = credentials_generate_human_web_password(out, out_size, credentials_random, NULL);
     if (result == CREDENTIALS_OK) {
         return ESP_OK;
     }
@@ -255,8 +226,7 @@ static void maybe_start_ble_provisioning_runtime(bool offline_ap_available)
 static esp_err_t rotate_credentials_cb(const web_server_credential_rotation_t *rotation, void *ctx)
 {
     app_credentials_context_t *state = (app_credentials_context_t *)ctx;
-    if (rotation == NULL || state == NULL || rotation->wifi_password == NULL || rotation->web_password == NULL ||
-        rotation->web_password_salt == NULL || rotation->web_password_hash == NULL) {
+    if (rotation == NULL || state == NULL || rotation->wifi_password == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -276,9 +246,9 @@ static esp_err_t rotate_credentials_cb(const web_server_credential_rotation_t *r
     storage_config_t next = state->config;
     strlcpy(next.wifi.ssid, "KVM", sizeof(next.wifi.ssid));
     strlcpy(next.wifi.password, rotation->wifi_password, sizeof(next.wifi.password));
-    memcpy(next.web_password_salt, rotation->web_password_salt, sizeof(next.web_password_salt));
-    memcpy(next.web_password_hash, rotation->web_password_hash, sizeof(next.web_password_hash));
-    next.web_password_hash_configured = true;
+    memset(next.web_password_salt, 0, sizeof(next.web_password_salt));
+    memset(next.web_password_hash, 0, sizeof(next.web_password_hash));
+    next.web_password_hash_configured = false;
     storage_wifi_config_apply_safe_ranges(&next.wifi);
     if (!storage_wifi_config_is_valid(&next.wifi)) {
         storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
@@ -288,7 +258,6 @@ static esp_err_t rotate_credentials_cb(const web_server_credential_rotation_t *r
     const lvgl_ui_boot_status_t ui_status = {
         .ssid = next.wifi.ssid,
         .password = rotation->wifi_password,
-        .web_password = rotation->web_password,
         .ip_addr = "192.168.4.1",
         .usb_connected = usb_console_get_status().connected,
     };
@@ -299,7 +268,6 @@ static esp_err_t rotate_credentials_cb(const web_server_credential_rotation_t *r
         const lvgl_ui_boot_status_t rollback_ui_status = {
             .ssid = state->config.wifi.ssid,
             .password = state->config.wifi.password,
-            .web_password = "current web password unchanged",
             .ip_addr = "192.168.4.1",
             .usb_connected = usb_console_get_status().connected,
         };
@@ -424,32 +392,6 @@ void app_main(void)
         ephemeral_cache_store_wifi(&mapped_wifi_config);
     }
 
-    char web_password[WIFI_AP_PASSWORD_MAX_LEN] = {0};
-    const bool persisted_web_auth = storage_web_auth_config_is_valid(&config);
-    const bool rtc_web_password_available = ephemeral_cache_valid() &&
-                                            s_ephemeral_rtc_cache.web_password_valid &&
-                                            credentials_human_phrase_matches_policy(
-                                                s_ephemeral_rtc_cache.web_password,
-                                                CREDENTIALS_WEB_PASSWORD_WORD_COUNT);
-    credentials_web_auth_boot_decision_t web_auth_decision = {0};
-    ESP_ERROR_CHECK(credentials_web_auth_boot_decide(
-        &(credentials_web_auth_boot_input_t){
-            .persisted_hash_configured = persisted_web_auth,
-            .rtc_password_available = rtc_web_password_available,
-        },
-        &web_auth_decision) ? ESP_OK : ESP_ERR_INVALID_STATE);
-
-    if (web_auth_decision.use_rtc_password) {
-        strlcpy(web_password, s_ephemeral_rtc_cache.web_password, sizeof(web_password));
-        ESP_LOGW(TAG, "reusing local-display web password from RTC after software reboot");
-    } else if (web_auth_decision.generate_runtime_password) {
-        ESP_ERROR_CHECK(generate_human_web_password(web_password, sizeof(web_password)));
-        ephemeral_cache_store_web_password(web_password);
-        if (persisted_web_auth) {
-            ESP_LOGW(TAG, "stored web auth exists, but local-display runtime password will be used for this boot");
-        }
-    }
-
     bool tls_ready = false;
 #if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
     const local_tls_identity_result_t tls_result = local_tls_identity_generate(
@@ -466,7 +408,6 @@ void app_main(void)
     const lvgl_ui_boot_status_t ui_status = {
         .ssid = mapped_wifi_config.ssid,
         .password = mapped_wifi_config.password,
-        .web_password = web_password,
         .https_fingerprint =
 #if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
             tls_ready ? s_tls_identity.fingerprint_text : NULL,
@@ -491,7 +432,6 @@ void app_main(void)
     if (startup_policy_after_ui(ui_err == ESP_OK, ephemeral_credentials) == STARTUP_POLICY_SKIP_AP) {
         ESP_LOGE(TAG, "AP skipped: ephemeral password cannot be safely exposed without local display");
         storage_secure_zero(mapped_wifi_config.password, sizeof(mapped_wifi_config.password));
-        storage_secure_zero(web_password, sizeof(web_password));
 #if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
         local_tls_identity_zeroize(&s_tls_identity);
 #endif
@@ -511,10 +451,6 @@ void app_main(void)
     log_init_result("usb_console", usb_err);
     if (wifi_err == ESP_OK) {
         const web_server_config_t web_config = {
-            .web_password = web_auth_decision.use_persisted_hash ? NULL : web_password,
-            .web_password_salt = web_auth_decision.use_persisted_hash ? config.web_password_salt : NULL,
-            .web_password_hash = web_auth_decision.use_persisted_hash ? config.web_password_hash : NULL,
-            .web_password_hash_configured = web_auth_decision.use_persisted_hash,
             .tls_identity =
 #if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
                 tls_ready ? &s_tls_identity : NULL,
@@ -532,7 +468,6 @@ void app_main(void)
 #if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
         local_tls_identity_zeroize(&s_tls_identity);
 #endif
-        storage_secure_zero(web_password, sizeof(web_password));
         log_init_result("web_server", web_err);
         const web_server_status_t web_status = web_server_get_status();
         const web_transport_t web_transport = web_transport_from_status(web_err == ESP_OK && web_status.started, web_status.tls_active);
@@ -565,7 +500,6 @@ void app_main(void)
 #if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
         local_tls_identity_zeroize(&s_tls_identity);
 #endif
-        storage_secure_zero(web_password, sizeof(web_password));
         ESP_LOGE(TAG, "web_server skipped because AP did not start");
     }
 }

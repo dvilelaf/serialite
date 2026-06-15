@@ -17,8 +17,6 @@ void app_main(void)
     ESP_LOGI(TAG, "esp_event_loop_create_default -> %s", esp_err_to_name(event_err));
 
     const web_server_config_t config = {
-        .web_password = "alpha zoom",
-        .web_password_hash_configured = false,
         .tls_identity = NULL,
         .tls_fingerprint_displayed_locally = false,
         .rotate_credentials = NULL,

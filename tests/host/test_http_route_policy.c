@@ -15,7 +15,7 @@ static void test_allows_known_routes_and_methods(void)
 {
     CHECK(http_route_policy_allowed("/", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/login", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
-    CHECK(http_route_policy_allowed("/login", HTTP_ROUTE_METHOD_POST, 32) == HTTP_ROUTE_POLICY_ALLOW);
+    CHECK(http_route_policy_allowed("/login", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/logout", HTTP_ROUTE_METHOD_POST, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/terminal", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);
     CHECK(http_route_policy_allowed("/terminal-status.json", HTTP_ROUTE_METHOD_GET, 0) == HTTP_ROUTE_POLICY_ALLOW);

@@ -25,14 +25,9 @@ SESSION_COOKIE = "kvm_session"
 
 @dataclass
 class HarnessState:
-    password: str
     usb_connected: bool = True
     sessions: dict[str, str] = field(default_factory=dict)
     locked: bool = False
-
-    @property
-    def operational_password(self) -> str:
-        return self.password.replace(" ", "")
 
     def create_session(self) -> tuple[str, str]:
         token = secrets.token_hex(16)
@@ -98,10 +93,6 @@ class KvmHarnessHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path == "/login":
-            form = self.read_form()
-            if form.get("password", [""])[0] != self.state.operational_password:
-                self.send_error(HTTPStatus.FORBIDDEN, "invalid credentials")
-                return
             token, _csrf = self.state.create_session()
             self.send_response(HTTPStatus.SEE_OTHER)
             self.no_store_headers()
@@ -235,12 +226,10 @@ def login_page() -> str:
 <title>KVM Login</title><style>
 *{box-sizing:border-box}body{margin:0;min-height:100svh;background:linear-gradient(180deg,#020504,#07130f);color:#eafff8;font:16px sans-serif;display:grid;place-items:center;padding:18px}
 main{width:100%;max-width:380px;border:1px solid #174436;border-radius:22px;padding:22px;background:#030807;box-shadow:0 18px 50px #0009}
-h1{margin:0 0 8px;font-size:24px}input,button{width:100%;border-radius:12px;padding:13px;margin-top:12px;font:inherit}
-input{background:#000;color:#fff;border:1px solid #245c4c}button{background:#0c3429;color:#bffff0;border:1px solid #2ee6b8;font-weight:700}
+h1{margin:0 0 8px;font-size:24px}button{width:100%;border-radius:12px;padding:13px;margin-top:12px;font:inherit;background:#0c3429;color:#bffff0;border:1px solid #2ee6b8;font-weight:700}
 p{color:#8bb5aa;line-height:1.4;margin:8px 0 14px}</style></head><body><main><h1>Serial console</h1>
-<p>Enter the web password without spaces.</p>
-<form method="post" action="/login"><input name="password" type="password" autocomplete="current-password" placeholder="Web password" autofocus>
-<button type="submit">Unlock console</button></form></main></body></html>"""
+<p>This opens a local web session on the KVM access point. Authenticate in the Linux terminal when prompted.</p>
+<form method="post" action="/login"><button type="submit">Open console</button></form></main></body></html>"""
 
 
 def terminal_page(csrf: str, usb_connected: bool) -> str:
@@ -262,9 +251,9 @@ def terminal_page(csrf: str, usb_connected: bool) -> str:
 <script>const CSRF='{csrf}';let canWrite=true,usbConnected={usb},writerState='write-active',locked=false,connected=true;</script></body></html>"""
 
 
-def create_server(address: tuple[str, int], password: str = "alpha zoom", quiet: bool = True) -> ReusableThreadingHTTPServer:
+def create_server(address: tuple[str, int], quiet: bool = True) -> ReusableThreadingHTTPServer:
     server = ReusableThreadingHTTPServer(address, KvmHarnessHandler)
-    server.state = HarnessState(password=password)  # type: ignore[attr-defined]
+    server.state = HarnessState()  # type: ignore[attr-defined]
     server.quiet = quiet  # type: ignore[attr-defined]
     return server
 
@@ -273,14 +262,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the ESP32-KVM local Web UI harness.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("--password", default="alpha zoom")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    server = create_server((args.host, args.port), password=args.password, quiet=not args.verbose)
+    server = create_server((args.host, args.port), quiet=not args.verbose)
     host, port = server.server_address
     print(f"ESP32-KVM Web harness: http://{host}:{port}/login")
-    print(f"Web password: {args.password}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

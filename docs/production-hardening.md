@@ -82,7 +82,7 @@ La ruta de la clave debe estar fuera del checkout y gestionada por la infraestru
 - La password web rotada debe persistir como hash+sal en NVS cifrado, nunca como plaintext.
 - Credenciales persistentes solo son aceptables con NVS Encryption activo.
 - Export/import de configuracion solo puede transportar campos no secretos con schema/checksum; passwords, hashes y salts no deben exportarse.
-- El QR visible en pantalla solo debe codificar la URL local; no debe incluir passwords, pair code, tokens ni configuracion sensible.
+- El QR visible en pantalla puede codificar el acceso WiFi local, pero nunca debe incluir tokens de sesion web, claves privadas ni datos del servidor.
 - Los buffers temporales con passwords deben limpiarse cuando WiFi, UI o auth ya hayan tomado su propia copia.
 - Configuracion persistente corrupta o incompleta no debe reutilizarse ni degradar a AP abierto; debe entrar en setup fisico con credenciales nuevas.
 - El AP debe limitar su ventana de exposicion; el firmware de base lo apaga tras 10 minutos sin clientes WiFi ni WebSocket.
@@ -155,7 +155,7 @@ Antes de declarar un build apto para produccion:
 2. `git diff --check` no debe reportar errores.
 3. El firmware debe flashear y enumerar como `/dev/ttyACM*`.
 4. El AP `KVM` debe aparecer protegido por WPA2.
-5. Login, WebSocket, read-only y write-lock deben validarse manualmente.
+5. Login local, WebSocket, sesion unica y emergency lock deben validarse manualmente.
 6. `/diagnostics` y `/about` no deben exponer secretos.
 7. Secure Boot, Flash Encryption y NVS Encryption deben estar activos en el perfil de produccion.
 8. JTAG/debug deben estar deshabilitados o justificados por una excepcion documentada.

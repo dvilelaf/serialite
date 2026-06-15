@@ -18,7 +18,7 @@ import esp32_kvm_web_harness as harness  # noqa: E402
 
 class HarnessServerTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.server = harness.create_server(("127.0.0.1", 0), password="alpha zoom")
+        self.server = harness.create_server(("127.0.0.1", 0))
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.host, self.port = self.server.server_address
@@ -37,7 +37,6 @@ class HarnessServerTest(unittest.TestCase):
         response = self.request(
             "POST",
             "/login",
-            body="password=alphazoom",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         self.assertEqual(response.status, 303)
@@ -50,23 +49,7 @@ class HarnessServerTest(unittest.TestCase):
         csrf = html.split("const CSRF='", 1)[1].split("'", 1)[0]
         return session, csrf
 
-    def test_login_requires_visible_web_password(self) -> None:
-        bad = self.request(
-            "POST",
-            "/login",
-            body="password=wrong",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        self.assertEqual(bad.status, 403)
-
-        spaced = self.request(
-            "POST",
-            "/login",
-            body="password=alpha+zoom",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        self.assertEqual(spaced.status, 403)
-
+    def test_login_creates_session_without_web_password(self) -> None:
         session, _csrf = self.login()
         self.assertTrue(session)
 

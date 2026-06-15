@@ -109,13 +109,13 @@ for i in $(seq 1 "$ITERATIONS"); do
         expect_status "root redirect" "HTTP/1.1 303 See Other" "/"
         expect_status "favicon 404" "HTTP/1.1 404 Not Found" "/favicon.ico"
         expect_status "login page" "HTTP/1.1 200 OK" "/login"
-        expect_status "login post" "HTTP/1.1 303 See Other" "/login" -c "$cookie_file" -X POST --data-urlencode "password=${PASSWORD}"
-        expect_status "compact login post" "HTTP/1.1 303 See Other" "/login" -c "$compact_cookie_file" -X POST --data-urlencode "password=${PASSWORD// /}"
+        expect_status "login post" "HTTP/1.1 303 See Other" "/login" -c "$cookie_file" -X POST
+        expect_status "second login post" "HTTP/1.1 303 See Other" "/login" -c "$compact_cookie_file" -X POST
     else
         expect_status_or_rate_limit "root redirect" "HTTP/1.1 303 See Other" "/"
         expect_status_or_rate_limit "favicon 404" "HTTP/1.1 404 Not Found" "/favicon.ico"
         expect_status_or_rate_limit "login page" "HTTP/1.1 200 OK" "/login"
-        expect_status_or_rate_limit "login post" "HTTP/1.1 303 See Other" "/login" -c "$cookie_file" -X POST --data-urlencode "password=${PASSWORD}"
+        expect_status_or_rate_limit "login post" "HTTP/1.1 303 See Other" "/login" -c "$cookie_file" -X POST
     fi
 
     root_status="$(curl_status "/" -b "$cookie_file")"

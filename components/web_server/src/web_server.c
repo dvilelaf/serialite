@@ -1003,17 +1003,11 @@ static esp_err_t login_get_handler(httpd_req_t *req)
         "<title>KVM Login</title><style>"
         "*{box-sizing:border-box}body{margin:0;min-height:100svh;background:linear-gradient(180deg,#020504,#07130f);color:#eafff8;font:16px sans-serif;display:grid;place-items:center;padding:18px}"
         "main{width:100%%;max-width:380px;border:1px solid #174436;border-radius:22px;padding:22px;background:#030807;box-shadow:0 18px 50px #0009}"
-        "h1{margin:0 0 8px;font-size:24px}input,button{border-radius:12px;padding:13px;margin-top:12px;font:inherit}"
-        ".field{position:relative}input{width:100%%;background:#000;color:#fff;border:1px solid #245c4c;padding-right:58px}button{width:100%%;background:#0c3429;color:#bffff0;border:1px solid #2ee6b8;font-weight:700}"
-        "#togglePassword{position:absolute;right:7px;top:50%%;transform:translateY(-50%%);width:40px;height:40px;margin:0;padding:0;border-radius:10px;background:#07130f;color:#bffff0;border:1px solid #245c4c;line-height:1}"
-        "#togglePassword.active{background:#12382e;border-color:#2ee6b8;color:#fff}"
-        "p{color:#8bb5aa;line-height:1.4;margin:8px 0 14px}</style></head><body><main><h1>Serial console</h1>"
-        "<p>Enter the web password without spaces.</p>"
-        "<form method=\"post\" action=\"/login\"><div class=\"field\"><input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" placeholder=\"Web password\" autofocus>"
-        "<button id=\"togglePassword\" type=\"button\" aria-label=\"Show password\" aria-pressed=\"false\">&#128065;</button></div>"
-        "<button type=\"submit\">Unlock console</button></form></main>"
-        "<script>const password=document.getElementById('password'),togglePassword=document.getElementById('togglePassword');"
-        "togglePassword.onclick=()=>{const shown=password.type==='password';password.type=shown?'text':'password';togglePassword.classList.toggle('active',shown);togglePassword.setAttribute('aria-pressed',shown?'true':'false');togglePassword.setAttribute('aria-label',shown?'Hide password':'Show password')};</script></body></html>");
+        "h1{margin:0 0 8px;font-size:24px}p{color:#8bb5aa;line-height:1.4;margin:8px 0 18px}button{width:100%%;border-radius:12px;padding:13px;margin-top:12px;font:inherit;background:#0c3429;color:#bffff0;border:1px solid #2ee6b8;font-weight:700}"
+        ".note{font-size:13px;color:#6b8f85}</style></head><body><main><h1>Serial console</h1>"
+        "<p>This opens a local web session on the KVM access point. Authenticate in the Linux terminal when prompted.</p>"
+        "<form method=\"post\" action=\"/login\"><button type=\"submit\">Open console</button></form>"
+        "<p class=\"note\">Only one web session is active. A new login replaces the previous session.</p></main></body></html>");
     if (written < 0 || written >= (int)sizeof(login_page)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "login overflow");
     }
@@ -1030,27 +1024,11 @@ static esp_err_t login_post_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
-    char body[WEB_REQUEST_BODY_MAX + 1];
-    esp_err_t err = read_small_body(req, body, sizeof(body));
-    if (err != ESP_OK) {
-        secure_zero(body, sizeof(body));
-        return err;
-    }
-
-    char password[WEB_SECURITY_PASSWORD_MAX_LEN];
-    if (!form_value(body, "password", password, sizeof(password))) {
-        secure_zero(body, sizeof(body));
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing password");
-    }
-    secure_zero(body, sizeof(body));
-
     const web_security_login_result_t result = web_security_login(
         &s_security,
-        password,
         now_ms(),
         security_random,
         NULL);
-    secure_zero(password, sizeof(password));
 
     if (result == WEB_SECURITY_LOGIN_LOCKED) {
         event_log_append(EVENT_LOG_SECURITY, now_ms(), "login locked after repeated failures");
@@ -1058,10 +1036,9 @@ static esp_err_t login_post_handler(httpd_req_t *req)
         return httpd_resp_send(req, "login temporarily locked", HTTPD_RESP_USE_STRLEN);
     }
     if (result != WEB_SECURITY_LOGIN_OK) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "login failed");
-        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid credentials");
+        event_log_append(EVENT_LOG_ERROR, now_ms(), "session creation failed");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "session creation failed");
     }
-
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "login ok");
     runtime_status_set_locked(false);
     char cookie[96];
@@ -1359,12 +1336,12 @@ static esp_err_t credentials_page_handler(httpd_req_t *req)
         "a{color:#7dffe1}.warn{color:#ffcf7a}code{color:#bffff0}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><main>"
         "<h1>Credential rotation</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/runbook\">Runbook</a></p>"
         "<p class=\"warn\">Rotation immediately invalidates web sessions and changes the next WiFi AP password. Secrets are never returned over HTTP.</p>"
-        "<ol><li>Stay physically near the device.</li><li>Click rotate.</li><li>Read the new WiFi and web passwords on the AMOLED after pressing BOOT if needed.</li><li>Reboot to apply the new WiFi AP password.</li></ol>"
-        "<button id=\"rotate\">Rotate credentials</button><button id=\"reboot\" %s>Reboot to apply WiFi</button><pre id=\"out\"></pre><script>"
+        "<ol><li>Stay physically near the device.</li><li>Click rotate.</li><li>Read the new WiFi password on the AMOLED after pressing BOOT if needed.</li><li>Reboot to apply the new WiFi AP password.</li></ol>"
+        "<button id=\"rotate\">Rotate WiFi password</button><button id=\"reboot\" %s>Reboot to apply WiFi</button><pre id=\"out\"></pre><script>"
         "const CSRF='%s',out=document.getElementById('out'),reboot=document.getElementById('reboot');let rebootPending=%s;"
         "function say(s){out.textContent+=s+'\\n'}"
-        "document.getElementById('rotate').onclick=async()=>{if(!confirm('Rotate WiFi and web passwords now? Existing web sessions will be invalidated.'))return;"
-        "const r=await fetch('/api/credentials/rotate',{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();say(r.status+' '+t);if(r.ok){say('Session invalidated. Press BOOT, read AMOLED passwords, log in with the new web password, then return here to reboot.');setTimeout(()=>location='/login',2500)}};"
+        "document.getElementById('rotate').onclick=async()=>{if(!confirm('Rotate WiFi password now? Existing web sessions will be invalidated.'))return;"
+        "const r=await fetch('/api/credentials/rotate',{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();say(r.status+' '+t);if(r.ok){say('Session invalidated. Press BOOT, read the AMOLED WiFi password, then reconnect after reboot.');setTimeout(()=>location='/login',2500)}};"
         "reboot.onclick=async()=>{if(!rebootPending){say('no pending credential reboot');return}if(confirm('Reboot now to apply the new WiFi password?')){const r=await fetch('/api/reboot',{method:'POST',headers:{'X-CSRF-Token':CSRF}});say(r.status+' '+await r.text())}};"
         "</script></main></body></html>",
         s_credential_reboot_pending ? "" : "disabled",
@@ -1396,40 +1373,22 @@ static esp_err_t credentials_rotate_handler(httpd_req_t *req)
     }
 
     char wifi_password[WEB_SECURITY_PASSWORD_MAX_LEN];
-    char web_password[WEB_SECURITY_PASSWORD_MAX_LEN];
-    uint8_t web_salt[WEB_PASSWORD_SALT_LEN];
-    uint8_t web_hash[WEB_PASSWORD_HASH_LEN];
-    if (credentials_generate_human_password(wifi_password, sizeof(wifi_password), security_random, NULL) != CREDENTIALS_OK ||
-        credentials_generate_human_web_password(web_password, sizeof(web_password), security_random, NULL) != CREDENTIALS_OK) {
+    if (credentials_generate_human_password(wifi_password, sizeof(wifi_password), security_random, NULL) != CREDENTIALS_OK) {
         secure_zero(wifi_password, sizeof(wifi_password));
-        secure_zero(web_password, sizeof(web_password));
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "password generation failed");
-    }
-    if (!web_security_prepare_password_hash(web_password, security_random, NULL, web_salt, web_hash)) {
-        secure_zero(wifi_password, sizeof(wifi_password));
-        secure_zero(web_password, sizeof(web_password));
-        secure_zero(web_salt, sizeof(web_salt));
-        secure_zero(web_hash, sizeof(web_hash));
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "password hash failed");
     }
 
     const web_server_credential_rotation_t rotation = {
         .wifi_password = wifi_password,
-        .web_password = web_password,
-        .web_password_salt = web_salt,
-        .web_password_hash = web_hash,
         .reveal_on_local_display = true,
         .reboot_required = true,
     };
     esp_err_t err = s_rotate_credentials(&rotation, s_rotate_credentials_ctx);
     if (err == ESP_OK) {
-        web_security_apply_password_hash(&s_security, web_salt, web_hash);
+        web_security_invalidate_all(&s_security);
     }
 
     secure_zero(wifi_password, sizeof(wifi_password));
-    secure_zero(web_password, sizeof(web_password));
-    secure_zero(web_salt, sizeof(web_salt));
-    secure_zero(web_hash, sizeof(web_hash));
     if (err != ESP_OK) {
         event_log_append(EVENT_LOG_ERROR, now_ms(), "credential rotation failed");
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, esp_err_to_name(err));
@@ -1440,7 +1399,7 @@ static esp_err_t credentials_rotate_handler(httpd_req_t *req)
     s_credential_reboot_pending = true;
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "credentials rotated");
     send_no_store_headers(req);
-    return httpd_resp_sendstr(req, "credentials rotated; read new passwords on local display and reboot to apply WiFi");
+    return httpd_resp_sendstr(req, "WiFi password rotated; read it on local display and reboot to apply WiFi");
 }
 
 static esp_err_t config_page_handler(httpd_req_t *req)
@@ -1469,7 +1428,7 @@ static esp_err_t config_page_handler(httpd_req_t *req)
         "textarea{width:100%%;min-height:160px;background:#000;color:#e9fff8;border:1px solid #245c4c;border-radius:12px;padding:12px}"
         "a{color:#7dffe1}.warn{color:#ffcf7a}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><main>"
         "<h1>Configuration</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/config.json\">Export JSON</a></p>"
-        "<p class=\"warn\">Export excludes WiFi password, web password hash, salts and serial data. Import validates schema and checksum, then requires reboot to apply AP changes.</p>"
+        "<p class=\"warn\">Export excludes WiFi password and serial data. Import validates schema and checksum, then requires reboot to apply AP changes.</p>"
         "<textarea id=\"cfg\" placeholder=\"Paste esp32-kvm config JSON here\"></textarea>"
         "<p><button id=\"load\">Load current export</button><button id=\"import\">Import config</button></p><pre id=\"out\"></pre><script>"
         "const CSRF='%s',out=document.getElementById('out'),cfg=document.getElementById('cfg');"
@@ -2001,13 +1960,7 @@ esp_err_t web_server_start(const web_server_config_t *server_config)
     ESP_RETURN_ON_FALSE(server_config != NULL, ESP_ERR_INVALID_ARG, TAG, "missing web config");
     web_route_trace_report_previous();
 
-    bool auth_ok = false;
-    if (server_config->web_password_hash_configured) {
-        auth_ok = web_security_init_from_hash(&s_security, server_config->web_password_salt, server_config->web_password_hash);
-    } else {
-        auth_ok = web_security_init(&s_security, server_config->web_password, security_random, NULL);
-    }
-    ESP_RETURN_ON_FALSE(auth_ok, ESP_ERR_INVALID_ARG, TAG, "invalid web auth config");
+    ESP_RETURN_ON_FALSE(web_security_init_session_only(&s_security), ESP_ERR_INVALID_ARG, TAG, "invalid web session config");
     web_input_policy_init(&s_input_policy);
     web_terminal_ansi_init(&s_web_ansi_state);
     ap_exposure_policy_init(&s_ap_exposure_policy);

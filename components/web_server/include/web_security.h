@@ -52,6 +52,7 @@ bool web_security_init(
     const char *password,
     web_security_random_fn_t random_fn,
     void *random_ctx);
+bool web_security_init_session_only(web_security_state_t *state);
 bool web_security_rotate_password(
     web_security_state_t *state,
     const char *new_password,
@@ -73,7 +74,6 @@ void web_security_apply_password_hash(
     const uint8_t hash[WEB_PASSWORD_HASH_LEN]);
 web_security_login_result_t web_security_login(
     web_security_state_t *state,
-    const char *password,
     uint64_t now_ms,
     web_security_random_fn_t random_fn,
     void *random_ctx);

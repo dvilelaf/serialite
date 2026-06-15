@@ -1,7 +1,5 @@
 #include "web_security.h"
 
-#include "credentials.h"
-
 #include <string.h>
 
 #define SESSION_TTL_MS (15ULL * 60ULL * 1000ULL)
@@ -34,10 +32,6 @@ static bool password_for_hash_setup(const char *input, char out[WEB_SECURITY_PAS
     if (input == NULL || out == NULL) {
         return false;
     }
-    if (credentials_compact_human_phrase(input, CREDENTIALS_WEB_PASSWORD_WORD_COUNT, out, WEB_SECURITY_PASSWORD_MAX_LEN)) {
-        return true;
-    }
-
     size_t len = 0;
     if (!bounded_strlen(input, WEB_SECURITY_PASSWORD_MAX_LEN - 1, &len) || len == 0) {
         return false;
@@ -134,6 +128,15 @@ bool web_security_init(
     return true;
 }
 
+bool web_security_init_session_only(web_security_state_t *state)
+{
+    if (state == NULL) {
+        return false;
+    }
+    memset(state, 0, sizeof(*state));
+    return true;
+}
+
 bool web_security_rotate_password(
     web_security_state_t *state,
     const char *new_password,
@@ -213,34 +216,15 @@ void web_security_apply_password_hash(
 
 web_security_login_result_t web_security_login(
     web_security_state_t *state,
-    const char *password,
     uint64_t now_ms,
     web_security_random_fn_t random_fn,
     void *random_ctx)
 {
-    if (state == NULL || password == NULL) {
+    if (state == NULL) {
         return WEB_SECURITY_LOGIN_DENIED;
     }
     if (now_ms < state->lockout_until_ms) {
         return WEB_SECURITY_LOGIN_LOCKED;
-    }
-    uint8_t candidate_hash[WEB_PASSWORD_HASH_LEN];
-    size_t password_len = 0;
-    const bool password_input_ok = bounded_strlen(password, WEB_SECURITY_PASSWORD_MAX_LEN - 1, &password_len) &&
-                                   password_len >= MIN_PASSWORD_LEN;
-    bool password_ok = state->password_hash_configured &&
-                       password_input_ok &&
-                       web_password_hash_derive(password, state->password_salt, candidate_hash) &&
-                       web_password_hash_equal(state->password_hash, candidate_hash);
-    memset(candidate_hash, 0, sizeof(candidate_hash));
-    if (!password_ok) {
-        if (state->failed_logins < UINT8_MAX) {
-            state->failed_logins++;
-        }
-        if (state->failed_logins >= LOCKOUT_AFTER_FAILURES) {
-            state->lockout_until_ms = now_ms + LOCKOUT_MS;
-        }
-        return WEB_SECURITY_LOGIN_DENIED;
     }
 
     char new_session_token[WEB_SECURITY_TOKEN_BUF_LEN];

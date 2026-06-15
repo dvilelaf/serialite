@@ -41,13 +41,13 @@ Referencia UI/UX: ver `docs/ui-ux-design.md` para flujos operativos, reparto web
 - [x] Cookies de sesión seguras para entorno local.
   Criterio: cookies con `HttpOnly`, `SameSite` y alcance mínimo; no exponen token a JavaScript innecesariamente.
 - [x] Control de escritura de consola.
-  Criterio: solo un cliente web puede escribir; otros clientes son solo lectura o rechazados.
-- [x] Web arranca en modo solo lectura tras login.
-  Criterio: ninguna entrada de teclado o paste se envia al host hasta solicitar control de escritura.
-- [x] Flujo explicito para solicitar y liberar escritura.
-  Criterio: hay confirmacion de riesgo, un unico escritor y liberacion manual, por timeout o por logout.
-- [x] Indicador persistente de modo terminal.
-  Criterio: `Read-only`, `Write active`, `Writer busy`, `USB disconnected` y `Locked` son visibles sin abrir diagnostico.
+  Criterio: solo una sesion web activa existe; la sesion activa puede escribir y un nuevo login invalida la anterior.
+- [x] Web arranca con control activo tras crear sesion.
+  Criterio: no hay estados ambiguos de observador ni botones de take/release control.
+- [x] Flujo explicito de sesion.
+  Criterio: login crea sesion local, logout/emergency lock la invalidan y los WebSockets anteriores quedan sin autorizacion.
+- [x] Indicador persistente de terminal.
+  Criterio: stream, USB/session expiration y acciones criticas son visibles sin abrir diagnostico.
 - [x] No inyección automática en consola.
   Criterio: abrir terminal, reconectar o cargar la web no envía bytes al servidor sin acción explícita.
 - [x] Banner de riesgo antes de escribir.

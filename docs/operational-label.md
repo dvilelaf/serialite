@@ -28,9 +28,9 @@ BOOT 10s: factory reset
 ```text
 1. Connect nearby laptop/phone to SSID: KVM.
 2. Open http://192.168.4.1 or scan the screen QR.
-3. Authenticate with current web password and local pair code if requested.
-4. Open Terminal read-only first. Request write only when physically authorized.
-5. Release write control and disconnect when finished.
+3. Open the local web console.
+4. Authenticate in the Linux serial login when prompted.
+5. Sign out or hold BOOT for emergency session lock.
 ```
 
 ## Enclosure Requirements

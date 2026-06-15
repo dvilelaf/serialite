@@ -79,24 +79,18 @@ static void check_error_handler_does_not_recurse_via_send_err(void)
     free(web_server);
 }
 
-static void check_login_can_reveal_password(void)
+static void check_login_does_not_request_web_password(void)
 {
     char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
     const char *login = strstr(web_server, "static esp_err_t login_get_handler");
     CHECK(login != NULL);
     const char *next_function = strstr(login + 1, "static esp_err_t login_post_handler");
     CHECK(next_function != NULL);
-    CHECK(strstr(login, "id=\\\"password\\\"") != NULL && strstr(login, "id=\\\"password\\\"") < next_function);
-    CHECK(strstr(login, "id=\\\"togglePassword\\\"") != NULL && strstr(login, "id=\\\"togglePassword\\\"") < next_function);
-    CHECK(strstr(login, "aria-label=\\\"Show password\\\"") != NULL && strstr(login, "aria-label=\\\"Show password\\\"") < next_function);
-    CHECK(strstr(login, "aria-pressed=\\\"false\\\"") != NULL && strstr(login, "aria-pressed=\\\"false\\\"") < next_function);
-    CHECK(strstr(login, "padding-right:58px") != NULL && strstr(login, "padding-right:58px") < next_function);
-    CHECK(strstr(login, "top:50%%") != NULL && strstr(login, "top:50%%") < next_function);
-    CHECK(strstr(login, "transform:translateY(-50%%)") != NULL && strstr(login, "transform:translateY(-50%%)") < next_function);
-    CHECK(strstr(login, "const shown=password.type==='password'") != NULL && strstr(login, "const shown=password.type==='password'") < next_function);
-    CHECK(strstr(login, "password.type=shown?'text':'password'") != NULL && strstr(login, "password.type=shown?'text':'password'") < next_function);
-    CHECK(strstr(login, "togglePassword.classList.toggle('active',shown)") != NULL && strstr(login, "togglePassword.classList.toggle('active',shown)") < next_function);
-    CHECK(strstr(login, "aria-pressed',shown?'true':'false'") != NULL && strstr(login, "aria-pressed',shown?'true':'false'") < next_function);
+    CHECK(strstr(login, "id=\\\"password\\\"") == NULL || strstr(login, "id=\\\"password\\\"") > next_function);
+    CHECK(strstr(login, "id=\\\"togglePassword\\\"") == NULL || strstr(login, "id=\\\"togglePassword\\\"") > next_function);
+    CHECK(strstr(login, "Web password") == NULL || strstr(login, "Web password") > next_function);
+    CHECK(strstr(login, "Enter the web password") == NULL || strstr(login, "Enter the web password") > next_function);
+    CHECK(strstr(login, "Open console") != NULL && strstr(login, "Open console") < next_function);
     free(web_server);
 }
 
@@ -163,7 +157,7 @@ static void check_lvgl_access_secrets_are_secrets_only(void)
     CHECK(end != NULL);
 
     CHECK(strstr(secrets, "WiFi password") != NULL && strstr(secrets, "WiFi password") < end);
-    CHECK(strstr(secrets, "Web password") != NULL && strstr(secrets, "Web password") < end);
+    CHECK(strstr(secrets, "Web password") == NULL || strstr(secrets, "Web password") > end);
     CHECK(strstr(secrets, "lv_qrcode_create(secrets)") != NULL && strstr(secrets, "lv_qrcode_create(secrets)") < end);
     CHECK(strstr(secrets, "display_url") == NULL || strstr(secrets, "display_url") > end);
     CHECK(strstr(secrets, "http://") == NULL || strstr(secrets, "http://") > end);
@@ -184,15 +178,15 @@ static void check_lvgl_access_secret_layout_avoids_overlap(void)
     CHECK(strstr(hint_pos, "UI_SECRET_HINT_X, 0") != NULL);
 
     CHECK(strstr(lvgl_ui, "#define UI_SECRET_TEXT_X (UI_SECRET_RIGHT_X - 16)") != NULL);
+    CHECK(strstr(lvgl_ui, "#define UI_SECRET_QR_Y ((UI_BOTTOM_CONTENT_H - UI_SECRET_QR_SIZE) / 2)") != NULL);
+    CHECK(strstr(lvgl_ui, "#define UI_SECRET_TEXT_Y ((UI_BOTTOM_CONTENT_H - 54) / 2)") != NULL);
     CHECK(strstr(lvgl_ui, "#define UI_SECRET_HINT_X (UI_BOTTOM_CONTENT_W - 88)") != NULL);
-    CHECK(strstr(secrets, "lv_obj_set_pos(wifi_title, UI_SECRET_TEXT_X, 0)") != NULL);
-    CHECK(strstr(secrets, "lv_obj_set_pos(s_ctx.wifi_password_label, UI_SECRET_TEXT_X, 22)") != NULL);
-    CHECK(strstr(secrets, "lv_obj_set_pos(web_title, UI_SECRET_TEXT_X, 78)") != NULL);
-    CHECK(strstr(secrets, "lv_obj_set_pos(s_ctx.web_password_label, UI_SECRET_TEXT_X, 100)") != NULL);
-
-    const char *web_label = strstr(secrets, "s_ctx.web_password_label = add_label");
-    CHECK(web_label != NULL && web_label < end);
-    CHECK(strstr(web_label, "&lv_font_montserrat_16") != NULL && strstr(web_label, "&lv_font_montserrat_16") < end);
+    CHECK(strstr(secrets, "lv_obj_set_pos(s_ctx.wifi_placeholder, UI_CARD_PAD, UI_SECRET_QR_Y)") != NULL);
+    CHECK(strstr(secrets, "lv_obj_set_pos(s_ctx.wifi_qr, UI_CARD_PAD, UI_SECRET_QR_Y)") != NULL);
+    CHECK(strstr(secrets, "lv_obj_set_pos(wifi_title, UI_SECRET_TEXT_X, UI_SECRET_TEXT_Y)") != NULL);
+    CHECK(strstr(secrets, "lv_obj_set_pos(s_ctx.wifi_password_label, UI_SECRET_TEXT_X, UI_SECRET_TEXT_Y + 22)") != NULL);
+    CHECK(strstr(secrets, "web_title") == NULL || strstr(secrets, "web_title") > end);
+    CHECK(strstr(secrets, "s_ctx.web_password_label") == NULL || strstr(secrets, "s_ctx.web_password_label") > end);
     free(lvgl_ui);
 }
 
@@ -206,7 +200,7 @@ int main(void)
     CHECK(strcmp(WEB_TERMINAL_STATUS_USB_DISCONNECTED, "USB OFF") == 0);
     check_pair_code_removed_from_normal_login();
     check_error_handler_does_not_recurse_via_send_err();
-    check_login_can_reveal_password();
+    check_login_does_not_request_web_password();
     check_terminal_is_terminal_first_not_command_composer();
     check_terminal_output_interprets_backspace();
     check_diagnostics_has_clear_terminal_return();
