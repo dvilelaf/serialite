@@ -179,7 +179,7 @@ static void check_lvgl_access_secret_layout_avoids_overlap(void)
 
     CHECK(strstr(lvgl_ui, "#define UI_SECRET_TEXT_X (UI_SECRET_RIGHT_X - 16)") != NULL);
     CHECK(strstr(lvgl_ui, "#define UI_SECRET_QR_Y ((UI_BOTTOM_CONTENT_H - UI_SECRET_QR_SIZE) / 2)") != NULL);
-    CHECK(strstr(lvgl_ui, "#define UI_SECRET_TEXT_Y ((UI_BOTTOM_CONTENT_H - 54) / 2)") != NULL);
+    CHECK(strstr(lvgl_ui, "#define UI_SECRET_TEXT_Y (((UI_BOTTOM_CONTENT_H - 54) / 2) - 8)") != NULL);
     CHECK(strstr(lvgl_ui, "#define UI_SECRET_HINT_X (UI_BOTTOM_CONTENT_W - 88)") != NULL);
     CHECK(strstr(secrets, "lv_obj_set_pos(s_ctx.wifi_placeholder, UI_CARD_PAD, UI_SECRET_QR_Y)") != NULL);
     CHECK(strstr(secrets, "lv_obj_set_pos(s_ctx.wifi_qr, UI_CARD_PAD, UI_SECRET_QR_Y)") != NULL);
