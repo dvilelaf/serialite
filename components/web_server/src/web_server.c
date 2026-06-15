@@ -406,9 +406,6 @@ static bool ensure_web_session(
     if (request_authenticated(req, out_token)) {
         return true;
     }
-    if (runtime_status_is_locked()) {
-        return false;
-    }
 
     const web_security_login_result_t result = web_security_login(
         &s_security,
@@ -656,37 +653,17 @@ static uint32_t count_ws_clients(void)
     return count;
 }
 
-static void close_all_ws_clients(void)
-{
-    if (s_server == NULL) {
-        return;
-    }
-
-    int fds[WEB_MAX_WS_CLIENTS];
-    snapshot_ws_fds(fds);
-    for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-        if (fds[i] >= 0) {
-            httpd_sess_trigger_close(s_server, fds[i]);
-            remove_ws_fd(fds[i]);
-        }
-    }
-}
-
 static void emergency_lock_work(void *arg)
 {
     (void)arg;
-    web_security_invalidate_all(&s_security);
     runtime_status_set_locked(true);
-    close_all_ws_clients();
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock engaged");
 }
 
 static void emergency_unlock_work(void *arg)
 {
     (void)arg;
-    web_security_invalidate_all(&s_security);
     runtime_status_set_locked(false);
-    close_all_ws_clients();
     event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency unlock engaged");
 }
 
@@ -874,7 +851,7 @@ static esp_err_t about_handler(httpd_req_t *req)
         "<dt>HTTPS fingerprint mode</dt><dd>%s. See docs/https-fingerprint.md; operators must compare the browser certificate SHA-256 fingerprint with the AMOLED fingerprint before trusting TLS.</dd>"
         "<dt>Production build</dt><dd>Requires Secure Boot, Flash Encryption, encrypted NVS for persisted secrets, and closed debug/JTAG. Treat unsigned debug builds as lab-only.</dd>"
         "<dt>Scrollback</dt><dd>%u/%u bytes retained, %llu old bytes dropped.</dd>"
-        "<dt>Emergency lock</dt><dd>Hold PWR for 3 seconds to invalidate the web session and close WebSockets.</dd>"
+        "<dt>Emergency lock</dt><dd>Hold PWR for 3 seconds to toggle terminal input lock.</dd>"
         "<dt>Factory reset</dt><dd>Hold BOOT for 10 seconds. This clears project NVS config and reboots.</dd></dl>"
         "</main></body></html>",
         app != NULL ? app->version : "unknown",
@@ -1061,13 +1038,6 @@ static esp_err_t terminal_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
     ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
 
-    if (runtime_status_is_locked()) {
-        send_no_store_headers(req);
-        httpd_resp_set_status(req, "423 Locked");
-        httpd_resp_set_type(req, "text/plain; charset=utf-8");
-        return httpd_resp_sendstr(req, "Emergency lock is active. Hold PWR for 3 seconds to unlock.");
-    }
-
     char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
     char session_cookie[96] = {0};
     bool session_created = false;
@@ -1124,7 +1094,7 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "<button data-k=\"up\">%s</button><button data-k=\"down\">%s</button><button data-k=\"left\">%s</button><button data-k=\"right\">%s</button></div></section>"
         "<section class=\"action-section\"><h3>Terminal</h3><div class=\"action-grid two\"><button id=\"fitTty\">Fit TTY</button><button id=\"clearTerm\">Clear terminal</button></div></section>"
         "<section class=\"action-section\"><h3>Device</h3><div class=\"action-grid two\"><button id=\"diagnosticsBtn\">Diagnostics</button><button id=\"rotateWifi\">Rotate WiFi</button></div></section>"
-        "<section class=\"action-section\"><h3>Danger</h3><div class=\"action-grid two\"><button class=\"danger\" id=\"panic\">Emergency lock</button><button class=\"danger\" id=\"logout\">Sign out</button></div></section>"
+        "<section class=\"action-section\"><h3>Danger</h3><div class=\"action-grid\"><button class=\"danger wide\" id=\"panic\">Emergency lock</button></div></section>"
         "</div></div></div>",
         WEB_TERMINAL_KEY_CTRL_C,
         WEB_TERMINAL_KEY_CTRL_D,
@@ -1170,7 +1140,7 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "ws.onclose=()=>{connected=false;writerState='write-active';if(locked)return;setStream('Stream off',false);render();refreshStatus();setTimeout(connect,backoff);backoff=Math.min(backoff*2,5000)};"
         "ws.onerror=()=>ws.close()}"
         "async function recoverSession(){try{const r=await fetch('/terminal',{cache:'no-store'});if(r.status===200){location.reload();return}if(r.status===423){locked=true;setStream('Locked by device',false);render();return}}catch(e){}locked=true;setStream('Session expired',false);render()}"
-        "async function refreshStatus(){try{const r=await fetch('/terminal-status.json',{cache:'no-store'});if(r.status===401||r.redirected){await recoverSession();return}if(!r.ok)return;const s=await r.json();usbConnected=!!s.usb_connected;writerState=s.writer_state||'write-active';locked=writerState==='locked';render()}catch(e){}}"
+        "async function refreshStatus(){try{const r=await fetch('/terminal-status.json',{cache:'no-store'});if(r.status===401||r.redirected){await recoverSession();return}if(!r.ok)return;const s=await r.json();usbConnected=!!s.usb_connected;writerState=s.writer_state||'write-active';locked=writerState==='locked';if(locked)setStream('Input locked; hold PWR 3s to unlock',false);render()}catch(e){}}"
         "async function post(u){const r=await fetch(u,{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();await refreshStatus();if(!r.ok)alert(t||('Request failed: '+r.status));return r.ok}"
         "let pending='',flushTimer=0;function flushSend(){if(!(canWrite&&ws&&ws.readyState===1)){pending='';flushTimer=0;return}const data=pending;pending='';flushTimer=0;if(!data)return;if(data.length<=CHUNK){ws.send(data);return}for(let i=0;i<data.length;i+=CHUNK)ws.send(data.slice(i,i+CHUNK))}"
         "function send(data){if(!(canWrite&&ws&&ws.readyState===1))return;lastInput=Date.now();if(pending.length+data.length>CHUNK)flushSend();pending+=data;if(!flushTimer)flushTimer=setTimeout(flushSend,20)}"
@@ -1201,8 +1171,7 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "function closeMenu(){keys.classList.remove('open');menuBtn.blur()}"
         "menuBtn.onclick=()=>keys.classList.toggle('open');document.getElementById('closeMenuBtn').onclick=closeMenu;document.getElementById('diagnosticsBtn').onclick=openDiagnostics;document.getElementById('closeDiagnostics').onclick=closeDiagnostics;diagBackdrop.onclick=closeDiagnostics;keys.onmouseleave=closeMenu;keys.onblur=e=>{if(!keys.contains(e.relatedTarget))closeMenu()};addEventListener('keydown',e=>{if(e.key==='Escape'){closeMenu();closeDiagnostics()}});state.tabIndex=0;state.onclick=()=>{state.classList.add('expanded');renderStreamLabel()};state.onmouseleave=()=>{state.classList.remove('expanded');state.blur();renderStreamLabel()};state.onfocus=renderStreamLabel;state.onblur=()=>{state.classList.remove('expanded');renderStreamLabel()};"
         "rotateWifi.onclick=async()=>{if(confirm('WiFi password will rotate now. The ESP32 will reboot automatically. Continue?')){await post('/api/credentials/rotate')}};"
-        "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock closes the web session. Hold PWR for 3 seconds to unlock. Continue?')){const ok=await post('/api/emergency-lock');if(ok){locked=true;if(ws){ws.onclose=null;ws.close()}location='/terminal'}}};"
-        "document.getElementById('logout').onclick=async()=>{locked=true;if(ws){ws.onclose=null;ws.close()}await post('/logout');location='/terminal'};"
+        "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock blocks terminal input. Hold PWR for 3 seconds to unlock. Continue?')){const ok=await post('/api/emergency-lock');if(ok){locked=true;setStream('Input locked; hold PWR 3s to unlock',false);render();closeMenu();focusTerminal()}}};"
         "render();refreshStatus();setInterval(refreshStatus,2000);setInterval(checkConsoleSilence,1000);connect();term.focus();"
         "</script></body></html>"), TAG, "terminal script chunk failed");
     return httpd_resp_sendstr_chunk(req, NULL);
@@ -1221,7 +1190,10 @@ static esp_err_t terminal_status_handler(httpd_req_t *req)
 
     const usb_console_status_t usb = usb_console_get_status();
     const demo_serial_runtime_status_t demo = demo_serial_runtime_get_status();
-    const web_security_writer_state_t writer = web_security_writer_state(&s_security, session_token, now_ms());
+    web_security_writer_state_t writer = web_security_writer_state(&s_security, session_token, now_ms());
+    if (runtime_status_is_locked()) {
+        writer = WEB_SECURITY_WRITER_INVALID_SESSION;
+    }
     runtime_status_set_writer_active(writer == WEB_SECURITY_WRITER_ACTIVE);
 
     char body[192];
@@ -1312,7 +1284,7 @@ static esp_err_t macro_run_handler(httpd_req_t *req)
     const web_macro_descriptor_t *macro = web_macro_policy_find(macro_id);
     const usb_console_status_t usb = usb_console_get_status();
     const demo_serial_runtime_status_t demo = demo_serial_runtime_get_status();
-    const bool writer_active = web_security_can_write(&s_security, session_token, now_ms());
+    const bool writer_active = !runtime_status_is_locked() && web_security_can_write(&s_security, session_token, now_ms());
     const bool user_confirmed = strcmp(confirm, "yes") == 0;
     if (!web_macro_policy_can_run(macro_id, s_macros_enabled, writer_active, usb.connected, demo.active, user_confirmed)) {
         event_log_append(EVENT_LOG_SECURITY, now_ms(), "macro rejected");
@@ -1909,7 +1881,7 @@ static esp_err_t websocket_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    if (!web_security_can_write(&s_security, session_token, now_ms())) {
+    if (runtime_status_is_locked() || !web_security_can_write(&s_security, session_token, now_ms())) {
         ESP_LOGW(TAG, "dropping websocket input without active session");
         event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input dropped: inactive session");
         web_route_trace_mark("/ws", "done");

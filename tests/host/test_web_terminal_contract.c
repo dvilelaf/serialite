@@ -165,8 +165,11 @@ static void check_lock_requires_physical_unlock(void)
     char *web_server = read_repo_source_file("components/web_server/src/web_server.c");
     CHECK(strstr(web_server, "static bool runtime_status_is_locked(void)") != NULL);
     CHECK(strstr(web_server, "if (runtime_status_is_locked())") != NULL);
-    CHECK(strstr(web_server, "423 Locked") != NULL);
-    CHECK(strstr(web_server, "Hold PWR for 3 seconds to unlock") != NULL);
+    CHECK(strstr(web_server, "writer_state") != NULL);
+    CHECK(strstr(web_server, "Input locked; hold PWR 3s to unlock") != NULL);
+    CHECK(strstr(web_server, "Emergency lock blocks terminal input") != NULL);
+    CHECK(strstr(web_server, "Emergency lock closes the web session") == NULL);
+    CHECK(strstr(web_server, "Sign out") == NULL);
     CHECK(strstr(web_server, "web_server_emergency_lock_toggle") != NULL);
     CHECK(strstr(web_server, "emergency unlock engaged") != NULL);
     CHECK(strstr(web_server, "runtime_status_set_locked(false)") != NULL);

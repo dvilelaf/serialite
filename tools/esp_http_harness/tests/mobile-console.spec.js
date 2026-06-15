@@ -44,6 +44,7 @@ test('mobile operator opens xterm console and terminal controls work end-to-end'
   await expect(page.locator('#keys')).toContainText('Device');
   await expect(page.locator('#keys')).toContainText('Danger');
   await expect(page.locator('#keys a[href="/diagnostics"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Sign out' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Diagnostics' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Rotate WiFi' })).toBeVisible();
   await page.getByRole('button', { name: 'Diagnostics' }).click();
@@ -72,12 +73,18 @@ test('mobile operator opens xterm console and terminal controls work end-to-end'
   page.on('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'More controls' }).click();
   await page.getByRole('button', { name: 'Emergency lock' }).click();
+  await expect(page).toHaveURL(/\/terminal$/);
+  await expect(page.locator('#state')).toContainText('ERROR');
   await expect
     .poll(async () => {
       const response = await page.request.get('/terminal-status.json');
-      return response.status();
+      if (response.status() !== 200) return `http-${response.status()}`;
+      return (await response.json()).writer_state;
     })
-    .toBe(401);
+    .toBe('locked');
+  await page.locator('#terminal').click();
+  await page.keyboard.type('blocked-input');
+  await expect(page.locator('#terminal')).not.toContainText('blocked-input');
 
   expect(pageErrors).toEqual([]);
   expect(failedRequests).toEqual([]);
