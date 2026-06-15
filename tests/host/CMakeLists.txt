@@ -142,11 +142,13 @@ add_test(NAME storage_config COMMAND test_storage_config)
 
 add_executable(test_web_security
     test_web_security.c
+    ../../components/credentials/src/credentials.c
     ../../components/web_server/src/web_password_hash.c
     ../../components/web_server/src/web_security.c
 )
 
 target_include_directories(test_web_security PRIVATE
+    ../../components/credentials/include
     ../../components/web_server/include
 )
 

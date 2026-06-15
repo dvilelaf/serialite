@@ -63,25 +63,18 @@ static void test_two_word_web_password_is_supported(void)
     uint8_t counter = 44;
 
     CHECK(web_security_init(&state, "aim act", deterministic_random, &counter));
-    CHECK(web_security_login(&state, "aim act", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
+    CHECK(web_security_login(&state, "aimact", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
 }
 
-static void test_human_password_login_normalizes_mobile_typing(void)
+static void test_human_password_login_rejects_spaces_and_case_variants(void)
 {
     web_security_state_t state;
     uint8_t counter = 44;
 
     CHECK(web_security_init(&state, "aim act", deterministic_random, &counter));
-    CHECK(web_security_login(&state, " Aim  Act ", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
-}
-
-static void test_human_password_login_accepts_omitted_separator(void)
-{
-    web_security_state_t state;
-    uint8_t counter = 44;
-
-    CHECK(web_security_init(&state, "rescue console", deterministic_random, &counter));
-    CHECK(web_security_login(&state, "rescueconsole", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_OK);
+    CHECK(web_security_login(&state, "aim act", 1000, deterministic_random, &counter) == WEB_SECURITY_LOGIN_DENIED);
+    CHECK(web_security_login(&state, "AimAct", 1100, deterministic_random, &counter) == WEB_SECURITY_LOGIN_DENIED);
+    CHECK(web_security_login(&state, " aimact", 1200, deterministic_random, &counter) == WEB_SECURITY_LOGIN_DENIED);
 }
 
 static void test_login_creates_session_and_csrf_tokens(void)
@@ -274,8 +267,7 @@ int main(void)
     test_password_is_not_stored_in_plaintext();
     test_eight_character_password_remains_supported();
     test_two_word_web_password_is_supported();
-    test_human_password_login_normalizes_mobile_typing();
-    test_human_password_login_accepts_omitted_separator();
+    test_human_password_login_rejects_spaces_and_case_variants();
     test_login_creates_session_and_csrf_tokens();
     test_wrong_password_rate_limits_login();
     test_session_expires_and_logout_invalidates_tokens();

@@ -7943,6 +7943,29 @@ bool credentials_human_phrase_matches_policy(const char *phrase, size_t word_cou
     return words == word_count;
 }
 
+bool credentials_compact_human_phrase(const char *phrase, size_t word_count, char *out, size_t out_size)
+{
+    if (!credentials_human_phrase_matches_policy(phrase, word_count) || out == NULL || out_size == 0) {
+        return false;
+    }
+
+    size_t used = 0;
+    for (const char *p = phrase; *p != '\0'; ++p) {
+        if (*p >= 'A' && *p <= 'Z') {
+            return false;
+        }
+        if (*p == ' ') {
+            continue;
+        }
+        if (used + 1U >= out_size) {
+            return false;
+        }
+        out[used++] = *p;
+    }
+    out[used] = '\0';
+    return used > 0;
+}
+
 static bool credentials_wifi_qr_append_escaped(const char *value, char *out, size_t out_size, size_t *used)
 {
     if (value == NULL || out == NULL || used == NULL || *used >= out_size) {
@@ -7991,6 +8014,12 @@ bool credentials_wifi_qr_payload(
         return false;
     }
 
+    char compact_password[128];
+    const char *qr_password = password;
+    if (credentials_compact_human_phrase(password, CREDENTIALS_WIFI_PASSWORD_WORD_COUNT, compact_password, sizeof(compact_password))) {
+        qr_password = compact_password;
+    }
+
     size_t used = 0;
     out[0] = '\0';
     /*
@@ -8001,7 +8030,7 @@ bool credentials_wifi_qr_payload(
     return credentials_wifi_qr_append_literal("WIFI:S:", out, out_size, &used) &&
            credentials_wifi_qr_append_escaped(ssid, out, out_size, &used) &&
            credentials_wifi_qr_append_literal(";T:WPA;P:", out, out_size, &used) &&
-           credentials_wifi_qr_append_escaped(password, out, out_size, &used) &&
+           credentials_wifi_qr_append_escaped(qr_password, out, out_size, &used) &&
            credentials_wifi_qr_append_literal(";;", out, out_size, &used);
 }
 

@@ -181,6 +181,25 @@ static esp_err_t generate_human_web_password(char *out, size_t out_size)
     return result == CREDENTIALS_ERR_RANDOM_FAILED ? ESP_FAIL : ESP_ERR_INVALID_ARG;
 }
 
+static esp_err_t make_operational_wifi_config(
+    const kvm_wifi_ap_config_t *display_config,
+    kvm_wifi_ap_config_t *operational_config)
+{
+    if (display_config == NULL || operational_config == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *operational_config = *display_config;
+    if (!credentials_compact_human_phrase(
+            display_config->password,
+            CREDENTIALS_WIFI_PASSWORD_WORD_COUNT,
+            operational_config->password,
+            sizeof(operational_config->password))) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
+}
+
 #if CONFIG_ESP32_KVM_BLE_PROVISIONING_ENABLE
 static bool ble_radio_not_implemented_start(uint32_t advertising_window_seconds, void *ctx)
 {
@@ -481,9 +500,12 @@ void app_main(void)
         return;
     }
 
-    esp_err_t wifi_err = wifi_ap_start(&mapped_wifi_config);
+    kvm_wifi_ap_config_t operational_wifi_config = {0};
+    ESP_ERROR_CHECK(make_operational_wifi_config(&mapped_wifi_config, &operational_wifi_config));
+    esp_err_t wifi_err = wifi_ap_start(&operational_wifi_config);
     log_init_result("wifi_ap", wifi_err);
     maybe_start_ble_provisioning_runtime(wifi_err == ESP_OK);
+    storage_secure_zero(operational_wifi_config.password, sizeof(operational_wifi_config.password));
     storage_secure_zero(mapped_wifi_config.password, sizeof(mapped_wifi_config.password));
     const esp_err_t usb_err = usb_console_start();
     log_init_result("usb_console", usb_err);

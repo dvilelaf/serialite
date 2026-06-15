@@ -31,6 +31,10 @@ class HarnessState:
     writer_token: str | None = None
     locked: bool = False
 
+    @property
+    def operational_password(self) -> str:
+        return self.password.replace(" ", "")
+
     def create_session(self) -> tuple[str, str]:
         token = secrets.token_hex(16)
         csrf = secrets.token_hex(16)
@@ -96,7 +100,7 @@ class KvmHarnessHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         if self.path == "/login":
             form = self.read_form()
-            if form.get("password", [""])[0] != self.state.password:
+            if form.get("password", [""])[0] != self.state.operational_password:
                 self.send_error(HTTPStatus.FORBIDDEN, "invalid credentials")
                 return
             token, _csrf = self.state.create_session()
@@ -257,7 +261,7 @@ main{width:100%;max-width:380px;border:1px solid #174436;border-radius:22px;padd
 h1{margin:0 0 8px;font-size:24px}input,button{width:100%;border-radius:12px;padding:13px;margin-top:12px;font:inherit}
 input{background:#000;color:#fff;border:1px solid #245c4c}button{background:#0c3429;color:#bffff0;border:1px solid #2ee6b8;font-weight:700}
 p{color:#8bb5aa;line-height:1.4;margin:8px 0 14px}</style></head><body><main><h1>Serial console</h1>
-<p>Enter the web password to resume this local rescue session.</p>
+<p>Enter the web password without spaces.</p>
 <form method="post" action="/login"><input name="password" type="password" autocomplete="current-password" placeholder="Web password" autofocus>
 <button type="submit">Unlock console</button></form></main></body></html>"""
 

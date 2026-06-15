@@ -37,7 +37,7 @@ class HarnessServerTest(unittest.TestCase):
         response = self.request(
             "POST",
             "/login",
-            body="password=alpha+zoom",
+            body="password=alphazoom",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         self.assertEqual(response.status, 303)
@@ -58,6 +58,14 @@ class HarnessServerTest(unittest.TestCase):
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         self.assertEqual(bad.status, 403)
+
+        spaced = self.request(
+            "POST",
+            "/login",
+            body="password=alpha+zoom",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        self.assertEqual(spaced.status, 403)
 
         session, _csrf = self.login()
         self.assertTrue(session)

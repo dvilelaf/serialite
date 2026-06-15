@@ -106,12 +106,22 @@ static void test_phrase_policy_rejects_legacy_hyphenated_secrets(void)
     CHECK(!credentials_human_phrase_matches_policy("alpha bravo ", 2));
 }
 
+static void test_human_phrase_compacts_for_operational_password(void)
+{
+    char compact[128];
+
+    CHECK(credentials_compact_human_phrase("alpha bravo charlie delta echo foxtrot", 6, compact, sizeof(compact)));
+    CHECK(strcmp(compact, "alphabravocharliedeltaechofoxtrot") == 0);
+    CHECK(!credentials_compact_human_phrase("Alpha bravo", 2, compact, sizeof(compact)));
+    CHECK(!credentials_compact_human_phrase("alpha  bravo", 2, compact, sizeof(compact)));
+}
+
 static void test_wifi_qr_payload_uses_standard_wifi_format(void)
 {
     char payload[128];
 
     CHECK(credentials_wifi_qr_payload("KVM", "alpha bravo charlie delta echo foxtrot", payload, sizeof(payload)));
-    CHECK(strcmp(payload, "WIFI:S:KVM;T:WPA;P:alpha bravo charlie delta echo foxtrot;;") == 0);
+    CHECK(strcmp(payload, "WIFI:S:KVM;T:WPA;P:alphabravocharliedeltaechofoxtrot;;") == 0);
 }
 
 static void test_wifi_qr_payload_escapes_reserved_characters(void)
@@ -196,6 +206,7 @@ int main(void)
     test_human_password_uses_eff_large_wordlist_endpoints();
     test_web_password_uses_two_words_without_hyphens();
     test_phrase_policy_rejects_legacy_hyphenated_secrets();
+    test_human_phrase_compacts_for_operational_password();
     test_wifi_qr_payload_uses_standard_wifi_format();
     test_wifi_qr_payload_escapes_reserved_characters();
     test_human_wifi_password_always_fits_wpa_passphrase_limit();

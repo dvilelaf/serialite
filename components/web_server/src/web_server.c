@@ -1006,7 +1006,7 @@ static esp_err_t login_get_handler(httpd_req_t *req)
         "h1{margin:0 0 8px;font-size:24px}input,button{width:100%%;border-radius:12px;padding:13px;margin-top:12px;font:inherit}"
         "input{background:#000;color:#fff;border:1px solid #245c4c}button{background:#0c3429;color:#bffff0;border:1px solid #2ee6b8;font-weight:700}"
         "p{color:#8bb5aa;line-height:1.4;margin:8px 0 14px}</style></head><body><main><h1>Serial console</h1>"
-        "<p>Enter the web password to resume this local rescue session.</p>"
+        "<p>Enter the web password without spaces.</p>"
         "<form method=\"post\" action=\"/login\"><input name=\"password\" type=\"password\" autocomplete=\"current-password\" placeholder=\"Web password\" autofocus>"
         "<button type=\"submit\">Unlock console</button></form></main></body></html>");
     if (written < 0 || written >= (int)sizeof(login_page)) {
