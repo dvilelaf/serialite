@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "src/wifi_ap.c"
+        "src/wifi_ap_status_policy.c"
     INCLUDE_DIRS
         "include"
     REQUIRES

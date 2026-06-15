@@ -358,6 +358,17 @@ target_include_directories(test_ui_web_url_policy PRIVATE
 
 add_test(NAME ui_web_url_policy COMMAND test_ui_web_url_policy)
 
+add_executable(test_wifi_ap_status_policy
+    test_wifi_ap_status_policy.c
+    ../../components/wifi_ap/src/wifi_ap_status_policy.c
+)
+
+target_include_directories(test_wifi_ap_status_policy PRIVATE
+    ../../components/wifi_ap/include
+)
+
+add_test(NAME wifi_ap_status_policy COMMAND test_wifi_ap_status_policy)
+
 add_executable(test_reset_gesture
     test_reset_gesture.c
     ../../components/reset_control/src/reset_gesture.c

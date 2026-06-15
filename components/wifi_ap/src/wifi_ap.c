@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "wifi_ap_status_policy.h"
+
 #include "esp_check.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -182,5 +184,34 @@ esp_err_t wifi_ap_stop(void)
 
 wifi_ap_status_t wifi_ap_get_status(void)
 {
-    return s_status;
+    wifi_ap_status_t status = s_status;
+    wifi_ap_status_policy_t cached = {
+        .connected_clients = status.connected_clients,
+        .started = status.started,
+    };
+    strlcpy(cached.ip_addr, status.ip_addr, sizeof(cached.ip_addr));
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    const esp_err_t mode_err = esp_wifi_get_mode(&mode);
+    if (mode_err != ESP_OK) {
+        wifi_ap_status_policy_t reconciled = wifi_ap_status_reconcile(cached, false, 0);
+        status.connected_clients = reconciled.connected_clients;
+        status.started = reconciled.started;
+        strlcpy(status.ip_addr, reconciled.ip_addr, sizeof(status.ip_addr));
+        return status;
+    }
+
+    const bool ap_active = mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA;
+    uint8_t driver_clients = status.connected_clients;
+    if (ap_active) {
+        wifi_sta_list_t sta_list = {0};
+        if (esp_wifi_ap_get_sta_list(&sta_list) == ESP_OK) {
+            driver_clients = sta_list.num;
+        }
+    }
+
+    wifi_ap_status_policy_t reconciled = wifi_ap_status_reconcile(cached, ap_active, driver_clients);
+    status.connected_clients = reconciled.connected_clients;
+    status.started = reconciled.started;
+    strlcpy(status.ip_addr, reconciled.ip_addr, sizeof(status.ip_addr));
+    return status;
 }
