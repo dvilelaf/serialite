@@ -5,10 +5,10 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 run_build=1
-version="${ESP32_KVM_RELEASE_VERSION:-}"
-build_dir="${ESP32_KVM_BUILD_DIR:-build}"
-dist_dir="${ESP32_KVM_DIST_DIR:-dist}"
-raw_base_url="${ESP32_KVM_RAW_BASE_URL:-https://raw.githubusercontent.com/YOUR_ORG/esp32-kvm}"
+version="${SERIALITE_RELEASE_VERSION:-${ESP32_KVM_RELEASE_VERSION:-}}"
+build_dir="${SERIALITE_BUILD_DIR:-${ESP32_KVM_BUILD_DIR:-build}}"
+dist_dir="${SERIALITE_DIST_DIR:-${ESP32_KVM_DIST_DIR:-dist}}"
+raw_base_url="${SERIALITE_RAW_BASE_URL:-${ESP32_KVM_RAW_BASE_URL:-https://raw.githubusercontent.com/dvilelaf/serialite}}"
 
 usage() {
     cat <<'EOF'
@@ -67,7 +67,7 @@ required_files=(
     "${build_dir}/bootloader/bootloader.bin"
     "${build_dir}/partition_table/partition-table.bin"
     "${build_dir}/ota_data_initial.bin"
-    "${build_dir}/esp32_kvm.bin"
+    "${build_dir}/serialite.bin"
     "tools/host/setup-linux-serial-console.sh"
     "README.md"
 )
@@ -79,24 +79,24 @@ for file in "${required_files[@]}"; do
     fi
 done
 
-bundle_dir="${dist_dir}/esp32-kvm-${version}"
+bundle_dir="${dist_dir}/serialite-${version}"
 rm -rf "$bundle_dir"
 mkdir -p "$bundle_dir"
 
 cp "${build_dir}/bootloader/bootloader.bin" "$bundle_dir/"
 cp "${build_dir}/partition_table/partition-table.bin" "$bundle_dir/"
 cp "${build_dir}/ota_data_initial.bin" "$bundle_dir/"
-cp "${build_dir}/esp32_kvm.bin" "$bundle_dir/"
+cp "${build_dir}/serialite.bin" "$bundle_dir/"
 cp tools/host/setup-linux-serial-console.sh "$bundle_dir/"
 cp README.md "$bundle_dir/"
 
 setup_url="${raw_base_url%/}/${version}/tools/host/setup-linux-serial-console.sh"
 cat >"$bundle_dir/INSTALL.md" <<EOF
-# ESP32-KVM ${version}
+# Serialite ${version}
 
 ## Host Setup
 
-Run this once on the Linux server connected to ESP32-KVM:
+Run this once on the Linux server connected to Serialite:
 
 \`\`\`bash
 curl -fsSL ${setup_url} | sudo sh
@@ -116,13 +116,13 @@ curl -fsSL ${setup_url} | sudo sh -s -- --uninstall
 EOF
 
 cat >"$bundle_dir/manifest.txt" <<EOF
-ESP32-KVM release ${version}
+Serialite release ${version}
 
 Flash offsets:
   bootloader.bin          0x0
   partition-table.bin     0x8000
   ota_data_initial.bin    0xd000
-  esp32_kvm.bin           0x20000
+  serialite.bin           0x20000
 
 Host setup:
   setup-linux-serial-console.sh
@@ -130,11 +130,11 @@ EOF
 
 (
     cd "$bundle_dir"
-    sha256sum bootloader.bin partition-table.bin ota_data_initial.bin esp32_kvm.bin setup-linux-serial-console.sh README.md INSTALL.md manifest.txt >SHA256SUMS
+    sha256sum bootloader.bin partition-table.bin ota_data_initial.bin serialite.bin setup-linux-serial-console.sh README.md INSTALL.md manifest.txt >SHA256SUMS
 )
 
 tarball="${bundle_dir}.tar.gz"
-tar -C "$dist_dir" -czf "$tarball" "esp32-kvm-${version}"
+tar -C "$dist_dir" -czf "$tarball" "serialite-${version}"
 
 echo "Release bundle: $bundle_dir"
 echo "Release archive: $tarball"

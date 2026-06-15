@@ -35,4 +35,4 @@ idf.py -p /dev/serial/by-id/<the-esp32-path> -b 115200 flash
 ./scripts/package-release.sh --version vX.Y.Z
 ```
 
-Publish the generated `dist/esp32-kvm-vX.Y.Z.tar.gz` as a release asset. Do not commit `dist/` or ESP-IDF build outputs.
+Publish the generated `dist/serialite-vX.Y.Z.tar.gz` as a release asset. Do not commit `dist/` or ESP-IDF build outputs.

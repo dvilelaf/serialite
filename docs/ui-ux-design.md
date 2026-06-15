@@ -1,4 +1,4 @@
-# ESP32-KVM UI/UX Design
+# Serialite UI/UX Design
 
 Fecha: 2026-06-14
 

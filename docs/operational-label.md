@@ -1,4 +1,4 @@
-# ESP32-KVM Operational Label
+# Serialite Operational Label
 
 This document defines the text that should be printed on the device label, rack tag, or enclosure insert.
 It intentionally contains **No secrets**: do not print passwords, pair codes, private keys, fingerprints that are not regenerated with the device, or customer/server identifiers.
@@ -6,7 +6,7 @@ It intentionally contains **No secrets**: do not print passwords, pair codes, pr
 ## Front Label
 
 ```text
-ESP32-KVM
+Serialite
 Serial rescue console
 SSID: KVM
 URL: http://192.168.4.1

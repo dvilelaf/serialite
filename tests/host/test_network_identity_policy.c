@@ -7,7 +7,7 @@ static network_identity_policy_config_t valid_config(void)
 {
     return (network_identity_policy_config_t){
         .hostname = "kvm",
-        .instance_name = "ESP32-KVM",
+        .instance_name = "Serialite",
         .service_type = "_http",
         .port = 80,
         .ttl_seconds = 120,

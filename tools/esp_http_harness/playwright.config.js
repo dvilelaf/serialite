@@ -4,7 +4,7 @@ module.exports = {
   fullyParallel: false,
   workers: 1,
   use: {
-    baseURL: process.env.ESP32_KVM_HTTP_HARNESS_BASE_URL || 'http://127.0.0.1:8080',
+    baseURL: process.env.SERIALITE_HTTP_HARNESS_BASE_URL || process.env.ESP32_KVM_HTTP_HARNESS_BASE_URL || 'http://127.0.0.1:8080',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     viewport: { width: 390, height: 844 },

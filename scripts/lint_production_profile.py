@@ -160,7 +160,7 @@ def read_effective_prod_sdkconfig() -> str | None:
     if shutil.which("idf.py") is None:
         return None
 
-    with tempfile.TemporaryDirectory(prefix="esp32-kvm-prod-config-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="serialite-prod-config-") as temp_dir:
         sdkconfig_path = pathlib.Path(temp_dir) / "sdkconfig"
         build_dir = pathlib.Path(temp_dir) / "build"
         subprocess.run(

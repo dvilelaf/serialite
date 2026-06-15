@@ -2,7 +2,7 @@
 
 Fecha: 2026-06-15
 
-Este documento consolida la review de equipo sobre la WebUI del ESP32-KVM. El objetivo no es embellecer una pagina: la WebUI debe sentirse como una terminal Linux real, ser segura bajo presion operativa y poder probarse localmente antes de flashear.
+Este documento consolida la review de equipo sobre la WebUI del Serialite. El objetivo no es embellecer una pagina: la WebUI debe sentirse como una terminal Linux real, ser segura bajo presion operativa y poder probarse localmente antes de flashear.
 
 ## Decision de Producto
 

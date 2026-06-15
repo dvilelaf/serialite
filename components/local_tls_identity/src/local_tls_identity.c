@@ -159,7 +159,7 @@ local_tls_identity_result_t local_tls_identity_generate(
     }
 
     char subject[96];
-    const int subject_ret = snprintf(subject, sizeof(subject), "CN=%s,O=ESP32-KVM", common_name);
+    const int subject_ret = snprintf(subject, sizeof(subject), "CN=%s,O=Serialite", common_name);
     if (subject_ret < 0 || subject_ret >= (int)sizeof(subject)) {
         result = LOCAL_TLS_IDENTITY_ERR_INVALID_ARG;
         goto cleanup;

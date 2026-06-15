@@ -1,10 +1,10 @@
-# xterm.js Evaluation for ESP32-KVM
+# xterm.js Evaluation for Serialite
 
 Fecha: 2026-06-15
 
 ## Objetivo
 
-Evaluar si conviene usar `xterm.js` para la terminal web del ESP32-KVM en lugar de implementar un emulador VT propio.
+Evaluar si conviene usar `xterm.js` para la terminal web del Serialite en lugar de implementar un emulador VT propio.
 
 ## Librerias Evaluadas
 
@@ -33,7 +33,7 @@ Medicion realizada con `npm install` y `esbuild --bundle --minify --format=iife 
 
 Binario firmware actual:
 
-- `build/esp32_kvm.bin`: ~1.5 MB.
+- `build/serialite.bin`: ~1.5 MB.
 - Particion app minima: `0x1f0000`.
 - Margen reciente reportado por `idf.py build`: ~25%.
 

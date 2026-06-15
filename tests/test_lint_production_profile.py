@@ -20,12 +20,12 @@ class ProductionProfilePolicyTest(unittest.TestCase):
             # CONFIG_SECURE_BOOT is not set
             CONFIG_SECURE_BOOT=y
             # CONFIG_SECURE_BOOT_SIGNING_KEY="/tmp/test.pem"
-            CONFIG_SECURE_BOOT_SIGNING_KEY="/run/secrets/esp32-kvm/signing.pem"
+            CONFIG_SECURE_BOOT_SIGNING_KEY="/run/secrets/serialite/signing.pem"
             """
         )
 
         self.assertEqual(assignments["CONFIG_SECURE_BOOT"], "y")
-        self.assertEqual(assignments["CONFIG_SECURE_BOOT_SIGNING_KEY"], "/run/secrets/esp32-kvm/signing.pem")
+        self.assertEqual(assignments["CONFIG_SECURE_BOOT_SIGNING_KEY"], "/run/secrets/serialite/signing.pem")
 
     def test_required_symbols_include_secure_boot_and_flash_encryption_parents(self) -> None:
         assignments = {
@@ -36,7 +36,7 @@ class ProductionProfilePolicyTest(unittest.TestCase):
             "CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES": "y",
             "CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE": "y",
             "CONFIG_NVS_ENCRYPTION": "y",
-            "CONFIG_SECURE_BOOT_SIGNING_KEY": "/run/secrets/esp32-kvm/signing.pem",
+            "CONFIG_SECURE_BOOT_SIGNING_KEY": "/run/secrets/serialite/signing.pem",
         }
 
         with self.assertRaisesRegex(AssertionError, "CONFIG_SECURE_BOOT=y"):
@@ -48,22 +48,22 @@ class ProductionProfilePolicyTest(unittest.TestCase):
 
     def test_signing_key_must_be_absolute_and_not_sample_named(self) -> None:
         for key_path in (
-            "keys/esp32-kvm-secure-boot-signing-key.pem",
-            "/run/secrets/esp32-kvm/test.pem",
-            "/run/secrets/esp32-kvm/tests/key.pem",
-            "/run/secrets/esp32-kvm/example.pem",
-            "/run/secrets/esp32-kvm/default.pem",
-            "/run/secrets/esp32-kvm/defaults.pem",
-            "/run/secrets/esp32-kvm/demo.pem",
-            "/run/secrets/esp32-kvm/dummy.pem",
-            "/run/secrets/esp32-kvm/sample.pem",
-            "/run/secrets/esp32-kvm/secure_boot_signing_key.pem",
+            "keys/serialite-secure-boot-signing-key.pem",
+            "/run/secrets/serialite/test.pem",
+            "/run/secrets/serialite/tests/key.pem",
+            "/run/secrets/serialite/example.pem",
+            "/run/secrets/serialite/default.pem",
+            "/run/secrets/serialite/defaults.pem",
+            "/run/secrets/serialite/demo.pem",
+            "/run/secrets/serialite/dummy.pem",
+            "/run/secrets/serialite/sample.pem",
+            "/run/secrets/serialite/secure_boot_signing_key.pem",
         ):
             with self.subTest(key_path=key_path):
                 with self.assertRaises(AssertionError):
                     profile.verify_signing_key_path(key_path)
 
-        profile.verify_signing_key_path("/run/secrets/esp32-kvm/prod-kvm-2026.pem")
+        profile.verify_signing_key_path("/run/secrets/serialite/prod-kvm-2026.pem")
 
     def test_flash_size_comes_from_sdkconfig_defaults(self) -> None:
         assignments = profile.parse_sdkconfig_assignments(

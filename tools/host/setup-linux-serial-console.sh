@@ -1,13 +1,13 @@
 #!/usr/bin/env sh
 set -eu
 
-UNIT="esp32-kvm-serial-console.service"
-SYMLINK_NAME="esp32-kvm-console"
-RULE_NAME="99-esp32-kvm.rules"
+UNIT="serialite-serial-console.service"
+SYMLINK_NAME="serialite-console"
+RULE_NAME="99-serialite.rules"
 
-dev_dir="${ESP32_KVM_DEV_DIR:-/dev}"
-by_id_dir="${ESP32_KVM_BY_ID_DIR:-${dev_dir}/serial/by-id}"
-etc_dir="${ESP32_KVM_ETC_DIR:-/etc}"
+dev_dir="${SERIALITE_DEV_DIR:-${ESP32_KVM_DEV_DIR:-/dev}}"
+by_id_dir="${SERIALITE_BY_ID_DIR:-${ESP32_KVM_BY_ID_DIR:-${dev_dir}/serial/by-id}}"
+etc_dir="${SERIALITE_ETC_DIR:-${ESP32_KVM_ETC_DIR:-/etc}}"
 rule_dir="${etc_dir}/udev/rules.d"
 systemd_dir="${etc_dir}/systemd/system"
 rule_path="${rule_dir}/${RULE_NAME}"
@@ -20,10 +20,10 @@ Usage:
   setup-linux-serial-console.sh [--device /dev/ttyACM<N>]
   setup-linux-serial-console.sh --uninstall
 
-Enables a persistent Linux serial login on the ESP32-KVM USB serial device.
+Enables a persistent Linux serial login on the Serialite USB serial device.
 
 Recommended install from a tagged release:
-  curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/esp32-kvm/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh
+  curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh
 EOF
 }
 
@@ -56,7 +56,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 is_root() {
-    case "${ESP32_KVM_ASSUME_ROOT:-}" in
+    case "${SERIALITE_ASSUME_ROOT:-${ESP32_KVM_ASSUME_ROOT:-}}" in
         1) return 0 ;;
         0) return 1 ;;
     esac
@@ -71,7 +71,7 @@ require_root() {
 This setup changes systemd and udev state, so it must run as root.
 
 Use:
-  curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/esp32-kvm/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh
+  curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh
 
 Or download a tagged release, review this script, then run:
   sudo sh ./setup-linux-serial-console.sh
@@ -84,7 +84,7 @@ command_exists() {
 }
 
 is_device_node() {
-    if [ "${ESP32_KVM_TEST_MODE:-0}" = "1" ]; then
+    if [ "${SERIALITE_TEST_MODE:-${ESP32_KVM_TEST_MODE:-0}}" = "1" ]; then
         [ -e "$1" ]
     else
         [ -c "$1" ]
@@ -115,7 +115,7 @@ ${resolved}" ;;
     count="$(printf '%s\n' "$candidates" | sed '/^$/d' | wc -l | tr -d ' ')"
     if [ "$count" = "0" ]; then
         cat >&2 <<EOF
-No ESP32-KVM serial device found.
+No Serialite serial device found.
 
 Plug the device in and retry. If auto-detection is not available on this host,
 rerun with:
@@ -126,7 +126,7 @@ EOF
     if [ "$count" != "1" ]; then
         echo "Multiple ESP32 serial devices found:" >&2
         printf '%s\n' "$candidates" | sed '/^$/d;s/^/  /' >&2
-        echo "Rerun with --device /dev/ttyACM<N> for the ESP32-KVM device." >&2
+        echo "Rerun with --device /dev/ttyACM<N> for the Serialite device." >&2
         exit 1
     fi
 
@@ -175,7 +175,7 @@ EOF
 
     mkdir -p "$rule_dir"
     cat >"$rule_path" <<EOF
-# Managed by ESP32-KVM. Creates a stable tty name for the rescue serial console.
+# Managed by Serialite. Creates a stable tty name for the rescue serial console.
 SUBSYSTEM=="tty", ATTRS{idVendor}=="${vendor_id}", ATTRS{idProduct}=="${model_id}", ATTRS{serial}=="${serial_short}", SYMLINK+="${SYMLINK_NAME}"
 EOF
 
@@ -228,8 +228,8 @@ write_service() {
     mkdir -p "$systemd_dir"
     cat >"$service_path" <<EOF
 [Unit]
-Description=ESP32-KVM rescue serial console
-Documentation=https://github.com/YOUR_ORG/esp32-kvm
+Description=Serialite rescue serial console
+Documentation=https://github.com/dvilelaf/serialite
 After=systemd-udev-settle.service
 
 [Service]
@@ -282,7 +282,7 @@ install_console() {
 
     cat <<EOF
 
-ESP32-KVM host serial console is ready.
+Serialite host serial console is ready.
 
 Service: ${UNIT}
 Device:  ${symlink_path}
@@ -290,7 +290,7 @@ Device:  ${symlink_path}
 Join WiFi KVM and open http://192.168.4.1
 
 Undo:
-  curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/esp32-kvm/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh -s -- --uninstall
+  curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh -s -- --uninstall
 EOF
 }
 
@@ -306,7 +306,7 @@ uninstall_console() {
         udevadm control --reload-rules >/dev/null 2>&1 || true
         udevadm trigger --subsystem-match=tty >/dev/null 2>&1 || true
     fi
-    echo "ESP32-KVM host serial console removed."
+    echo "Serialite host serial console removed."
 }
 
 require_root

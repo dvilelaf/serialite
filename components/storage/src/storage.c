@@ -5,7 +5,7 @@
 #include "nvs.h"
 #include "sdkconfig.h"
 
-static const char *NVS_NAMESPACE = "esp32_kvm";
+static const char *NVS_NAMESPACE = "serialite";
 
 static void storage_set_defaults(storage_config_t *config)
 {

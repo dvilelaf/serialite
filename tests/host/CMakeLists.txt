@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(esp32_kvm_host_tests C)
+project(serialite_host_tests C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)

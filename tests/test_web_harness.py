@@ -13,7 +13,7 @@ from http.cookies import SimpleCookie
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "tools" / "web_harness"))
 
-import esp32_kvm_web_harness as harness  # noqa: E402
+import serialite_web_harness as harness  # noqa: E402
 
 
 class HarnessServerTest(unittest.TestCase):

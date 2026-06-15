@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local development harness for the ESP32-KVM Web UI.
+"""Local development harness for the Serialite Web UI.
 
 This is not production firmware code. It runs on the workstation so the Web UI
 contract can be exercised without joining the ESP32 access point.
@@ -53,7 +53,7 @@ class ReusableThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPS
 
 
 class KvmHarnessHandler(http.server.BaseHTTPRequestHandler):
-    server_version = "ESP32KVMHarness/1.0"
+    server_version = "SerialiteHarness/1.0"
 
     @property
     def state(self) -> HarnessState:
@@ -218,7 +218,7 @@ class KvmHarnessHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Connection", "Upgrade")
         self.send_header("Sec-WebSocket-Accept", accept)
         self.end_headers()
-        payload = b"ESP32-KVM harness serial stream ready.\r\nlogin: "
+        payload = b"Serialite harness serial stream ready.\r\nlogin: "
         self.wfile.write(struct.pack("!BB", 0x81, len(payload)) + payload)
 
 
@@ -249,7 +249,7 @@ def create_server(address: tuple[str, int], quiet: bool = True) -> ReusableThrea
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run the ESP32-KVM local Web UI harness.")
+    parser = argparse.ArgumentParser(description="Run the Serialite local Web UI harness.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--verbose", action="store_true")
@@ -257,7 +257,7 @@ def main() -> int:
 
     server = create_server((args.host, args.port), quiet=not args.verbose)
     host, port = server.server_address
-    print(f"ESP32-KVM Web harness: http://{host}:{port}/terminal")
+    print(f"Serialite Web harness: http://{host}:{port}/terminal")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

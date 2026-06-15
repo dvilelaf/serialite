@@ -144,7 +144,7 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, ">+</button>") != NULL);
     CHECK(strstr(web_server, "class=\\\"round icon-btn\\\"") != NULL);
     CHECK(strstr(web_server, "No serial console detected") != NULL);
-    CHECK(strstr(web_server, "sudo systemctl start esp32-kvm-serial-console.service") != NULL);
+    CHECK(strstr(web_server, "sudo systemctl start serialite-serial-console.service") != NULL);
     CHECK(strstr(web_server, "checkConsoleSilence") != NULL);
     CHECK(strstr(web_server, "async function recoverSession()") != NULL);
     CHECK(strstr(web_server, "fetch('/terminal',{cache:'no-store'})") != NULL);

@@ -1,6 +1,6 @@
 # Local HTTPS Fingerprint Mode
 
-ESP32-KVM runs HTTP on the local AP by default. Local HTTPS is optional and must not be presented as conventional CA-trusted web security. The safe operating model is certificate pinning by a SHA-256 fingerprint shown on the device display.
+Serialite runs HTTP on the local AP by default. Local HTTPS is optional and must not be presented as conventional CA-trusted web security. The safe operating model is certificate pinning by a SHA-256 fingerprint shown on the device display.
 
 ## Default
 

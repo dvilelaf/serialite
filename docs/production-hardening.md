@@ -2,7 +2,7 @@
 
 Fecha: 2026-06-14
 
-Este documento define el minimo aceptable para tratar un build de `esp32-kvm` como apto para despliegue controlado en servidores reales. El firmware actual es una consola serie de rescate local; no es un KVM completo.
+Este documento define el minimo aceptable para tratar un build de `serialite` como apto para despliegue controlado en servidores reales. El firmware actual es una consola serie de rescate local; no es un KVM completo.
 
 ## Perfiles de build
 
@@ -65,7 +65,7 @@ El perfil de laboratorio no activa Secure Boot ni Flash Encryption para evitar q
 - `CONFIG_SECURE_FLASH_ENC_ENABLED=y`;
 - `CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE=y`;
 - `CONFIG_NVS_ENCRYPTION=y`;
-- clave de firma externa absoluta en `/run/secrets/esp32-kvm/prod-kvm-signing-key.pem`.
+- clave de firma externa absoluta en `/run/secrets/serialite/prod-kvm-signing-key.pem`.
 
 La ruta de la clave debe estar fuera del checkout y gestionada por la infraestructura de CI o por un secreto montado en runtime. No se aceptan claves de ejemplo, rutas relativas al repo ni claves compartidas entre entornos.
 
@@ -133,7 +133,7 @@ Requisitos:
 
 ## Limites del producto
 
-`esp32-kvm` no implementa:
+`serialite` no implementa:
 
 - captura HDMI o video BIOS;
 - HID remoto;

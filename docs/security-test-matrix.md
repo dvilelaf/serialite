@@ -38,7 +38,7 @@ source /path/to/esp-idf/export.sh
 ## Non-Automated Hardware Checks
 
 - AP appears as WPA2-protected `KVM`.
-- The device enumerates as ESP32-S3 USB-Serial/JTAG and host setup creates `/dev/esp32-kvm-console`.
+- The device enumerates as ESP32-S3 USB-Serial/JTAG and host setup creates `/dev/serialite-console`.
 - `http://kvm.local` resolves only when the client is connected to the AP and supports mDNS.
 - Credential rotation shows the new WiFi secret on the AMOLED only, not in the HTTP response.
 - Web login creates a local session without requesting a web password.

@@ -17,7 +17,7 @@ static storage_wifi_config_t valid_config(void)
         .channel = 6,
         .max_clients = 4,
     };
-    strcpy(config.ssid, "ESP32-KVM-ABCDEF");
+    strcpy(config.ssid, "Serialite-ABCDEF");
     strcpy(config.password, "anchor-bison-cobalt-delta");
     return config;
 }

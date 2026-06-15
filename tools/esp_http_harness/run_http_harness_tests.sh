@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HARNESS_DIR="$ROOT_DIR/tools/esp_http_harness"
-PORT="${ESP32_KVM_HTTP_HARNESS_PORT:-8080}"
-ITERATIONS="${ESP32_KVM_HTTP_HARNESS_ITERATIONS:-20}"
+PORT="${SERIALITE_HTTP_HARNESS_PORT:-${ESP32_KVM_HTTP_HARNESS_PORT:-8080}}"
+ITERATIONS="${SERIALITE_HTTP_HARNESS_ITERATIONS:-${ESP32_KVM_HTTP_HARNESS_ITERATIONS:-20}}"
 
 cd "$HARNESS_DIR"
 
@@ -23,10 +23,10 @@ if ! command -v idf.py >/dev/null 2>&1; then
     exit 127
 fi
 
-idf.py --preview build >/tmp/esp32-kvm-http-harness-build.log
+idf.py --preview build >/tmp/serialite-http-harness-build.log
 
-log_file="$(mktemp /tmp/esp32-kvm-http-harness.XXXXXX.log)"
-cookie_file="$(mktemp /tmp/esp32-kvm-http-harness.XXXXXX.cookies)"
+log_file="$(mktemp /tmp/serialite-http-harness.XXXXXX.log)"
+cookie_file="$(mktemp /tmp/serialite-http-harness.XXXXXX.cookies)"
 pid=""
 
 cleanup() {
@@ -49,7 +49,7 @@ stop_harness() {
 start_harness() {
     : >"$log_file"
     rm -f "$cookie_file"
-    ./build/esp32_kvm_http_harness.elf >"$log_file" 2>&1 &
+    ./build/serialite_http_harness.elf >"$log_file" 2>&1 &
     pid=$!
 
     for _ in $(seq 1 100); do
@@ -67,12 +67,12 @@ start_harness() {
 
 start_harness
 
-if [ "${ESP32_KVM_SKIP_BROWSER_TEST:-0}" != "1" ]; then
+if [ "${SERIALITE_SKIP_BROWSER_TEST:-${ESP32_KVM_SKIP_BROWSER_TEST:-0}}" != "1" ]; then
     if command -v npm >/dev/null 2>&1; then
         if [ ! -d node_modules/@playwright/test ]; then
             npm install
         fi
-        ESP32_KVM_HTTP_HARNESS_BASE_URL="http://127.0.0.1:${PORT}" npm run test:browser
+        SERIALITE_HTTP_HARNESS_BASE_URL="http://127.0.0.1:${PORT}" npm run test:browser
         sleep 1.1
         stop_harness
         start_harness

@@ -3,7 +3,7 @@
 #include "storage_config.h"
 #include <stddef.h>
 
-#define CONFIG_TRANSFER_SCHEMA "esp32-kvm-config-v1"
+#define CONFIG_TRANSFER_SCHEMA "serialite-config-v1"
 #define CONFIG_TRANSFER_MAX_JSON 512U
 
 typedef enum {

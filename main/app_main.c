@@ -27,7 +27,7 @@
 #include "web_transport_policy.h"
 #include "wifi_ap.h"
 
-static const char *TAG = "esp32_kvm";
+static const char *TAG = "serialite";
 
 #define EPHEMERAL_RTC_MAGIC 0x4b564d45U
 #define EPHEMERAL_RTC_VERSION 1U

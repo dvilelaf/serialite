@@ -29,7 +29,7 @@ static void operational_label_contains_required_fields(void)
     snprintf(path, sizeof(path), "%s/docs/operational-label.md", REPO_ROOT);
     char *doc = read_file(path);
 
-    assert(strstr(doc, "ESP32-KVM") != NULL);
+    assert(strstr(doc, "Serialite") != NULL);
     assert(strstr(doc, "Serial rescue console") != NULL);
     assert(strstr(doc, "http://192.168.4.1") != NULL);
     assert(strstr(doc, "SSID: KVM") != NULL);

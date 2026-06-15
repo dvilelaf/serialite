@@ -6,7 +6,7 @@
 static const esp_app_desc_t s_app_desc = {
     .magic_word = ESP_APP_DESC_MAGIC_WORD,
     .version = "harness",
-    .project_name = "esp32-kvm",
+    .project_name = "serialite",
     .time = __TIME__,
     .date = __DATE__,
     .idf_ver = "linux-harness",

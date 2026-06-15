@@ -32,7 +32,7 @@ static void emits_deterministic_console_output_while_active(void)
     char out[256];
     const size_t first = demo_serial_next_output(&state, 1000, out, sizeof(out));
     assert(first > 0);
-    assert(strstr(out, "ESP32-KVM demo console") != NULL);
+    assert(strstr(out, "Serialite demo console") != NULL);
 
     const size_t too_early = demo_serial_next_output(&state, 1100, out, sizeof(out));
     assert(too_early == 0);

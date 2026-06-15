@@ -1,6 +1,6 @@
 # Optional WiFi Client Mode
 
-ESP32-KVM is designed to be reachable through its own local AP first. Optional WiFi client/STA mode is treated as an operational exception because joining an infrastructure network expands the attack surface beyond the physically local AP.
+Serialite is designed to be reachable through its own local AP first. Optional WiFi client/STA mode is treated as an operational exception because joining an infrastructure network expands the attack surface beyond the physically local AP.
 
 ## Default
 

@@ -1,27 +1,27 @@
-# ESP32-KVM
+# Serialite
 
 Emergency serial console for headless Linux servers.
 
-ESP32-KVM plugs into a server over USB, creates a private WiFi AP, and exposes a local web terminal. It is for recovery when SSH or networking is broken.
+Serialite plugs into a server over USB, creates a private WiFi AP, and exposes a local web terminal. It is for recovery when SSH or networking is broken.
 
 This is not a video KVM. There is no HDMI capture, remote HID keyboard, or virtual media.
 
 ## Fastest Path
 
-1. Plug ESP32-KVM into the server USB port.
+1. Plug Serialite into the server USB port.
 
 2. On the server, enable the serial login service with the command from the release `INSTALL.md`.
 
    A released command has this shape:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/esp32-kvm/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh
+   curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh
    ```
 
    Use a tagged release URL, not `main`. If auto-detection fails, the release `INSTALL.md` also includes the `--device /dev/ttyACM<N>` form:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/esp32-kvm/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh -s -- --device /dev/ttyACM<N>
+   curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh -s -- --device /dev/ttyACM<N>
    ```
 
 3. Join the WiFi network from your laptop or phone:
@@ -43,22 +43,22 @@ This is not a video KVM. There is no HDMI capture, remote HID keyboard, or virtu
 
 The setup script:
 
-- creates `/dev/esp32-kvm-console` with a udev rule bound to the ESP32 USB identity;
-- installs and enables `esp32-kvm-serial-console.service`;
+- creates `/dev/serialite-console` with a udev rule bound to the ESP32 USB identity;
+- installs and enables `serialite-serial-console.service`;
 - avoids binding the login console to unstable names like `/dev/ttyACM0`;
 - refuses ambiguous auto-detection instead of guessing.
 
 To remove it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/esp32-kvm/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/vX.Y.Z/tools/host/setup-linux-serial-console.sh | sudo sh -s -- --uninstall
 ```
 
 ## Buttons
 
 - `BOOT`: wakes the screen and temporarily reveals the WiFi password.
 - `PWR` for 3 seconds: locks or unlocks terminal input.
-- `BOOT` for 10 seconds: factory-resets ESP32-KVM configuration.
+- `BOOT` for 10 seconds: factory-resets Serialite configuration.
 
 ## Web UI
 
@@ -82,7 +82,7 @@ End-user firmware should be published as a release asset, not committed to the r
 Maintainers can build that bundle with:
 
 ```bash
-ESP32_KVM_RAW_BASE_URL=https://raw.githubusercontent.com/<owner>/esp32-kvm ./scripts/package-release.sh --version vX.Y.Z
+SERIALITE_RAW_BASE_URL=https://raw.githubusercontent.com/dvilelaf/serialite ./scripts/package-release.sh --version vX.Y.Z
 ```
 
 The bundle includes `INSTALL.md` with copy-paste commands for that exact release.

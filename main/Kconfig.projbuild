@@ -1,4 +1,4 @@
-menu "ESP32-KVM"
+menu "Serialite"
 
 config ESP32_KVM_HTTPS_LOCAL_ENABLE
     bool "Enable local HTTPS listener with on-screen fingerprint"

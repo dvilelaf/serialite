@@ -1,4 +1,4 @@
-# ESP32-KVM Architecture and Plan
+# Serialite Architecture and Plan
 
 Fecha: 2026-06-14
 
@@ -288,7 +288,7 @@ Los buffers temporales de password se limpian explicitamente despues de que WiFi
 ## Estructura de directorios
 
 ```text
-esp32-kvm/
+serialite/
   README.md
   .gitignore
   docs/

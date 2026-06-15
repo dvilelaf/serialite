@@ -4,7 +4,7 @@
 #include <string.h>
 
 static const char *const DEMO_LINES[] = {
-    "\r\nESP32-KVM demo console\r\n",
+    "\r\nSerialite demo console\r\n",
     "Linux rescue-host 6.8.0-demo #1 SMP PREEMPT_DYNAMIC x86_64\r\n",
     "ttyS0: serial console active at 115200 bps\r\n",
     "login: root\r\n",

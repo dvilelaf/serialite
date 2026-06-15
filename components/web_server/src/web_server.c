@@ -841,10 +841,10 @@ static esp_err_t about_handler(httpd_req_t *req)
         body,
         sizeof(body),
         "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>ESP32-KVM About</title><style>body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px}"
+        "<title>Serialite About</title><style>body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px}"
         ".card{border:1px solid #174436;border-radius:16px;padding:14px;background:#030807;max-width:760px}"
         "dt{color:#7dffe1}dd{margin:0 0 8px 0}a{color:#7dffe1}</style></head><body><main class=\"card\">"
-        "<h1>About ESP32-KVM</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/macros\">Macros</a> | <a href=\"/ota\">Firmware</a></p>"
+        "<h1>About Serialite</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/macros\">Macros</a> | <a href=\"/ota\">Firmware</a></p>"
         "<p>Serial rescue console over local WiFi AP. It is not HDMI KVM, HID remote input, virtual media, power control, cloud access, or command automation.</p>"
         "<dl><dt>Firmware</dt><dd>%s</dd><dt>Project</dt><dd>%s</dd><dt>Build date</dt><dd>%s %s</dd>"
         "<dt>IDF</dt><dd>%s</dd><dt>Security model</dt><dd>Local AP, web auth, CSRF, Origin checks, one active web session, RAM diagnostics.</dd>"
@@ -855,7 +855,7 @@ static esp_err_t about_handler(httpd_req_t *req)
         "<dt>Factory reset</dt><dd>Hold BOOT for 10 seconds. This clears project NVS config and reboots.</dd></dl>"
         "</main></body></html>",
         app != NULL ? app->version : "unknown",
-        app != NULL ? app->project_name : "esp32-kvm",
+        app != NULL ? app->project_name : "serialite",
         app != NULL ? app->date : "unknown",
         app != NULL ? app->time : "",
         esp_get_idf_version(),
@@ -884,7 +884,7 @@ static esp_err_t runbook_handler(httpd_req_t *req)
 
     static const char body[] =
         "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>ESP32-KVM Runbook</title><style>"
+        "<title>Serialite Runbook</title><style>"
         "body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px;line-height:1.45}"
         "main{border:1px solid #174436;border-radius:16px;padding:16px;background:#030807;max-width:820px}"
         "h2{color:#7dffe1}a{color:#7dffe1}li{margin:8px 0}code{color:#bffff0}</style></head><body><main>"
@@ -941,7 +941,7 @@ static esp_err_t macros_page_handler(httpd_req_t *req)
         body,
         sizeof(body),
         "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>ESP32-KVM Macros</title><style>"
+        "<title>Serialite Macros</title><style>"
         "body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px;line-height:1.45}"
         "main{border:1px solid #174436;border-radius:16px;padding:16px;background:#030807;max-width:820px}"
         "button{border:1px solid #1f5b4b;border-radius:12px;background:#102a23;color:#e9fff8;padding:10px 12px;font:inherit;font-weight:700}"
@@ -1112,7 +1112,7 @@ static esp_err_t terminal_handler(httpd_req_t *req)
         "<div class=\"diag-head\"><h2>System Health</h2><button id=\"closeDiagnostics\" aria-label=\"Close diagnostics\">x</button></div>"
         "<div id=\"diagnosticsBody\"><section class=\"diag-card\"><h3>Status</h3><div class=\"diag-row\"><span>Loading</span><b>...</b></div></section></div>"
         "</aside>"
-        "<section id=\"consoleNotice\" class=\"hidden\" role=\"status\" aria-live=\"polite\"><h2>No serial console detected</h2><p>The USB link is up, but the Linux host has not sent a login prompt or console output yet.</p><p>On the host, run the ESP32-KVM setup script or start the installed getty:</p><code>sudo systemctl start esp32-kvm-serial-console.service</code></section>"
+        "<section id=\"consoleNotice\" class=\"hidden\" role=\"status\" aria-live=\"polite\"><h2>No serial console detected</h2><p>The USB link is up, but the Linux host has not sent a login prompt or console output yet.</p><p>On the host, run the Serialite setup script or start the installed getty:</p><code>sudo systemctl start serialite-serial-console.service</code></section>"
         "<script src=\"/assets/xterm.js\"></script><script>"), TAG, "terminal body chunk failed");
     ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
         "const CSRF='%s';let canWrite=false,usbConnected=%s,writerState='write-active',locked=false,connected=false,empty=true,lastRx=0,lastInput=0,openedAt=0;"
@@ -1398,7 +1398,7 @@ static esp_err_t config_page_handler(httpd_req_t *req)
         body,
         sizeof(body),
         "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>ESP32-KVM Config</title><style>"
+        "<title>Serialite Config</title><style>"
         "*{box-sizing:border-box}body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px;line-height:1.45}"
         "main{border:1px solid #174436;border-radius:18px;padding:18px;background:#030807;max-width:760px;width:100%%}"
         "button,textarea{font:inherit}button{border:1px solid #2ee6b8;border-radius:12px;background:#123d32;color:#bffff0;padding:11px 14px;margin:8px 8px 8px 0}"
@@ -1406,7 +1406,7 @@ static esp_err_t config_page_handler(httpd_req_t *req)
         "a{color:#7dffe1}.warn{color:#ffcf7a}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><main>"
         "<h1>Configuration</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/config.json\">Export JSON</a></p>"
         "<p class=\"warn\">Export excludes WiFi password and serial data. Import validates schema and checksum, then requires reboot to apply AP changes.</p>"
-        "<textarea id=\"cfg\" placeholder=\"Paste esp32-kvm config JSON here\"></textarea>"
+        "<textarea id=\"cfg\" placeholder=\"Paste serialite config JSON here\"></textarea>"
         "<p><button id=\"load\">Load current export</button><button id=\"import\">Import config</button></p><pre id=\"out\"></pre><script>"
         "const CSRF='%s',out=document.getElementById('out'),cfg=document.getElementById('cfg');"
         "function say(s){out.textContent+=s+'\\n'}"
@@ -1514,7 +1514,7 @@ static esp_err_t ota_page_handler(httpd_req_t *req)
         body,
         sizeof(body),
         "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>ESP32-KVM OTA</title><style>"
+        "<title>Serialite OTA</title><style>"
         "*{box-sizing:border-box}body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px;line-height:1.45}"
         "main{border:1px solid #174436;border-radius:18px;padding:18px;background:#030807;max-width:760px;width:100%%}"
         "button,input{font:inherit}button{border:1px solid #2ee6b8;border-radius:12px;background:#123d32;color:#bffff0;padding:11px 14px;margin:8px 8px 8px 0}"
@@ -1533,7 +1533,7 @@ static esp_err_t ota_page_handler(httpd_req_t *req)
         "if(f.size===0||f.size>%u){say('invalid size; max %u bytes');return}"
         "if(!confirm('Install '+f.name+' ('+f.size+' bytes) on the inactive OTA slot?'))return;"
         "const ok=await post('/api/ota',f);if(ok){pending=true;otaState.textContent='pending reboot';reboot.disabled=false;say('upload accepted; reboot explicitly when ready')}};"
-        "reboot.onclick=async()=>{if(!pending){say('no pending image');return}if(confirm('Reboot ESP32-KVM now? Serial bridge will disconnect briefly.'))await post('/api/reboot',null)};"
+        "reboot.onclick=async()=>{if(!pending){say('no pending image');return}if(confirm('Reboot Serialite now? Serial bridge will disconnect briefly.'))await post('/api/reboot',null)};"
         "</script></main></body></html>",
         ota.in_progress ? "uploading" : (ota.pending_reboot ? "pending reboot" : "idle"),
         ota.target_label[0] != '\0' ? ota.target_label : "next OTA slot",
@@ -1683,7 +1683,7 @@ static esp_err_t diagnostics_handler(httpd_req_t *req)
         body,
         sizeof(body),
         "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>ESP32-KVM Diagnostics</title><style>"
+        "<title>Serialite Diagnostics</title><style>"
         "body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px}"
         "code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}"
         ".card{border:1px solid #174436;border-radius:16px;padding:14px;margin:12px 0;background:#030807}"

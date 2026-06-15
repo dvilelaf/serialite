@@ -1,4 +1,4 @@
-# ESP32-KVM Feature Checklist
+# Serialite Feature Checklist
 
 Fecha: 2026-06-14
 

@@ -2,7 +2,7 @@
 
 ## Decision
 
-ESP32-KVM has two security profiles:
+Serialite has two security profiles:
 
 - **Rescue default**: local AP, WPA2, HTTP WebUI, physical-presence workflow, maximum availability.
 - **Critical production**: HTTPS required for terminal/OTA unless an operator explicitly enters a documented break-glass HTTP mode.
