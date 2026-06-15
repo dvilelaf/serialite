@@ -4,6 +4,8 @@
 
 #include "ota_update_policy.h"
 
+#define EXPECTED_OTA_SLOT_BYTES 0x600000U
+
 #define CHECK(expr) do { \
     if (!(expr)) { \
         fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #expr); \
@@ -13,8 +15,10 @@
 
 static void test_accepts_non_empty_image_within_ota_slot(void)
 {
+    CHECK(OTA_UPDATE_MAX_IMAGE_BYTES == EXPECTED_OTA_SLOT_BYTES);
     CHECK(ota_update_policy_evaluate(1, false) == OTA_UPDATE_POLICY_ACCEPT);
     CHECK(ota_update_policy_evaluate(OTA_UPDATE_MAX_IMAGE_BYTES, false) == OTA_UPDATE_POLICY_ACCEPT);
+    CHECK(ota_update_policy_evaluate(0x200000U, false) == OTA_UPDATE_POLICY_ACCEPT);
 }
 
 static void test_rejects_empty_oversized_or_concurrent_updates(void)
