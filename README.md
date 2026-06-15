@@ -25,7 +25,13 @@ This is not a video KVM: there is no HDMI capture, remote HID keyboard, or virtu
 
 4. Use the terminal.
 
-If the terminal is empty, the server probably does not have a serial console enabled. On the server, enable it once:
+If the terminal is empty, the server probably does not have a serial console enabled. On the server, find the ESP32-KVM serial device:
+
+```bash
+ls /dev/ttyACM*
+```
+
+Then enable the serial console for that device. Replace `ttyACM0` with the device you saw, for example `ttyACM1`:
 
 ```bash
 sudo systemctl enable --now serial-getty@ttyACM0.service
@@ -67,13 +73,14 @@ Build and flash:
 
 ```bash
 source /home/david/esp-idf/export.sh
-idf.py -p /dev/ttyACM0 flash
+ls /dev/serial/by-id/*Espressif*
+idf.py -p /dev/serial/by-id/<the-esp32-path> flash
 ```
 
 If flashing fails because of USB permissions or serial noise, reconnect the board and use a lower baud rate:
 
 ```bash
-idf.py -p /dev/ttyACM0 -b 115200 flash
+idf.py -p /dev/serial/by-id/<the-esp32-path> -b 115200 flash
 ```
 
 ## Production
