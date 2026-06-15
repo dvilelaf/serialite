@@ -111,7 +111,7 @@ static void test_wifi_qr_payload_uses_standard_wifi_format(void)
     char payload[128];
 
     CHECK(credentials_wifi_qr_payload("KVM", "alpha bravo charlie delta echo foxtrot", payload, sizeof(payload)));
-    CHECK(strcmp(payload, "WIFI:T:WPA;S:KVM;P:alpha bravo charlie delta echo foxtrot;;") == 0);
+    CHECK(strcmp(payload, "WIFI:S:KVM;T:WPA;P:alpha bravo charlie delta echo foxtrot;;") == 0);
 }
 
 static void test_wifi_qr_payload_escapes_reserved_characters(void)
@@ -119,7 +119,20 @@ static void test_wifi_qr_payload_escapes_reserved_characters(void)
     char payload[128];
 
     CHECK(credentials_wifi_qr_payload("KV;M", "alpha:bravo,slash\\quote\"", payload, sizeof(payload)));
-    CHECK(strcmp(payload, "WIFI:T:WPA;S:KV\\;M;P:alpha\\:bravo\\,slash\\\\quote\\\";;") == 0);
+    CHECK(strcmp(payload, "WIFI:S:KV\\;M;T:WPA;P:alpha\\:bravo\\,slash\\\\quote\\\";;") == 0);
+}
+
+static void test_human_wifi_password_always_fits_wpa_passphrase_limit(void)
+{
+    char password[128];
+    const uint32_t values[] = {2U, 2U, 2U, 2U, 2U, 2U};
+    struct u32_sequence sequence = {
+        .values = values,
+        .count = sizeof(values) / sizeof(values[0]),
+    };
+
+    CHECK(credentials_generate_human_password(password, sizeof(password), u32_sequence_random, &sequence) == CREDENTIALS_OK);
+    CHECK(strlen(password) <= 63U);
 }
 
 static void test_human_password_rejects_out_of_range_random_values(void)
@@ -185,6 +198,7 @@ int main(void)
     test_phrase_policy_rejects_legacy_hyphenated_secrets();
     test_wifi_qr_payload_uses_standard_wifi_format();
     test_wifi_qr_payload_escapes_reserved_characters();
+    test_human_wifi_password_always_fits_wpa_passphrase_limit();
     test_human_password_rejects_out_of_range_random_values();
     test_human_password_random_failure_propagates();
     test_human_password_output_too_small_fails();

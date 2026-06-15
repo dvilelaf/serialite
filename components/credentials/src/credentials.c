@@ -7993,9 +7993,14 @@ bool credentials_wifi_qr_payload(
 
     size_t used = 0;
     out[0] = '\0';
-    return credentials_wifi_qr_append_literal("WIFI:T:WPA;S:", out, out_size, &used) &&
+    /*
+     * Many mobile WiFi QR parsers accept fields in any order, but the most
+     * interoperable form starts with S before T. Keep this conservative
+     * because provisioning must work from stock phone camera apps.
+     */
+    return credentials_wifi_qr_append_literal("WIFI:S:", out, out_size, &used) &&
            credentials_wifi_qr_append_escaped(ssid, out, out_size, &used) &&
-           credentials_wifi_qr_append_literal(";P:", out, out_size, &used) &&
+           credentials_wifi_qr_append_literal(";T:WPA;P:", out, out_size, &used) &&
            credentials_wifi_qr_append_escaped(password, out, out_size, &used) &&
            credentials_wifi_qr_append_literal(";;", out, out_size, &used);
 }

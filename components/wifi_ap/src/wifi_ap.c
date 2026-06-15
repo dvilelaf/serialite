@@ -112,7 +112,13 @@ esp_err_t wifi_ap_start(const kvm_wifi_ap_config_t *config)
     wifi_config.ap.channel = config->channel;
     wifi_config.ap.max_connection = config->max_clients;
     wifi_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
-    wifi_config.ap.pmf_cfg.required = true;
+    /*
+     * This is a rescue path: client compatibility is more important than
+     * requiring PMF. WPA2 remains mandatory, while PMF-capable clients can
+     * still negotiate protected management frames.
+     */
+    wifi_config.ap.pmf_cfg.capable = true;
+    wifi_config.ap.pmf_cfg.required = false;
 
     err = esp_wifi_set_mode(WIFI_MODE_AP);
     if (err == ESP_OK) {
