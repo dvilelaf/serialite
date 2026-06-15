@@ -61,6 +61,14 @@ test('mobile operator opens xterm console and terminal controls work end-to-end'
   await page.getByRole('button', { name: 'Ctrl+C' }).click();
   await expect(page.locator('#terminal')).not.toContainText('\\u0003');
   await page.locator('#terminal').click();
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const active = document.activeElement;
+        return !!active && active.classList.contains('xterm-helper-textarea');
+      })
+    )
+    .toBe(true);
   await page.keyboard.type('whoami');
   await page.keyboard.press('Enter');
   await expect(page.locator('#terminal')).toContainText('whoami');

@@ -114,6 +114,11 @@ static void check_terminal_is_terminal_first_not_command_composer(void)
     CHECK(strstr(web_server, "new KvmTerminal.FitAddon") != NULL);
     CHECK(strstr(web_server, "term.onData(data=>send(data))") != NULL);
     CHECK(strstr(web_server, "term.write") != NULL);
+    CHECK(strstr(web_server, "function refitTerminal()") != NULL);
+    CHECK(strstr(web_server, "requestAnimationFrame(refitTerminal)") != NULL);
+    CHECK(strstr(web_server, "visualViewport.addEventListener('resize',refitTerminal)") != NULL);
+    CHECK(strstr(web_server, "addEventListener('orientationchange',refitTerminal)") != NULL);
+    CHECK(strstr(web_server, "terminal.addEventListener('touchstart'") != NULL);
     CHECK(strstr(web_server, "attachCustomKeyEventHandler") != NULL);
     CHECK(strstr(web_server, "addEventListener('keydown',captureTerminalShortcuts,true)") != NULL);
     CHECK(strstr(web_server, "e.preventDefault();e.stopPropagation();send('\\\\u000c')") != NULL);
