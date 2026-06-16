@@ -15,6 +15,16 @@ https://github.com/dvilelaf/serialite/releases/latest
 ```
 
 The bundle contains the ESP32 binaries, flash offsets, checksums, and host setup script.
+After extracting it, flash with:
+
+```bash
+python -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 460800 --before default_reset --after hard_reset write_flash \
+  --flash_mode dio --flash_freq 80m --flash_size 16MB \
+  0x0 bootloader.bin \
+  0x8000 partition-table.bin \
+  0xf000 ota_data_initial.bin \
+  0x20000 serialite.bin
+```
 
 1. Plug Serialite into the server USB port.
 

@@ -9,6 +9,7 @@ version="${SERIALITE_RELEASE_VERSION:-${ESP32_KVM_RELEASE_VERSION:-}}"
 build_dir="${SERIALITE_BUILD_DIR:-${ESP32_KVM_BUILD_DIR:-build}}"
 dist_dir="${SERIALITE_DIST_DIR:-${ESP32_KVM_DIST_DIR:-dist}}"
 raw_base_url="${SERIALITE_RAW_BASE_URL:-${ESP32_KVM_RAW_BASE_URL:-https://raw.githubusercontent.com/dvilelaf/serialite}}"
+release_base_url="${SERIALITE_RELEASE_BASE_URL:-${ESP32_KVM_RELEASE_BASE_URL:-https://github.com/dvilelaf/serialite/releases/download}}"
 
 usage() {
     cat <<'EOF'
@@ -91,8 +92,32 @@ cp tools/host/setup-linux-serial-console.sh "$bundle_dir/"
 cp README.md "$bundle_dir/"
 
 setup_url="${raw_base_url%/}/${version}/tools/host/setup-linux-serial-console.sh"
+bundle_url="${release_base_url%/}/${version}/serialite-${version}.tar.gz"
 cat >"$bundle_dir/INSTALL.md" <<EOF
 # Serialite ${version}
+
+## Flash Firmware
+
+Download and extract the firmware bundle:
+
+\`\`\`bash
+curl -LO ${bundle_url}
+tar -xzf serialite-${version}.tar.gz
+cd serialite-${version}
+\`\`\`
+
+Put the ESP32-S3 in bootloader mode if needed, then flash it:
+
+\`\`\`bash
+python -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 460800 --before default_reset --after hard_reset write_flash \\
+  --flash_mode dio --flash_freq 80m --flash_size 16MB \\
+  0x0 bootloader.bin \\
+  0x8000 partition-table.bin \\
+  0xf000 ota_data_initial.bin \\
+  0x20000 serialite.bin
+\`\`\`
+
+If your board appears on a different port, replace \`/dev/ttyACM0\`.
 
 ## Host Setup
 

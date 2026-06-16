@@ -31,6 +31,7 @@ class PackageReleaseTest(unittest.TestCase):
             env["SERIALITE_BUILD_DIR"] = str(build)
             env["SERIALITE_DIST_DIR"] = str(dist)
             env["SERIALITE_RAW_BASE_URL"] = "https://raw.githubusercontent.com/acme/serialite"
+            env["SERIALITE_RELEASE_BASE_URL"] = "https://github.com/acme/serialite/releases/download"
             result = subprocess.run(
                 [str(SCRIPT), "--no-build", "--version", "vtest"],
                 cwd=REPO_ROOT,
@@ -47,6 +48,12 @@ class PackageReleaseTest(unittest.TestCase):
             self.assertTrue((bundle / "setup-linux-serial-console.sh").is_file())
             install = (bundle / "INSTALL.md").read_text()
             self.assertIn("https://raw.githubusercontent.com/acme/serialite/vtest/tools/host/setup-linux-serial-console.sh", install)
+            self.assertIn("https://github.com/acme/serialite/releases/download/vtest/serialite-vtest.tar.gz", install)
+            self.assertIn("python -m esptool --chip esp32s3", install)
+            self.assertIn("0x0 bootloader.bin", install)
+            self.assertIn("0x8000 partition-table.bin", install)
+            self.assertIn("0xf000 ota_data_initial.bin", install)
+            self.assertIn("0x20000 serialite.bin", install)
             self.assertNotIn("YOUR_ORG", install)
             self.assertIn("0x20000", (bundle / "manifest.txt").read_text())
             self.assertIn("serialite.bin", (bundle / "SHA256SUMS").read_text())
