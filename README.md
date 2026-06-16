@@ -8,6 +8,14 @@ It is not a video KVM: no HDMI, no remote HID, no virtual media.
 
 ## Quickstart
 
+If your device is not already flashed, download the latest firmware bundle from:
+
+```text
+https://github.com/dvilelaf/serialite/releases/latest
+```
+
+The bundle contains the ESP32 binaries, flash offsets, checksums, and host setup script.
+
 1. Plug Serialite into the server USB port.
 
 2. On the server, run:
@@ -34,7 +42,8 @@ It is not a video KVM: no HDMI, no remote HID, no virtual media.
 ## Notes
 
 - `BOOT`: wake screen and reveal the WiFi password.
-- `PWR` for 3 seconds: lock or unlock terminal input.
+- `PWR` tap: lock or unlock terminal input.
+- `PWR` hold: power off Serialite.
 - Use Serialite only in physically controlled environments.
 - Anyone with the WiFi password can reach the local terminal transport.
 
