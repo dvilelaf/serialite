@@ -45,12 +45,15 @@ class FlashLatestFirmwareTest(unittest.TestCase):
             root = pathlib.Path(tmp)
             source = self.make_bundle(root)
             cache = root / "cache"
+            tty = root / "ttyTEST"
+            tty.write_text("tty")
             env = os.environ.copy()
             env["SERIALITE_RELEASE_ASSET_URL"] = source.as_uri()
             env["SERIALITE_CACHE_DIR"] = str(cache)
+            env["SERIALITE_TEST_MODE"] = "1"
 
             result = subprocess.run(
-                [str(SCRIPT), "--port", "/dev/ttyTEST", "--dry-run"],
+                [str(SCRIPT), "--port", str(tty), "--dry-run"],
                 cwd=REPO_ROOT,
                 env=env,
                 text=True,
@@ -60,7 +63,7 @@ class FlashLatestFirmwareTest(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("python3 -m esptool --chip esp32s3 -p /dev/ttyTEST", result.stdout)
+            self.assertIn(f"python3 -m esptool --chip esp32s3 -p {tty}", result.stdout)
             self.assertIn("0x0 bootloader.bin", result.stdout)
             self.assertIn("0x8000 partition-table.bin", result.stdout)
             self.assertIn("0xf000 ota_data_initial.bin", result.stdout)
@@ -72,12 +75,15 @@ class FlashLatestFirmwareTest(unittest.TestCase):
             root = pathlib.Path(tmp)
             source = self.make_bundle(root)
             cache = root / "cache"
+            tty = root / "ttyTEST"
+            tty.write_text("tty")
             env = os.environ.copy()
             env["SERIALITE_RELEASE_ASSET_URL"] = source.as_uri()
             env["SERIALITE_CACHE_DIR"] = str(cache)
+            env["SERIALITE_TEST_MODE"] = "1"
 
             first = subprocess.run(
-                [str(SCRIPT), "--dry-run"],
+                [str(SCRIPT), "--port", str(tty), "--dry-run"],
                 cwd=REPO_ROOT,
                 env=env,
                 text=True,
@@ -90,7 +96,7 @@ class FlashLatestFirmwareTest(unittest.TestCase):
             shutil.rmtree(cache / "serialite-vtest")
 
             second = subprocess.run(
-                [str(SCRIPT), "--dry-run"],
+                [str(SCRIPT), "--port", str(tty), "--dry-run"],
                 cwd=REPO_ROOT,
                 env=env,
                 text=True,
@@ -101,6 +107,67 @@ class FlashLatestFirmwareTest(unittest.TestCase):
 
             self.assertEqual(second.returncode, 0, second.stderr)
             self.assertIn("Using cached firmware", second.stderr)
+
+    def test_autodetects_single_esp32_serial_device(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="serialite-flash-") as tmp:
+            root = pathlib.Path(tmp)
+            source = self.make_bundle(root)
+            cache = root / "cache"
+            dev = root / "dev"
+            by_id = dev / "serial" / "by-id"
+            tty = dev / "ttyACM7"
+            by_id.mkdir(parents=True)
+            tty.write_text("tty")
+            (by_id / "usb-Espressif_USB_JTAG_serial_debug_unit_TEST-if00").symlink_to("../../ttyACM7")
+            env = os.environ.copy()
+            env["SERIALITE_RELEASE_ASSET_URL"] = source.as_uri()
+            env["SERIALITE_CACHE_DIR"] = str(cache)
+            env["SERIALITE_DEV_DIR"] = str(dev)
+            env["SERIALITE_TEST_MODE"] = "1"
+
+            result = subprocess.run(
+                [str(SCRIPT), "--dry-run"],
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f"-p {tty}", result.stdout)
+
+    def test_autodetect_fails_when_multiple_devices_exist(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="serialite-flash-") as tmp:
+            root = pathlib.Path(tmp)
+            source = self.make_bundle(root)
+            cache = root / "cache"
+            dev = root / "dev"
+            by_id = dev / "serial" / "by-id"
+            by_id.mkdir(parents=True)
+            for index in (0, 1):
+                tty = dev / f"ttyACM{index}"
+                tty.write_text("tty")
+                (by_id / f"usb-Espressif_USB_JTAG_serial_debug_unit_TEST{index}-if00").symlink_to(f"../../ttyACM{index}")
+            env = os.environ.copy()
+            env["SERIALITE_RELEASE_ASSET_URL"] = source.as_uri()
+            env["SERIALITE_CACHE_DIR"] = str(cache)
+            env["SERIALITE_DEV_DIR"] = str(dev)
+            env["SERIALITE_TEST_MODE"] = "1"
+
+            result = subprocess.run(
+                [str(SCRIPT), "--dry-run"],
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Multiple ESP32 serial devices found", result.stderr)
 
 
 if __name__ == "__main__":

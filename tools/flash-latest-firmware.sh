@@ -3,21 +3,23 @@ set -euo pipefail
 
 repo="dvilelaf/serialite"
 version="latest"
-port="${PORT:-${SERIALITE_FLASH_PORT:-/dev/ttyACM0}}"
+port="${PORT:-${SERIALITE_FLASH_PORT:-}}"
 baud="${SERIALITE_FLASH_BAUD:-460800}"
 python_bin="${SERIALITE_PYTHON:-python3}"
 force=0
 dry_run=0
 cache_dir="${SERIALITE_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/serialite/firmware}"
 asset_url="${SERIALITE_RELEASE_ASSET_URL:-}"
+dev_dir="${SERIALITE_DEV_DIR:-/dev}"
+by_id_dir="${SERIALITE_BY_ID_DIR:-${dev_dir}/serial/by-id}"
 
 usage() {
     cat <<'EOF'
 Usage:
-  tools/flash-latest-firmware.sh [--port /dev/ttyACM0] [--version vX.Y.Z] [--force] [--dry-run]
+  tools/flash-latest-firmware.sh [--version vX.Y.Z] [--port /dev/ttyACM<N>] [--force] [--dry-run]
 
 Downloads the Serialite firmware bundle from GitHub Releases if it is not cached,
-verifies SHA256SUMS, and flashes the ESP32-S3 with esptool.
+auto-detects the ESP32-S3 serial port, verifies SHA256SUMS, and flashes with esptool.
 EOF
 }
 
@@ -66,6 +68,77 @@ require_command() {
     fi
 }
 
+is_device_node() {
+    if [ "${SERIALITE_TEST_MODE:-0}" = "1" ]; then
+        [ -e "$1" ]
+    else
+        [ -c "$1" ]
+    fi
+}
+
+canonical_path() {
+    readlink -f "$1"
+}
+
+autodetect_port() {
+    candidates=""
+    for path in "${by_id_dir}"/usb-Espressif_USB_JTAG_serial_debug_unit_*; do
+        [ -e "$path" ] || continue
+        resolved="$(canonical_path "$path")"
+        is_device_node "$resolved" || continue
+        case "
+${candidates}
+" in
+            *"
+${resolved}
+"*) ;;
+            *) candidates="${candidates}
+${resolved}" ;;
+        esac
+    done
+
+    if [ -z "$(printf '%s\n' "$candidates" | sed '/^$/d')" ]; then
+        for path in "${dev_dir}"/ttyACM*; do
+            [ -e "$path" ] || continue
+            is_device_node "$path" || continue
+            if [ "${SERIALITE_TEST_MODE:-0}" != "1" ]; then
+                properties="$(udevadm info -q property -n "$path" 2>/dev/null || true)"
+                printf '%s\n' "$properties" | grep -Eq '^ID_VENDOR_ID=303a$' || continue
+            fi
+            resolved="$(canonical_path "$path")"
+            case "
+${candidates}
+" in
+                *"
+${resolved}
+"*) ;;
+                *) candidates="${candidates}
+${resolved}" ;;
+            esac
+        done
+    fi
+
+    count="$(printf '%s\n' "$candidates" | sed '/^$/d' | wc -l | tr -d ' ')"
+    if [ "$count" = "0" ]; then
+        cat >&2 <<'EOF'
+No Serialite ESP32-S3 serial port found.
+
+Plug the device in and retry. If auto-detection is not available on this host,
+rerun with:
+  tools/flash-latest-firmware.sh --port /dev/ttyACM<N>
+EOF
+        exit 1
+    fi
+    if [ "$count" != "1" ]; then
+        echo "Multiple ESP32 serial devices found:" >&2
+        printf '%s\n' "$candidates" | sed '/^$/d;s/^/  /' >&2
+        echo "Rerun with --port /dev/ttyACM<N> for the Serialite device." >&2
+        exit 1
+    fi
+
+    printf '%s\n' "$candidates" | sed '/^$/d'
+}
+
 resolve_latest_asset_url() {
     python3 - "$repo" <<'PY'
 import json
@@ -91,6 +164,14 @@ if [ -z "$asset_url" ]; then
     else
         asset_url="https://github.com/${repo}/releases/download/${version}/serialite-${version}.tar.gz"
     fi
+fi
+
+if [ -z "$port" ]; then
+    port="$(autodetect_port)"
+    echo "Selected port: $port" >&2
+elif ! is_device_node "$port"; then
+    echo "port is not a character device: $port" >&2
+    exit 1
 fi
 
 tarball_name="$(basename "${asset_url%%\?*}")"

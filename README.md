@@ -11,7 +11,7 @@ It is not a video KVM: no HDMI, no remote HID, no virtual media.
 1. Flash Serialite if needed:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/flash-latest-firmware.sh | bash -s -- --port /dev/ttyACM0
+   curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/flash-latest-firmware.sh | bash
    ```
 
 2. Plug Serialite into the server USB port.
