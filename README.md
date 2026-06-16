@@ -8,58 +8,34 @@ It is not a video KVM: no HDMI, no remote HID, no virtual media.
 
 ## Quickstart
 
-If your device is not already flashed, download the latest firmware bundle from:
+1. Flash Serialite if needed:
 
-```text
-https://github.com/dvilelaf/serialite/releases/latest
-```
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/flash-latest-firmware.sh | bash -s -- --port /dev/ttyACM0
+   ```
 
-The bundle contains the ESP32 binaries, flash offsets, checksums, and host setup script.
-To download and flash the latest firmware in one command:
+2. Plug Serialite into the server USB port.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/flash-latest-firmware.sh | bash -s -- --port /dev/ttyACM0
-```
-
-If you cloned the repo and have `just` installed:
-
-```bash
-just flash /dev/ttyACM0
-```
-
-Or download the bundle manually, extract it, and flash with:
-
-```bash
-python3 -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 460800 --before default_reset --after hard_reset write_flash \
-  --flash_mode dio --flash_freq 80m --flash_size 16MB \
-  0x0 bootloader.bin \
-  0x8000 partition-table.bin \
-  0xf000 ota_data_initial.bin \
-  0x20000 serialite.bin
-```
-
-1. Plug Serialite into the server USB port.
-
-2. On the server, run:
+3. On the server, run:
 
    ```bash
    sudo sh -c 'curl -4fsSL -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/dvilelaf/serialite/contents/tools/host/setup-linux-serial-console.sh?ref=main" | sh'
    ```
 
-3. Join the WiFi network:
+4. Join the WiFi network:
 
    ```text
    SSID: KVM
    Password: shown on the Serialite screen
    ```
 
-4. Open:
+5. Open:
 
    ```text
    http://192.168.4.1
    ```
 
-5. Use the terminal.
+6. Use the terminal.
 
 ## Notes
 

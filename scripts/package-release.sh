@@ -111,7 +111,7 @@ cd serialite-${version}
 Put the ESP32-S3 in bootloader mode if needed, then flash it:
 
 \`\`\`bash
-python -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 460800 --before default_reset --after hard_reset write_flash \\
+python3 -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 460800 --before default_reset --after hard_reset write_flash \\
   --flash_mode dio --flash_freq 80m --flash_size 16MB \\
   0x0 bootloader.bin \\
   0x8000 partition-table.bin \\

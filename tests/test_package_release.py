@@ -50,7 +50,7 @@ class PackageReleaseTest(unittest.TestCase):
             install = (bundle / "INSTALL.md").read_text()
             self.assertIn("https://raw.githubusercontent.com/acme/serialite/vtest/tools/host/setup-linux-serial-console.sh", install)
             self.assertIn("https://github.com/acme/serialite/releases/download/vtest/serialite-vtest.tar.gz", install)
-            self.assertIn("python -m esptool --chip esp32s3", install)
+            self.assertIn("python3 -m esptool --chip esp32s3", install)
             self.assertIn("0x0 bootloader.bin", install)
             self.assertIn("0x8000 partition-table.bin", install)
             self.assertIn("0xf000 ota_data_initial.bin", install)
