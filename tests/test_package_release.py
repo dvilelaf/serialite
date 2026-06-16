@@ -45,6 +45,7 @@ class PackageReleaseTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             bundle = dist / "serialite-vtest"
             self.assertTrue((bundle / "serialite.bin").is_file())
+            self.assertTrue((bundle / "flash-latest-firmware.sh").is_file())
             self.assertTrue((bundle / "setup-linux-serial-console.sh").is_file())
             install = (bundle / "INSTALL.md").read_text()
             self.assertIn("https://raw.githubusercontent.com/acme/serialite/vtest/tools/host/setup-linux-serial-console.sh", install)
@@ -56,7 +57,9 @@ class PackageReleaseTest(unittest.TestCase):
             self.assertIn("0x20000 serialite.bin", install)
             self.assertNotIn("YOUR_ORG", install)
             self.assertIn("0x20000", (bundle / "manifest.txt").read_text())
+            self.assertIn("flash-latest-firmware.sh", (bundle / "manifest.txt").read_text())
             self.assertIn("serialite.bin", (bundle / "SHA256SUMS").read_text())
+            self.assertIn("flash-latest-firmware.sh", (bundle / "SHA256SUMS").read_text())
             self.assertIn("INSTALL.md", (bundle / "SHA256SUMS").read_text())
             self.assertTrue((dist / "serialite-vtest.tar.gz").is_file())
 

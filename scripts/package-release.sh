@@ -69,6 +69,7 @@ required_files=(
     "${build_dir}/partition_table/partition-table.bin"
     "${build_dir}/ota_data_initial.bin"
     "${build_dir}/serialite.bin"
+    "tools/flash-latest-firmware.sh"
     "tools/host/setup-linux-serial-console.sh"
     "README.md"
 )
@@ -88,6 +89,7 @@ cp "${build_dir}/bootloader/bootloader.bin" "$bundle_dir/"
 cp "${build_dir}/partition_table/partition-table.bin" "$bundle_dir/"
 cp "${build_dir}/ota_data_initial.bin" "$bundle_dir/"
 cp "${build_dir}/serialite.bin" "$bundle_dir/"
+cp tools/flash-latest-firmware.sh "$bundle_dir/"
 cp tools/host/setup-linux-serial-console.sh "$bundle_dir/"
 cp README.md "$bundle_dir/"
 
@@ -151,11 +153,14 @@ Flash offsets:
 
 Host setup:
   setup-linux-serial-console.sh
+
+Firmware flashing:
+  flash-latest-firmware.sh
 EOF
 
 (
     cd "$bundle_dir"
-    sha256sum bootloader.bin partition-table.bin ota_data_initial.bin serialite.bin setup-linux-serial-console.sh README.md INSTALL.md manifest.txt >SHA256SUMS
+    sha256sum bootloader.bin partition-table.bin ota_data_initial.bin serialite.bin flash-latest-firmware.sh setup-linux-serial-console.sh README.md INSTALL.md manifest.txt >SHA256SUMS
 )
 
 tarball="${bundle_dir}.tar.gz"

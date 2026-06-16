@@ -15,10 +15,22 @@ https://github.com/dvilelaf/serialite/releases/latest
 ```
 
 The bundle contains the ESP32 binaries, flash offsets, checksums, and host setup script.
-After extracting it, flash with:
+To download and flash the latest firmware in one command:
 
 ```bash
-python -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 460800 --before default_reset --after hard_reset write_flash \
+curl -fsSL https://raw.githubusercontent.com/dvilelaf/serialite/main/tools/flash-latest-firmware.sh | bash -s -- --port /dev/ttyACM0
+```
+
+If you cloned the repo and have `just` installed:
+
+```bash
+just flash /dev/ttyACM0
+```
+
+Or download the bundle manually, extract it, and flash with:
+
+```bash
+python3 -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 460800 --before default_reset --after hard_reset write_flash \
   --flash_mode dio --flash_freq 80m --flash_size 16MB \
   0x0 bootloader.bin \
   0x8000 partition-table.bin \
