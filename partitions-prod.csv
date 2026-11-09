@@ -1,0 +1,10 @@
+# Production layout (sdkconfig.prod.defaults). The table sits at 0xC000 because the
+# Secure Boot + flash encryption bootloader does not fit below 0x8000.
+# Name,   Type, SubType,  Offset,   Size,     Flags
+nvs,      data, nvs,      0xd000,   0x6000,
+otadata,  data, ota,      0x13000,  0x2000,
+phy_init, data, phy,      0x15000,  0x1000,
+# NVS encryption keys, protected by flash encryption.
+nvs_keys, data, nvs_keys, 0x16000,  0x1000,   encrypted
+ota_0,    app,  ota_0,    0x20000,  0x600000,
+ota_1,    app,  ota_1,    0x620000, 0x600000,

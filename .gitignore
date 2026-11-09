@@ -11,3 +11,5 @@ sdkconfig.old
 .vscode/
 .idea/
 test-results/
+__pycache__/
+node_modules/
