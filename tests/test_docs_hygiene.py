@@ -1,38 +1,45 @@
 #!/usr/bin/env python3
-"""Documentation hygiene checks for public onboarding paths."""
+"""Checks that public docs stay accurate and point users at verified downloads."""
 
 from __future__ import annotations
 
 import pathlib
+import re
 import unittest
 
-
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+PUBLIC_DOCS = [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").glob("*.md"))]
 
 
 class DocsHygieneTest(unittest.TestCase):
-    def test_public_docs_do_not_use_machine_local_paths(self) -> None:
-        public_docs = [
-            REPO_ROOT / "README.md",
-            REPO_ROOT / "docs" / "development.md",
-            REPO_ROOT / "tools" / "esp_http_harness" / "run_http_harness_tests.sh",
-        ]
-
-        for path in public_docs:
+    def test_no_machine_local_paths(self) -> None:
+        for path in PUBLIC_DOCS:
             with self.subTest(path=path.relative_to(REPO_ROOT)):
-                self.assertNotIn("/home/david", path.read_text())
+                self.assertNotRegex(path.read_text(), r"/home/[a-z]+|/media/[a-z]+")
 
-    def test_readme_is_a_short_main_branch_quickstart(self) -> None:
+    def test_install_commands_use_release_assets_not_branches(self) -> None:
         readme = (REPO_ROOT / "README.md").read_text()
+        self.assertIn("releases/latest/download/flash-latest-firmware.sh", readme)
+        self.assertIn("releases/latest/download/setup-linux-serial-console.sh", readme)
+        self.assertNotIn("ref=main", readme)
+        self.assertNotIn("raw.githubusercontent.com", readme)
+        self.assertNotRegex(readme, r"curl[^\n]*\| *sudo")
 
-        self.assertIn('sudo sh -c \'curl -4fsSL -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/dvilelaf/serialite/contents/tools/host/setup-linux-serial-console.sh?ref=main" | sh\'', readme)
-        self.assertIn("docs/development.md", readme)
-        self.assertNotIn("vX.Y.Z", readme)
-        self.assertNotIn("Firmware Releases", readme)
-        self.assertNotIn("Host Setup", readme)
-        self.assertNotIn("scripts/package-release.sh", readme)
-        self.assertNotIn("scripts/verify.sh", readme)
-        self.assertNotIn("verify_production_profile.py", readme)
+    def test_relative_links_resolve(self) -> None:
+        for path in PUBLIC_DOCS:
+            for target in re.findall(r"\]\(([^)#]+)\)", path.read_text()):
+                if "://" in target:
+                    continue
+                with self.subTest(doc=path.name, link=target):
+                    self.assertTrue((path.parent / target).exists())
+
+    def test_old_product_name_is_gone(self) -> None:
+        for path in PUBLIC_DOCS:
+            with self.subTest(path=path.relative_to(REPO_ROOT)):
+                text = path.read_text()
+                self.assertNotIn("SSID: KVM", text)
+                self.assertNotIn("kvm.local", text)
+                self.assertNotIn("ESP32_KVM", text)
 
 
 if __name__ == "__main__":

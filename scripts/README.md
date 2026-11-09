@@ -1,8 +1,8 @@
 # Scripts
 
-These scripts are for maintainers and CI. End users should follow the root `README.md`.
+For maintainers and CI. End users only need the root `README.md`.
 
-- `dev-verify.sh`: full local verification: host tests, Python tests, production-profile lint, and ESP-IDF build.
-- `lint_production_profile.py`: static policy lint for production security defaults and partition layout.
-- `package-release.sh`: creates a `dist/` release bundle with firmware binaries, host setup script, manifest, and SHA256 checksums.
-- `../tools/flash-latest-firmware.sh`: downloads/caches a release firmware bundle and flashes it to the ESP32-S3.
+- `dev-verify.sh`: everything CI runs, locally.
+- `lint_production_profile.py`: checks the production profile and both partition tables.
+- `gen_wordlist.py`: regenerates `credentials_wordlist.c` from the EFF list (`--check` in CI).
+- `package-release.sh`: builds the release assets under `dist/`.

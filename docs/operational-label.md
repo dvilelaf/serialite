@@ -1,51 +1,43 @@
-# Serialite Operational Label
+# Device label
 
-This document defines the text that should be printed on the device label, rack tag, or enclosure insert.
-It intentionally contains **No secrets**: do not print passwords, pair codes, private keys, fingerprints that are not regenerated with the device, or customer/server identifiers.
+Text to print on the device, a rack tag or an enclosure insert. It contains
+no secrets: never print passwords, fingerprints or server names.
 
-## Front Label
+## Front
 
 ```text
 Serialite
 Serial rescue console
-SSID: KVM
-URL: http://192.168.4.1
+WiFi: Serialite (press BOOT for the password)
+http://192.168.4.1
 Privileged physical console
 ```
 
-## Rear / Bottom Label
+## Back
 
 ```text
-Use only on trusted local AP.
-Do not expose to Internet.
-No HDMI KVM, no host power control, no virtual media.
-PWR tap: lock input
-PWR hold: power off
-BOOT 10s: factory reset
+Use only on its own local WiFi. Do not expose to the Internet.
+No HDMI, no remote power control, no virtual media.
+BOOT: wake / show password      BOOT 10 s: factory reset
+PWR: lock web input             PWR 3 s: power off
 ```
 
-## Rack Runbook Tag
+## Rack tag
 
 ```text
-1. Connect nearby laptop/phone to SSID: KVM.
-2. Open http://192.168.4.1 or scan the screen QR.
-3. Open the local web console.
-4. Authenticate in the Linux serial login when prompted.
-5. Tap PWR for emergency input lock.
+1. Press BOOT and join the WiFi network shown (or scan the QR).
+2. Open http://192.168.4.1
+3. Log in to the server on the terminal.
+4. Tap PWR to lock the web console in an emergency.
 ```
 
-## Enclosure Requirements
+## Enclosure
 
-- Keep USB-C port and both physical buttons accessible.
-- Label the BOOT button as `BOOT / WAKE / RESET`.
-- Label the PWR button as `PWR / LOCK / OFF`.
-- Do not cover the AMOLED QR/status area.
-- Use a tamper-evident asset tag if deployed in shared racks.
-- Prefer matte, high-contrast text readable under rack lighting.
+- Keep the USB-C port and both buttons reachable; label BOOT as `BOOT / WAKE / RESET` and PWR as `PWR / LOCK / OFF`.
+- Do not cover the screen.
+- Use a tamper-evident tag in shared racks.
 
-## Security Notes
+## Custody
 
-- Treat this device as privileged physical console access.
-- Store printed labels without credentials; rotate credentials via the web UI when device custody changes.
-- If a unit is lost or removed from service, factory reset it before reuse.
-- If the label is damaged or unreadable, replace it before production deployment.
+- Rotate the WiFi password from the web console when the device changes hands.
+- Factory reset (BOOT 10 s) before reusing or retiring a unit.
