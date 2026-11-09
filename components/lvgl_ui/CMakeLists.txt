@@ -15,5 +15,6 @@ idf_component_register(
         esp_lcd
         esp_timer
         lvgl
+        mbedtls
         secret_display
 )

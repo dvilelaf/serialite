@@ -84,6 +84,10 @@ and list the driver components it needs in `idf_component.yml`. The screen
 layout in `lvgl_ui.c` is tuned for 448x368 landscape; other panel sizes need
 their own layout constants.
 
+Both partition tables assume 16 MB of flash (two 6 MB OTA slots). For smaller
+chips shrink the slots and `OTA_UPDATE_MAX_IMAGE_BYTES` together;
+`scripts/lint_production_profile.py` fails if they disagree.
+
 Without a display, a freshly generated WiFi password cannot be shown, so the
 AP only starts with credentials stored in encrypted NVS, or with
 `CONFIG_SERIALITE_UART_SHOW_PASSWORD` printing them on the debug UART.

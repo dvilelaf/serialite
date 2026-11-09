@@ -13,6 +13,7 @@
 #include "freertos/task.h"
 #include "draw/sw/lv_draw_sw_utils.h"
 #include "lvgl.h"
+#include "mbedtls/platform_util.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -137,14 +138,6 @@ static void copy_credentials(ui_credentials_copy_t *dst, const lvgl_ui_credentia
     strlcpy(dst->password, src->password != NULL ? src->password : "", sizeof(dst->password));
     strlcpy(dst->host, src->web_host != NULL ? src->web_host : "", sizeof(dst->host));
     strlcpy(dst->fingerprint, src->https_fingerprint != NULL ? src->https_fingerprint : "", sizeof(dst->fingerprint));
-}
-
-static void wipe(void *ptr, size_t len)
-{
-    volatile uint8_t *p = (volatile uint8_t *)ptr;
-    while (len-- > 0) {
-        *p++ = 0;
-    }
 }
 
 /* ---- status refresh ---------------------------------------------------- */
@@ -323,7 +316,7 @@ static void set_secret_page(secret_page_t page)
             payload[0] = '\0';
         }
         lv_qrcode_set_data(s_ctx.wifi_qr, payload);
-        wipe(payload, sizeof(payload));
+        mbedtls_platform_zeroize(payload, sizeof(payload));
         lv_obj_remove_flag(s_ctx.wifi_qr, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_ctx.wifi_placeholder, LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -351,7 +344,7 @@ static void set_secret_page(secret_page_t page)
     } else if (secret_display_text(s_ctx.credentials.password, show_qr, text, sizeof(text))) {
         lv_label_set_text(s_ctx.secret_value_label, text);
     }
-    wipe(text, sizeof(text));
+    mbedtls_platform_zeroize(text, sizeof(text));
 
     if (page == SECRET_PAGE_HIDDEN) {
         hide_secret_hint();
@@ -437,7 +430,7 @@ static void handle_hold(uint32_t held_ms, uint32_t reset_after_ms, int64_t now_u
 
 static void apply_credentials(const ui_credentials_copy_t *credentials, bool reveal, int64_t now_us)
 {
-    wipe(&s_ctx.credentials, sizeof(s_ctx.credentials));
+    mbedtls_platform_zeroize(&s_ctx.credentials, sizeof(s_ctx.credentials));
     s_ctx.credentials = *credentials;
     lv_label_set_text(s_ctx.ssid_label, s_ctx.credentials.ssid);
     lv_label_set_text(s_ctx.host_label, s_ctx.credentials.host);
@@ -462,7 +455,7 @@ static void process_mailbox(int64_t now_us)
     ui_mailbox_t mail;
     xSemaphoreTake(s_mailbox_lock, portMAX_DELAY);
     mail = s_mailbox;
-    wipe(&s_mailbox, sizeof(s_mailbox));
+    mbedtls_platform_zeroize(&s_mailbox, sizeof(s_mailbox));
     xSemaphoreGive(s_mailbox_lock);
 
     if (mail.credentials_pending) {
@@ -474,7 +467,7 @@ static void process_mailbox(int64_t now_us)
     if (mail.hold_pending) {
         handle_hold(mail.hold_ms, mail.reset_after_ms, now_us);
     }
-    wipe(&mail, sizeof(mail));
+    mbedtls_platform_zeroize(&mail, sizeof(mail));
 }
 
 static void ui_task(void *arg)
@@ -708,7 +701,7 @@ esp_err_t lvgl_ui_start(const lvgl_ui_config_t *config)
     s_ctx.display_on = true;
     s_ctx.last_activity_us = esp_timer_get_time();
     apply_credentials(&initial, false, s_ctx.last_activity_us);
-    wipe(&initial, sizeof(initial));
+    mbedtls_platform_zeroize(&initial, sizeof(initial));
     board_display_set_power(true);
 
     /* From here on only ui_task touches LVGL. */

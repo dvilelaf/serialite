@@ -94,6 +94,18 @@ eFuses: test every profile change on a sacrificial board.
 With HTTPS, compare the SHA-256 the browser shows for the certificate with
 the one on the screen (press BOOT twice) before typing anything.
 
+## Known limits
+
+- esp_http_server has one task. An OTA upload occupies it (at most five
+  minutes) and terminal output waits meanwhile; output beyond the queue is
+  dropped and counted in diagnostics.
+- The request rate limit is global rather than per client. The AP admits one
+  client, so in practice that is the same thing.
+- Lab builds keep the firmware and, after a software restart, the current
+  password readable to anyone who can attach a USB cable and read the flash.
+- Release archives are checksummed, not signed. Anyone who can publish a
+  GitHub release for this repository can publish firmware.
+
 ## How it is tested
 
 | Property | Test |
