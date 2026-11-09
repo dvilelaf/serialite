@@ -1,0 +1,4 @@
+:include .gitignore
+
+# Vendored, minified third-party bundle (see THIRD_PARTY_NOTICES.md).
+components/web_server/assets/xterm.js

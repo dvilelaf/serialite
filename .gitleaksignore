@@ -1,0 +1,6 @@
+# False positives in host tests: fixed hex-looking strings, not secrets.
+# "0123456789abcdef" checks that session tokens are lowercase hex.
+87df700a5371411b83cb573faaf4640126531f1c:tests/host/test_web_security.c:generic-api-key:45
+# "12345678abcdef" is a deliberately weak WiFi password the validator must reject.
+16f66651ca4e0fbb9d682518286eae065276400f:tests/host/test_storage_config.c:generic-api-key:43
+82b936c29e1e016f2e784ed00821909f0f588ced:tests/host/test_storage_config.c:generic-api-key:21

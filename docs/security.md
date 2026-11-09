@@ -119,7 +119,7 @@ the one on the screen (press BOOT twice) before typing anything.
 | Passwords: unbiased choice, every word valid | `tests/host/test_credentials.c`, `scripts/gen_wordlist.py --check` |
 | Which credentials are used at boot | `tests/host/test_credential_boot_policy.c` |
 | OTA image identity | `tests/host/test_ota_update_policy.c` |
-| Production profile and partition tables | `tests/test_lint_production_profile.py`, CI builds the profile |
+| Production profile and partition tables | `tests/test_lint_production_profile.py`; `scripts/verify full` builds the profile |
 | Release download integrity | `tests/test_flash_latest_firmware.py` |
 
 Still checked by hand on hardware: the AP's WPA mode, the screen reveal and

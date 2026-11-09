@@ -2,11 +2,12 @@
 
 ## Setup
 
-ESP-IDF 5.3.x, plus `cmake`, `ninja` and `python3` for the host tests. The
-browser tests need `npm`.
+ESP-IDF 5.3.x, plus `cmake`, `ninja`, `gcc`, `python3`, `uv`, `npm`, `flock` and
+`gitleaks` for the checks.
 
 ```bash
 . /path/to/esp-idf/export.sh
+git config core.hooksPath .githooks   # once per clone: every commit runs the checks
 ```
 
 ## Build and flash
@@ -32,29 +33,41 @@ idf.py -B build-prod -D SDKCONFIG=build-prod/sdkconfig \
     -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.prod.defaults" build
 ```
 
-## Tests
+## Checks
+
+There is no cloud CI: every check runs on your machine through one script.
 
 ```bash
-scripts/dev-verify.sh
+scripts/verify changed           # what this branch changed; the pre-commit hook runs it on staged files
+scripts/verify full              # everything; run it before a release
 ```
 
-runs, in order:
+`changed` only runs the checks the changed files can affect. `full` runs:
 
-- `tests/host`: unit tests for every hardware-independent module, built with
-  `-Werror` and ASan/UBSan. Add a test with one `serialite_test()` line in
-  `tests/host/CMakeLists.txt`.
-- `tests/*.py`: the flasher, packaging, host setup script and production lint.
+- gitleaks over the whole history (false positives go in `.gitleaksignore`).
+- ruff (format and lint) on the Python scripts and tests.
+- `tests/*.py`: the flasher, packaging, host setup script, docs and production lint.
 - `scripts/gen_wordlist.py --check`: the generated word list matches the EFF file.
-- `scripts/lint_production_profile.py`
-- `idf.py build`
+- shellcheck on every shell script.
+- `tests/host`: unit tests for every hardware-independent module, with
+  `-Werror`, ASan and UBSan. Add a test with one `serialite_test()` line in
+  `tests/host/CMakeLists.txt`.
+- `scripts/lint_production_profile.py`.
+- Firmware builds of the lab, headless and production profiles (production
+  signed with a throwaway key) in `build-verify-*`. Any warning in Serialite's
+  own components is an error (`tools/cmake/strict_warnings.cmake`).
 - `tools/esp_http_harness/run_http_harness_tests.sh`: builds the real
   `web_server` for the ESP-IDF linux target with stub hardware, runs the
   Playwright browser flows, then `security_checks.py` (raw HTTP and WebSocket
-  requests a browser would never send). `SERIALITE_SKIP_BROWSER_TEST=1` skips
-  the browser part.
+  requests a browser would never send).
+- jscpd: fails on new copy-pasted code.
+- semgrep `p/default` (exceptions are marked `nosemgrep` with a reason).
+- diff coverage: at least 80 % of the changed lines that host or script tests can reach.
 
-CI (`.github/workflows/ci.yml`) runs the same, plus the headless and
-production builds.
+Tool versions are pinned at the top of `scripts/verify`. When `idf.py` is not
+on PATH it sources ESP-IDF itself, from `$IDF_EXPORT`, the script set with
+`git config verify.idfExport <path>`, or `$IDF_PATH/export.sh`. A missing tool
+fails its check; never bypass the hook with `--no-verify`.
 
 ## Web assets
 
@@ -65,7 +78,7 @@ in `web_server.c`.
 
 ## Releasing
 
-1. Tag the commit: `git tag vX.Y.Z`.
+1. Run `scripts/verify full`, then tag the commit: `git tag vX.Y.Z`.
 2. `scripts/package-release.sh` (lab profile by default; `--profile prod` for signed images).
 3. Upload everything it lists from `dist/` to the GitHub release:
    `serialite-vX.Y.Z.tar.gz`, `serialite-vX.Y.Z.tar.gz.sha256`,

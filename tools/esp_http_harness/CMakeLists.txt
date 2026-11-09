@@ -13,4 +13,7 @@ set(EXTRA_COMPONENT_DIRS
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+include(${REPO_ROOT}/tools/cmake/strict_warnings.cmake)
 project(serialite_http_harness)
+
+serialite_strict_warnings(main ${EXTRA_COMPONENT_DIRS} ${CMAKE_CURRENT_LIST_DIR}/components)

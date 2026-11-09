@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# One entry point for every quality check of this repository. Nothing runs in
+# the cloud: this script is the CI.
+#
+#   scripts/verify changed            what this branch changed (while working)
+#   scripts/verify changed --staged   what is staged (the pre-commit hook)
+#   scripts/verify full               everything, every firmware profile included
+#
+# "Changed" is measured from the merge base with the branch's upstream, else
+# the default branch. Every check runs, then the failures are listed together.
+#
+# Needs git, gitleaks, flock, uv, npm, cmake, ninja, gcc and ESP-IDF 5.3. When
+# idf.py is not on PATH the script sources $IDF_EXPORT, else the script named by
+# `git config verify.idfExport`, else $IDF_PATH/export.sh. A missing tool fails
+# its check; nothing is skipped.
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel)" || exit 2
+
+mode=${1:-changed}
+case "$mode" in
+  changed | full) ;;
+  *) echo "usage: scripts/verify changed [--staged] | full" >&2; exit 2 ;;
+esac
+staged=0; [ "${2:-}" = --staged ] && staged=1
+min_diff_cover=${VERIFY_DIFF_COVER:-80}
+lock=${VERIFY_LOCK:-/tmp/verify-heavy.lock}
+logs=$(mktemp -d /tmp/serialite-verify.XXXXXX)
+failed=()
+
+# Pinned tool versions, fetched by uvx and npx on first use.
+RUFF=ruff@0.17.4
+SHELLCHECK=shellcheck-py==0.11.0.1
+COVERAGE=coverage@7.17.2
+GCOVR=gcovr@8.8
+DIFF_COVER=diff-cover@11.0.1
+SEMGREP=semgrep@1.184.0
+JSCPD=jscpd@5.4.3
+
+run() { # run <label> <command...>: run it, remember a failure, go on
+  local label=$1; shift
+  echo "== $label"
+  "$@" || failed+=("$label")
+}
+heavy() { flock "$lock" "$@"; } # one ESP-IDF build at a time on this machine
+quiet() { # quiet <log> <command...>: keep the output in a log, show its end on failure
+  local log="$logs/$1.log"; shift
+  "$@" >"$log" 2>&1 && return 0
+  local status=$?
+  tail -n 40 "$log"
+  echo "(full log: $log)"
+  return "$status"
+}
+
+default_branch() {
+  git symbolic-ref -q --short refs/remotes/origin/HEAD && return
+  local b
+  for b in main master; do
+    git rev-parse -q --verify "$b" >/dev/null && { echo "$b"; return; }
+  done
+}
+if [ "$mode" = full ]; then target=$(default_branch)
+else target=$(git rev-parse -q --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || target=$(default_branch)
+fi
+base=$(git merge-base HEAD "${target:-HEAD}" 2>/dev/null)
+
+if [ "$staged" = 1 ]; then
+  files=$(git diff --cached --name-only --diff-filter=ACMR)
+else
+  files=$({ git diff --name-only --diff-filter=ACMR "$base"; git ls-files --others --exclude-standard; } | sort -u)
+fi
+only() { grep -E "$1" <<<"$files" | tr '\n' ' '; } # changed files matching a regex
+wants() { [ "$mode" = full ] || [ -n "$(only "$1")" ]; } # full mode, or a matching file changed
+
+# What each check reads, for "changed" mode.
+HOST_INPUTS='^(components|main|tests/host)/.*\.(c|h)$|^tests/host/CMakeLists\.txt$'
+FIRMWARE_INPUTS='^(components|main|tools/cmake)/|^(CMakeLists\.txt|sdkconfig\.defaults|partitions\.csv|dependencies\.lock)$'
+HARNESS_INPUTS='^components/(web_server|json_writer|event_log|diagnostics_export|https_fingerprint|local_tls_identity|ota_update|terminal_bridge|usb_console|wifi_ap)/|^tools/(esp_http_harness|cmake)/'
+PROFILE_INPUTS='^sdkconfig[^/]*\.defaults$|^partitions[^/]*\.csv$|(^|/)Kconfig|^components/ota_update/include/ota_update_policy\.h$|^scripts/lint_production_profile\.py$'
+WORDLIST_INPUTS='^components/credentials/(wordlist/|src/credentials_wordlist\.c$|include/credentials_wordlist\.h$)|^scripts/gen_wordlist\.py$'
+SCRIPT_TEST_INPUTS='^(scripts|tests|tools|docs)/|^[^/]+$'
+SHELL_FILES='\.sh$|^scripts/verify$|^\.githooks/'
+
+idf_state=unknown
+idf() { # make idf.py available; false, with a hint, if ESP-IDF cannot be found
+  if [ "$idf_state" = unknown ]; then
+    idf_state=missing
+    if command -v idf.py >/dev/null 2>&1; then
+      idf_state=ready
+    else
+      local script=${IDF_EXPORT:-$(git config --get verify.idfExport)}
+      [ -z "$script" ] && [ -n "${IDF_PATH:-}" ] && script=$IDF_PATH/export.sh
+      if [ -n "$script" ] && [ -f "$script" ]; then
+        set +u
+        # shellcheck disable=SC1090
+        . "$script" >"$logs/idf-export.log" 2>&1
+        set -u
+        command -v idf.py >/dev/null 2>&1 && idf_state=ready
+      fi
+    fi
+  fi
+  [ "$idf_state" = ready ] && return 0
+  echo "ESP-IDF not found: source its export.sh, set IDF_PATH, or run" >&2
+  echo "  git config verify.idfExport /path/to/esp-idf/export.sh" >&2
+  return 1
+}
+
+# --- Secrets ------------------------------------------------------------------
+leaks() { gitleaks git --no-banner --redact "$@"; }
+if [ "$mode" = full ]; then
+  run secrets leaks
+elif [ "$staged" = 1 ]; then
+  run secrets leaks --pre-commit --staged
+else
+  [ "$base" != "$(git rev-parse HEAD)" ] && run secrets-committed leaks --log-opts="$base..HEAD"
+  run secrets-uncommitted leaks --pre-commit
+fi
+
+# --- Python: scripts and their tests ---------------------------------------------
+ruff() { uvx --quiet "$RUFF" "$@"; }
+pyfiles=$(only '\.py$')
+if [ "$mode" = full ]; then
+  run py-format ruff format --check .
+  run py-lint ruff check .
+elif [ -n "$pyfiles" ]; then
+  # shellcheck disable=SC2086
+  run py-format ruff format --check $pyfiles
+  # shellcheck disable=SC2086
+  run py-lint ruff check $pyfiles
+fi
+
+script_tests() {
+  if [ "$mode" = full ]; then
+    COVERAGE_FILE="$logs/.coverage" uvx --quiet "$COVERAGE" run --source=scripts -m unittest discover -s tests -p 'test_*.py' &&
+      COVERAGE_FILE="$logs/.coverage" uvx --quiet "$COVERAGE" xml -q -o "$logs/py-coverage.xml"
+  else
+    python3 -m unittest discover -s tests -p 'test_*.py'
+  fi
+}
+wants "$SCRIPT_TEST_INPUTS" && run script-tests quiet script-tests script_tests
+wants "$WORDLIST_INPUTS" && run wordlist python3 scripts/gen_wordlist.py --check
+
+# --- Shell ----------------------------------------------------------------------
+if [ "$mode" = full ]; then
+  shfiles=$(git ls-files '*.sh' scripts/verify '.githooks/*' | tr '\n' ' ')
+else
+  shfiles=$(only "$SHELL_FILES")
+fi
+# shellcheck disable=SC2086
+[ -n "$shfiles" ] && run shellcheck uvx --quiet --from "$SHELLCHECK" shellcheck $shfiles
+
+# --- C: host unit tests (ASan, UBSan, coverage) ----------------------------------
+host_tests() {
+  local dir=build-host-tests
+  idf || return 1 # local_tls_identity links ESP-IDF's mbedTLS
+  cmake -S tests/host -B "$dir" -G Ninja -DSERIALITE_REQUIRE_ALL_TESTS=ON \
+    -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer --coverage" &&
+    cmake --build "$dir" &&
+    find "$dir" -name '*.gcda' -delete &&
+    ctest --test-dir "$dir" --output-on-failure &&
+    if [ "$mode" = full ]; then
+      uvx --quiet "$GCOVR" --root . --filter 'components/' --filter 'main/' \
+        --cobertura "$logs/c-coverage.xml" "$dir"
+    fi
+}
+wants "$HOST_INPUTS" && run host-tests quiet host-tests host_tests
+
+# --- Firmware builds ------------------------------------------------------------
+# Each configuration builds from the defaults in its own directory. Warnings in
+# Serialite's components are errors (tools/cmake/strict_warnings.cmake).
+firmware() { # firmware <name> <defaults file...>
+  local name=$1; shift
+  local dir=build-verify-$name defaults
+  defaults=$(printf '%s;' "$@")
+  defaults=${defaults%;}
+  idf || return 1
+  # An existing sdkconfig wins over the defaults, so drop it when they may have changed.
+  if [ "$mode" = full ] || [ -n "$(only "$PROFILE_INPUTS")" ]; then rm -f "$dir/sdkconfig"; fi
+  heavy idf.py -B "$dir" -D SDKCONFIG="$dir/sdkconfig" -D SDKCONFIG_DEFAULTS="$defaults" build
+}
+headless() {
+  mkdir -p build-verify-headless
+  printf 'CONFIG_SERIALITE_BOARD_GENERIC_HEADLESS=y\nCONFIG_SERIALITE_UART_SHOW_PASSWORD=y\n' >build-verify-headless/board.defaults
+  firmware headless sdkconfig.defaults build-verify-headless/board.defaults
+}
+prod() { # signed with a throwaway key: this only proves the profile builds and fits
+  local key=build-verify-prod/throwaway-signing-key.pem
+  idf || return 1
+  mkdir -p build-verify-prod
+  [ -s "$key" ] || espsecure.py generate_signing_key --version 2 --scheme rsa3072 "$key" || return 1
+  printf 'CONFIG_SECURE_BOOT_SIGNING_KEY="%s"\n' "$PWD/$key" >build-verify-prod/key.defaults
+  firmware prod sdkconfig.defaults sdkconfig.prod.defaults build-verify-prod/key.defaults
+}
+profile_lint() { idf && scripts/lint_production_profile.py; } # idf.py resolves the effective config
+
+wants "$PROFILE_INPUTS" && run production-profile quiet production-profile profile_lint
+wants "$FIRMWARE_INPUTS" && run firmware-lab quiet firmware-lab firmware lab sdkconfig.defaults
+if [ "$mode" = full ]; then
+  run firmware-headless quiet firmware-headless headless
+  run firmware-prod quiet firmware-prod prod
+fi
+
+# --- Web server on the ESP-IDF linux target ---------------------------------------
+harness() { idf && heavy tools/esp_http_harness/run_http_harness_tests.sh; }
+wants "$HARNESS_INPUTS" && run web-harness quiet web-harness harness
+
+# --- Whole repository ----------------------------------------------------------
+# New copy-paste only: clones that already exist at the base do not count.
+[ -n "$base" ] && run duplicates npx --yes "$JSCPD" --silent --baseline-from-ref "$base" --fail-on-new-clones=0 \
+  --ignore '**/xterm.js,**/credentials_wordlist.c' .
+if [ "$mode" = full ]; then
+  run semgrep uvx --quiet "$SEMGREP" scan --config p/default --error --quiet --metrics off
+  reports=()
+  for report in "$logs/c-coverage.xml" "$logs/py-coverage.xml"; do
+    [ -s "$report" ] && reports+=("$report")
+  done
+  if [ ${#reports[@]} -eq 2 ]; then
+    run diff-coverage uvx --quiet "$DIFF_COVER" "${reports[@]}" --compare-branch="$base" \
+      --fail-under="$min_diff_cover" --quiet
+  else
+    echo "== diff-coverage: no coverage reports (see host-tests and script-tests)"
+    failed+=(diff-coverage)
+  fi
+fi
+
+if [ ${#failed[@]} -gt 0 ]; then
+  echo "verify $mode: FAILED: ${failed[*]}" >&2
+  echo "logs: $logs" >&2
+  exit 1
+fi
+rm -rf "$logs"
+echo "verify $mode: ok"

@@ -67,6 +67,8 @@ if [ "$run_build" = "1" ]; then
     if [ "$profile" = "prod" ]; then
         scripts/lint_production_profile.py
     fi
+    # An existing sdkconfig would win over the profile's defaults (and its signing key).
+    rm -f "$build_dir/sdkconfig"
     idf.py -B "$build_dir" -D SDKCONFIG="$build_dir/sdkconfig" -D SDKCONFIG_DEFAULTS="$defaults" build
 fi
 

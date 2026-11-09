@@ -150,6 +150,8 @@ function connect() {
   setStream('Stream ...', false);
   connected = false;
   render();
+  // Same scheme as the page: lab builds serve plain HTTP inside the WPA2/WPA3 AP.
+  // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
   const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
   ws = new WebSocket(scheme + location.host + '/ws');
   ws.binaryType = 'arraybuffer';
