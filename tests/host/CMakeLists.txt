@@ -4,6 +4,8 @@ project(serialite_host_tests C)
 # Host tests for the hardware-independent modules. Each test links only the
 # sources it exercises, straight from the components.
 
+option(SERIALITE_REQUIRE_ALL_TESTS "Fail instead of skipping tests whose dependencies are missing" OFF)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(THREADS_PREFER_PTHREAD_FLAG ON)
@@ -12,6 +14,15 @@ add_compile_options(-Wall -Wextra -Wshadow -Werror)
 
 set(REPO_ROOT ${CMAKE_CURRENT_LIST_DIR}/../..)
 set(C ${REPO_ROOT}/components)
+
+# Third-party code is added before the strict warning flags below.
+set(IDF_MBEDTLS_DIR "$ENV{IDF_PATH}/components/mbedtls/mbedtls")
+if(DEFINED ENV{IDF_PATH} AND EXISTS "${IDF_MBEDTLS_DIR}/CMakeLists.txt")
+    set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+    set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${IDF_MBEDTLS_DIR}" "${CMAKE_BINARY_DIR}/mbedtls" EXCLUDE_FROM_ALL)
+endif()
 
 enable_testing()
 
@@ -115,18 +126,16 @@ serialite_test(http_rate_limit
     SOURCES ${C}/web_server/src/http_rate_limit.c
     INCLUDES ${C}/web_server/include)
 
-# Needs the host mbedTLS 3.x development package (libmbedtls-dev); CI installs it.
-find_path(HOST_MBEDTLS_INCLUDE_DIR mbedtls/pk.h)
-find_library(HOST_MBEDTLS_LIB mbedtls)
-find_library(HOST_MBEDX509_LIB mbedx509)
-find_library(HOST_MBEDCRYPTO_LIB mbedcrypto)
-if(HOST_MBEDTLS_INCLUDE_DIR AND HOST_MBEDTLS_LIB AND HOST_MBEDX509_LIB AND HOST_MBEDCRYPTO_LIB)
+# local_tls_identity is built against the mbedTLS that ships with ESP-IDF, so
+# the test exercises the same API version as the firmware (distribution
+# packages are often 2.x). Needs IDF_PATH, as set by ESP-IDF's export.sh.
+if(TARGET mbedx509)
     serialite_test(local_tls_identity
         SOURCES ${C}/local_tls_identity/src/local_tls_identity.c ${C}/https_fingerprint/src/https_fingerprint.c
-        INCLUDES ${C}/local_tls_identity/include ${C}/https_fingerprint/include ${HOST_MBEDTLS_INCLUDE_DIR}
-        LIBS ${HOST_MBEDTLS_LIB} ${HOST_MBEDX509_LIB} ${HOST_MBEDCRYPTO_LIB})
-elseif(DEFINED ENV{CI})
-    message(FATAL_ERROR "CI must install mbedTLS development files to run the local_tls_identity test")
+        INCLUDES ${C}/local_tls_identity/include ${C}/https_fingerprint/include
+        LIBS mbedtls mbedx509 mbedcrypto)
+elseif(SERIALITE_REQUIRE_ALL_TESTS)
+    message(FATAL_ERROR "local_tls_identity needs ESP-IDF's mbedTLS: set IDF_PATH")
 else()
-    message(WARNING "Skipping local_tls_identity: mbedTLS development files not found")
+    message(WARNING "Skipping local_tls_identity: set IDF_PATH to build it against ESP-IDF's mbedTLS")
 endif()
