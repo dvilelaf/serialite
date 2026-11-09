@@ -1,48 +1,59 @@
 #!/usr/bin/env bash
+# Downloads a Serialite release, verifies it and flashes it over USB with esptool.
+#
+#   curl -fsSL https://github.com/dvilelaf/serialite/releases/latest/download/flash-latest-firmware.sh | bash
+#
+# The tarball is checked against the .sha256 asset published next to it in the
+# same release, then against the SHA256SUMS inside it. Offsets come from the
+# bundle's flash_args, written by the build itself.
 set -euo pipefail
 
 repo="dvilelaf/serialite"
 version="latest"
-port="${PORT:-${SERIALITE_FLASH_PORT:-}}"
+port="${SERIALITE_FLASH_PORT:-}"
 baud="${SERIALITE_FLASH_BAUD:-460800}"
 python_bin="${SERIALITE_PYTHON:-python3}"
-force=0
+assume_yes=0
 dry_run=0
 cache_dir="${SERIALITE_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/serialite/firmware}"
-asset_url="${SERIALITE_RELEASE_ASSET_URL:-}"
+release_base="${SERIALITE_RELEASE_BASE_URL:-https://github.com/${repo}/releases}"
 dev_dir="${SERIALITE_DEV_DIR:-/dev}"
 by_id_dir="${SERIALITE_BY_ID_DIR:-${dev_dir}/serial/by-id}"
+curl_proto="=https"
+if [ "${SERIALITE_TEST_MODE:-0}" = "1" ]; then
+    curl_proto="=https,file"
+fi
 
 usage() {
     cat <<'EOF'
 Usage:
-  tools/flash-latest-firmware.sh [--version vX.Y.Z] [--port /dev/ttyACM<N>] [--force] [--dry-run]
+  flash-latest-firmware.sh [--version vX.Y.Z] [--port /dev/ttyACM<N>] [--yes] [--dry-run]
 
-Downloads the Serialite firmware bundle from GitHub Releases if it is not cached,
-auto-detects the ESP32-S3 serial port, verifies SHA256SUMS, and flashes with esptool.
+Downloads a Serialite release bundle (cached), verifies its checksums and
+flashes it with esptool. Without --port it looks for a single Espressif USB
+device and asks before flashing it.
 EOF
+}
+
+die() {
+    echo "$*" >&2
+    exit 1
 }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --port|-p)
-            if [ "$#" -lt 2 ]; then
-                echo "missing value for --port" >&2
-                exit 2
-            fi
+            [ "$#" -ge 2 ] || die "missing value for --port"
             port="$2"
             shift 2
             ;;
         --version)
-            if [ "$#" -lt 2 ]; then
-                echo "missing value for --version" >&2
-                exit 2
-            fi
+            [ "$#" -ge 2 ] || die "missing value for --version"
             version="$2"
             shift 2
             ;;
-        --force)
-            force=1
+        --yes|-y)
+            assume_yes=1
             shift
             ;;
         --dry-run)
@@ -54,18 +65,14 @@ while [ "$#" -gt 0 ]; do
             exit 0
             ;;
         *)
-            echo "unknown argument: $1" >&2
             usage >&2
-            exit 2
+            die "unknown argument: $1"
             ;;
     esac
 done
 
 require_command() {
-    if ! command -v "$1" >/dev/null 2>&1; then
-        echo "$1 not found" >&2
-        exit 127
-    fi
+    command -v "$1" >/dev/null 2>&1 || die "$1 not found"
 }
 
 is_device_node() {
@@ -76,15 +83,23 @@ is_device_node() {
     fi
 }
 
-canonical_path() {
-    readlink -f "$1"
+download() {
+    local url="$1" dest="$2"
+    curl --proto "$curl_proto" --tlsv1.2 -fsSL "$url" -o "$dest.part"
+    mv "$dest.part" "$dest"
+}
+
+resolve_latest_version() {
+    local effective
+    effective="$(curl --proto "$curl_proto" --tlsv1.2 -fsSL -o /dev/null -w '%{url_effective}' "${release_base}/latest")"
+    printf '%s\n' "${effective##*/}"
 }
 
 autodetect_port() {
-    candidates=""
+    local candidates="" path resolved count
     for path in "${by_id_dir}"/usb-Espressif_USB_JTAG_serial_debug_unit_*; do
         [ -e "$path" ] || continue
-        resolved="$(canonical_path "$path")"
+        resolved="$(readlink -f "$path")"
         is_device_node "$resolved" || continue
         case "
 ${candidates}
@@ -96,148 +111,105 @@ ${resolved}
 ${resolved}" ;;
         esac
     done
-
-    if [ -z "$(printf '%s\n' "$candidates" | sed '/^$/d')" ]; then
-        for path in "${dev_dir}"/ttyACM*; do
-            [ -e "$path" ] || continue
-            is_device_node "$path" || continue
-            if [ "${SERIALITE_TEST_MODE:-0}" != "1" ]; then
-                properties="$(udevadm info -q property -n "$path" 2>/dev/null || true)"
-                printf '%s\n' "$properties" | grep -Eq '^ID_VENDOR_ID=303a$' || continue
-            fi
-            resolved="$(canonical_path "$path")"
-            case "
-${candidates}
-" in
-                *"
-${resolved}
-"*) ;;
-                *) candidates="${candidates}
-${resolved}" ;;
-            esac
-        done
-    fi
-
     count="$(printf '%s\n' "$candidates" | sed '/^$/d' | wc -l | tr -d ' ')"
     if [ "$count" = "0" ]; then
-        cat >&2 <<'EOF'
-No Serialite ESP32-S3 serial port found.
-
-Plug the device in and retry. If auto-detection is not available on this host,
-rerun with:
-  tools/flash-latest-firmware.sh --port /dev/ttyACM<N>
-EOF
-        exit 1
+        die "No Espressif USB serial device found. Plug Serialite in, or pass --port /dev/ttyACM<N>."
     fi
     if [ "$count" != "1" ]; then
         echo "Multiple ESP32 serial devices found:" >&2
         printf '%s\n' "$candidates" | sed '/^$/d;s/^/  /' >&2
-        echo "Rerun with --port /dev/ttyACM<N> for the Serialite device." >&2
-        exit 1
+        die "Rerun with --port /dev/ttyACM<N> for the Serialite device."
     fi
-
     printf '%s\n' "$candidates" | sed '/^$/d'
 }
 
-resolve_latest_asset_url() {
-    python3 - "$repo" <<'PY'
-import json
-import sys
-import urllib.request
-
-repo = sys.argv[1]
-with urllib.request.urlopen(f"https://api.github.com/repos/{repo}/releases/latest", timeout=20) as response:
-    release = json.load(response)
-for asset in release.get("assets", []):
-    name = asset.get("name", "")
-    if name.startswith("serialite-") and name.endswith(".tar.gz"):
-        print(asset["browser_download_url"])
-        sys.exit(0)
-raise SystemExit("no serialite firmware tarball found in latest release")
-PY
+confirm_port() {
+    [ "$assume_yes" = "1" ] && return
+    local answer=""
+    if ! { exec 3</dev/tty; } 2>/dev/null; then
+        die "Cannot ask for confirmation without a terminal; rerun with --port or --yes."
+    fi
+    printf 'Flash Serialite firmware to %s? Anything else on that port will be overwritten. [y/N] ' "$1" >/dev/tty
+    read -r answer <&3 || true
+    exec 3<&-
+    case "$answer" in
+        y|Y|yes|YES) ;;
+        *) die "Aborted." ;;
+    esac
 }
 
-if [ -z "$asset_url" ]; then
-    if [ "$version" = "latest" ]; then
-        require_command python3
-        asset_url="$(resolve_latest_asset_url)"
-    else
-        asset_url="https://github.com/${repo}/releases/download/${version}/serialite-${version}.tar.gz"
-    fi
-fi
+require_command curl
+require_command sha256sum
+require_command tar
 
+if [ "$version" = "latest" ]; then
+    version="$(resolve_latest_version)"
+fi
+printf '%s\n' "$version" | grep -Eq '^v?[0-9A-Za-z._-]+$' || die "invalid release version: $version"
+
+autodetected=0
 if [ -z "$port" ]; then
     port="$(autodetect_port)"
+    autodetected=1
     echo "Selected port: $port" >&2
 elif ! is_device_node "$port"; then
-    echo "port is not a character device: $port" >&2
-    exit 1
+    die "port is not a character device: $port"
 fi
 
-tarball_name="$(basename "${asset_url%%\?*}")"
-if [ -z "$tarball_name" ] || [ "$tarball_name" = "." ]; then
-    echo "unable to infer firmware tarball name from: $asset_url" >&2
-    exit 2
-fi
-
+tarball="serialite-${version}.tar.gz"
+checksum="${tarball}.sha256"
 mkdir -p "$cache_dir"
-tarball="$cache_dir/$tarball_name"
-
-if [ "$force" = "1" ] || [ ! -s "$tarball" ]; then
-    require_command curl
-    echo "Downloading firmware: $asset_url" >&2
-    curl -fL "$asset_url" -o "$tarball"
+cd "$cache_dir"
+if [ ! -s "$tarball" ] || [ ! -s "$checksum" ]; then
+    echo "Downloading Serialite ${version}" >&2
+    download "${release_base}/download/${version}/${checksum}" "$checksum"
+    download "${release_base}/download/${version}/${tarball}" "$tarball"
 else
-    echo "Using cached firmware: $tarball" >&2
+    echo "Using cached firmware: $cache_dir/$tarball" >&2
 fi
 
-bundle_name="${tarball_name%.tar.gz}"
-bundle_dir="$cache_dir/$bundle_name"
-if [ "$force" = "1" ] || [ ! -d "$bundle_dir" ]; then
-    rm -rf "$bundle_dir"
-    tar -xzf "$tarball" -C "$cache_dir"
+grep -Eq "^[0-9a-f]{64}  ${tarball}\$" "$checksum" || die "unexpected checksum file format in $checksum"
+if ! sha256sum --quiet -c "$checksum"; then
+    rm -f "$tarball" "$checksum"
+    die "checksum mismatch for $tarball; the cached copy was removed, rerun to download it again"
 fi
 
-required_files=(
-    "$bundle_dir/bootloader.bin"
-    "$bundle_dir/partition-table.bin"
-    "$bundle_dir/ota_data_initial.bin"
-    "$bundle_dir/serialite.bin"
-)
-for file in "${required_files[@]}"; do
-    if [ ! -s "$file" ]; then
-        echo "missing firmware artifact: $file" >&2
-        exit 1
-    fi
-done
+bundle_name="serialite-${version}"
+while IFS= read -r entry; do
+    case "$entry" in
+        "$bundle_name"/*) ;;
+        *) die "unexpected path in $tarball: $entry" ;;
+    esac
+    case "/$entry/" in
+        */../*) die "unexpected path in $tarball: $entry" ;;
+    esac
+done < <(tar -tzf "$tarball")
 
-if [ -s "$bundle_dir/SHA256SUMS" ]; then
-    (cd "$bundle_dir" && sha256sum -c SHA256SUMS --ignore-missing)
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+tar -xzf "$tarball" -C "$workdir" --no-same-owner --no-same-permissions
+bundle="$workdir/$bundle_name"
+(cd "$bundle" && sha256sum --quiet -c SHA256SUMS) || die "bundle contents do not match SHA256SUMS"
+[ -s "$bundle/flash_args" ] || die "bundle has no flash_args"
+if grep -q '^Profile: prod' "$bundle/manifest.txt" 2>/dev/null; then
+    die "This is a production (Secure Boot) bundle; provision it as described in its INSTALL.md, not with this script."
 fi
 
 flash_cmd=(
-    "$python_bin" -m esptool
-    --chip esp32s3
-    -p "$port"
-    -b "$baud"
-    --before default_reset
-    --after hard_reset
-    write_flash
-    --flash_mode dio
-    --flash_freq 80m
-    --flash_size 16MB
-    0x0 bootloader.bin
-    0x8000 partition-table.bin
-    0xf000 ota_data_initial.bin
-    0x20000 serialite.bin
+    "$python_bin" -m esptool --chip esp32s3 -p "$port" -b "$baud"
+    --before default_reset --after hard_reset write_flash "@flash_args"
 )
 
 if [ "$dry_run" = "1" ]; then
-    printf 'cd %q\n' "$bundle_dir"
+    printf 'cd %q\n' "$bundle"
     printf '%q ' "${flash_cmd[@]}"
     printf '\n'
+    sed 's/^/  /' "$bundle/flash_args"
     exit 0
 fi
 
-cd "$bundle_dir"
-exec "${flash_cmd[@]}"
+if [ "$autodetected" = "1" ]; then
+    confirm_port "$port"
+fi
+cd "$bundle"
+"${flash_cmd[@]}"

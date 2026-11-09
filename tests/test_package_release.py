@@ -1,88 +1,86 @@
 #!/usr/bin/env python3
-"""Tests for release bundle packaging."""
+"""Tests for scripts/package-release.sh with a fake build directory."""
 
 from __future__ import annotations
 
+import hashlib
 import os
 import pathlib
 import subprocess
 import tempfile
 import unittest
 
-
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "package-release.sh"
+FLASH_ARGS = (
+    "--flash_mode dio --flash_freq 80m --flash_size 16MB\n"
+    "0x0 bootloader/bootloader.bin\n0x20000 serialite.bin\n"
+    "0x8000 partition_table/partition-table.bin\n0xf000 ota_data_initial.bin\n"
+)
 
 
 class PackageReleaseTest(unittest.TestCase):
-    def test_package_release_uses_configurable_build_and_dist_dirs(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="serialite-package-") as tmp:
-            root = pathlib.Path(tmp)
-            build = root / "build"
-            dist = root / "dist"
-            (build / "bootloader").mkdir(parents=True)
-            (build / "partition_table").mkdir()
-            (build / "bootloader" / "bootloader.bin").write_bytes(b"boot")
-            (build / "partition_table" / "partition-table.bin").write_bytes(b"part")
-            (build / "ota_data_initial.bin").write_bytes(b"ota")
-            (build / "serialite.bin").write_bytes(b"app")
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory(prefix="serialite-package-")
+        root = pathlib.Path(self.tmp.name)
+        self.build = root / "build"
+        self.dist = root / "dist"
+        (self.build / "bootloader").mkdir(parents=True)
+        (self.build / "partition_table").mkdir()
+        (self.build / "bootloader" / "bootloader.bin").write_bytes(b"boot")
+        (self.build / "partition_table" / "partition-table.bin").write_bytes(b"part")
+        (self.build / "ota_data_initial.bin").write_bytes(b"ota")
+        (self.build / "serialite.bin").write_bytes(b"app")
+        (self.build / "flash_args").write_text(FLASH_ARGS)
+        self.env = {**os.environ, "SERIALITE_BUILD_DIR": str(self.build), "SERIALITE_DIST_DIR": str(self.dist)}
 
-            env = os.environ.copy()
-            env["SERIALITE_BUILD_DIR"] = str(build)
-            env["SERIALITE_DIST_DIR"] = str(dist)
-            env["SERIALITE_RAW_BASE_URL"] = "https://raw.githubusercontent.com/acme/serialite"
-            env["SERIALITE_RELEASE_BASE_URL"] = "https://github.com/acme/serialite/releases/download"
-            result = subprocess.run(
-                [str(SCRIPT), "--no-build", "--version", "vtest"],
-                cwd=REPO_ROOT,
-                env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-            )
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
 
-            self.assertEqual(result.returncode, 0, result.stderr)
-            bundle = dist / "serialite-vtest"
-            self.assertTrue((bundle / "serialite.bin").is_file())
-            self.assertTrue((bundle / "flash-latest-firmware.sh").is_file())
-            self.assertTrue((bundle / "setup-linux-serial-console.sh").is_file())
-            install = (bundle / "INSTALL.md").read_text()
-            self.assertIn("https://raw.githubusercontent.com/acme/serialite/vtest/tools/host/setup-linux-serial-console.sh", install)
-            self.assertIn("https://github.com/acme/serialite/releases/download/vtest/serialite-vtest.tar.gz", install)
-            self.assertIn("python3 -m esptool --chip esp32s3", install)
-            self.assertIn("0x0 bootloader.bin", install)
-            self.assertIn("0x8000 partition-table.bin", install)
-            self.assertIn("0xf000 ota_data_initial.bin", install)
-            self.assertIn("0x20000 serialite.bin", install)
-            self.assertNotIn("YOUR_ORG", install)
-            self.assertIn("0x20000", (bundle / "manifest.txt").read_text())
-            self.assertIn("flash-latest-firmware.sh", (bundle / "manifest.txt").read_text())
-            self.assertIn("serialite.bin", (bundle / "SHA256SUMS").read_text())
-            self.assertIn("flash-latest-firmware.sh", (bundle / "SHA256SUMS").read_text())
-            self.assertIn("INSTALL.md", (bundle / "SHA256SUMS").read_text())
-            self.assertTrue((dist / "serialite-vtest.tar.gz").is_file())
+    def package(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(SCRIPT), "--no-build", "--allow-dirty", *args],
+            cwd=REPO_ROOT, env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
 
-    def test_package_release_rejects_path_like_version(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="serialite-package-") as tmp:
-            root = pathlib.Path(tmp)
-            build = root / "build"
-            (build / "bootloader").mkdir(parents=True)
-            (build / "partition_table").mkdir()
-            env = os.environ.copy()
-            env["SERIALITE_BUILD_DIR"] = str(build)
-            result = subprocess.run(
-                [str(SCRIPT), "--no-build", "--version", "../bad"],
-                cwd=REPO_ROOT,
-                env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-            )
+    def test_bundle_has_flattened_flash_args_manifest_and_checksums(self) -> None:
+        result = self.package("--version", "vtest")
+        self.assertEqual(result.returncode, 0, result.stderr)
 
-            self.assertEqual(result.returncode, 2)
-            self.assertIn("invalid release version", result.stderr)
+        bundle = self.dist / "serialite-vtest"
+        flash_args = (bundle / "flash_args").read_text()
+        self.assertIn("0x0 bootloader.bin", flash_args)
+        self.assertIn("0x8000 partition-table.bin", flash_args)
+        self.assertIn("0xf000 ota_data_initial.bin", flash_args)
+        manifest = (bundle / "manifest.txt").read_text()
+        self.assertIn("Profile: lab", manifest)
+        self.assertIn("0xf000 ota_data_initial.bin", manifest)
+        self.assertNotIn("0xd000", manifest)
+        for name in ("serialite.bin", "flash_args", "LICENSE", "THIRD_PARTY_NOTICES.md", "INSTALL.md"):
+            self.assertTrue((bundle / name).is_file(), name)
+        sums = (bundle / "SHA256SUMS").read_text()
+        self.assertIn("serialite.bin", sums)
+        self.assertNotIn("SHA256SUMS", sums)
+
+    def test_release_assets_include_a_separate_tarball_checksum(self) -> None:
+        self.assertEqual(self.package("--version", "vtest").returncode, 0)
+        tarball = self.dist / "serialite-vtest.tar.gz"
+        expected = hashlib.sha256(tarball.read_bytes()).hexdigest()
+        self.assertEqual((self.dist / "serialite-vtest.tar.gz.sha256").read_text(), f"{expected}  serialite-vtest.tar.gz\n")
+        self.assertTrue((self.dist / "flash-latest-firmware.sh").is_file())
+        self.assertTrue((self.dist / "setup-linux-serial-console.sh").is_file())
+
+    def test_archive_is_reproducible(self) -> None:
+        self.assertEqual(self.package("--version", "vtest").returncode, 0)
+        first = (self.dist / "serialite-vtest.tar.gz").read_bytes()
+        self.assertEqual(self.package("--version", "vtest").returncode, 0)
+        self.assertEqual((self.dist / "serialite-vtest.tar.gz").read_bytes(), first)
+
+    def test_rejects_path_like_version_and_unknown_profile(self) -> None:
+        result = self.package("--version", "../bad")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("invalid release version", result.stderr)
+        self.assertEqual(self.package("--version", "vtest", "--profile", "debug").returncode, 2)
 
 
 if __name__ == "__main__":

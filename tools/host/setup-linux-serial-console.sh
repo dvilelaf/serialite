@@ -5,9 +5,9 @@ UNIT="serialite-serial-console.service"
 SYMLINK_NAME="serialite-console"
 RULE_NAME="99-serialite.rules"
 
-dev_dir="${SERIALITE_DEV_DIR:-${ESP32_KVM_DEV_DIR:-/dev}}"
-by_id_dir="${SERIALITE_BY_ID_DIR:-${ESP32_KVM_BY_ID_DIR:-${dev_dir}/serial/by-id}}"
-etc_dir="${SERIALITE_ETC_DIR:-${ESP32_KVM_ETC_DIR:-/etc}}"
+dev_dir="${SERIALITE_DEV_DIR:-/dev}"
+by_id_dir="${SERIALITE_BY_ID_DIR:-${dev_dir}/serial/by-id}"
+etc_dir="${SERIALITE_ETC_DIR:-/etc}"
 rule_dir="${etc_dir}/udev/rules.d"
 systemd_dir="${etc_dir}/systemd/system"
 rule_path="${rule_dir}/${RULE_NAME}"
@@ -20,10 +20,16 @@ Usage:
   setup-linux-serial-console.sh [--device /dev/ttyACM<N>]
   setup-linux-serial-console.sh --uninstall
 
-Enables a persistent Linux serial login on the Serialite USB serial device.
+Enables a persistent Linux serial login (agetty) on the Serialite USB serial
+device, bound to that device's USB serial number.
 
-Recommended install from a tagged release:
-  sudo sh -c 'curl -4fsSL -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/dvilelaf/serialite/contents/tools/host/setup-linux-serial-console.sh?ref=main" | sh'
+Anyone who joins the Serialite WiFi network gets this login prompt, so the
+server's account passwords are what protect it. Use strong passwords and
+consider forbidding root logins on this tty.
+
+Get the script from a release, read it, then run it as root:
+  curl -fsSLO https://github.com/dvilelaf/serialite/releases/latest/download/setup-linux-serial-console.sh
+  sudo sh setup-linux-serial-console.sh
 EOF
 }
 
@@ -56,7 +62,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 is_root() {
-    case "${SERIALITE_ASSUME_ROOT:-${ESP32_KVM_ASSUME_ROOT:-}}" in
+    case "${SERIALITE_ASSUME_ROOT:-}" in
         1) return 0 ;;
         0) return 1 ;;
     esac
@@ -68,12 +74,7 @@ require_root() {
         return
     fi
     cat >&2 <<'EOF'
-This setup changes systemd and udev state, so it must run as root.
-
-Use:
-  sudo sh -c 'curl -4fsSL -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/dvilelaf/serialite/contents/tools/host/setup-linux-serial-console.sh?ref=main" | sh'
-
-Or download a tagged release, review this script, then run:
+This setup changes systemd and udev state, so it must run as root:
   sudo sh ./setup-linux-serial-console.sh
 EOF
     exit 1
@@ -84,7 +85,7 @@ command_exists() {
 }
 
 is_device_node() {
-    if [ "${SERIALITE_TEST_MODE:-${ESP32_KVM_TEST_MODE:-0}}" = "1" ]; then
+    if [ "${SERIALITE_TEST_MODE:-0}" = "1" ]; then
         [ -e "$1" ]
     else
         [ -c "$1" ]
@@ -252,7 +253,7 @@ EOF
 
 reload_udev() {
     udevadm control --reload-rules
-    udevadm trigger --subsystem-match=tty >/dev/null 2>&1 || true
+    udevadm trigger --subsystem-match=tty
     udevadm settle >/dev/null 2>&1 || true
 }
 
@@ -287,10 +288,14 @@ Serialite host serial console is ready.
 Service: ${UNIT}
 Device:  ${symlink_path}
 
-Join WiFi KVM and open http://192.168.4.1
+Join the WiFi network shown on the Serialite screen and open http://192.168.4.1
+
+Security: anyone on that WiFi network gets this login prompt. Keep account
+passwords strong; the login is the only barrier between the WiFi password and
+a shell on this server.
 
 Undo:
-  sudo sh -c 'curl -4fsSL -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/dvilelaf/serialite/contents/tools/host/setup-linux-serial-console.sh?ref=main" | sh -s -- --uninstall'
+  sudo sh ./setup-linux-serial-console.sh --uninstall
 EOF
 }
 

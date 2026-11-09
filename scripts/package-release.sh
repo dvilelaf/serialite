@@ -1,170 +1,155 @@
 #!/usr/bin/env bash
+# Builds a release under dist/ ready to upload as GitHub release assets:
+#   serialite-<version>.tar.gz          firmware bundle
+#   serialite-<version>.tar.gz.sha256   checksum the flasher verifies before extracting
+#   flash-latest-firmware.sh            end-user flasher
+#   setup-linux-serial-console.sh       host setup
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 run_build=1
-version="${SERIALITE_RELEASE_VERSION:-${ESP32_KVM_RELEASE_VERSION:-}}"
-build_dir="${SERIALITE_BUILD_DIR:-${ESP32_KVM_BUILD_DIR:-build}}"
-dist_dir="${SERIALITE_DIST_DIR:-${ESP32_KVM_DIST_DIR:-dist}}"
-raw_base_url="${SERIALITE_RAW_BASE_URL:-${ESP32_KVM_RAW_BASE_URL:-https://raw.githubusercontent.com/dvilelaf/serialite}}"
-release_base_url="${SERIALITE_RELEASE_BASE_URL:-${ESP32_KVM_RELEASE_BASE_URL:-https://github.com/dvilelaf/serialite/releases/download}}"
+allow_dirty=0
+profile="lab"
+version="${SERIALITE_RELEASE_VERSION:-}"
+build_dir="${SERIALITE_BUILD_DIR:-}"
+dist_dir="${SERIALITE_DIST_DIR:-dist}"
+release_base_url="${SERIALITE_RELEASE_BASE_URL:-https://github.com/dvilelaf/serialite/releases/download}"
 
 usage() {
     cat <<'EOF'
 Usage:
-  scripts/package-release.sh [--no-build] [--version vX.Y.Z]
+  scripts/package-release.sh [--version vX.Y.Z] [--profile lab|prod] [--no-build] [--allow-dirty]
 
-Builds or reuses local ESP-IDF output and creates a release bundle under dist/.
-The bundle is intended for GitHub/GitLab release assets, not for committing.
+--version defaults to the tag on HEAD. The lab profile is what end users flash;
+prod needs the signing key referenced by sdkconfig.prod.defaults.
 EOF
+}
+
+die() {
+    echo "$*" >&2
+    exit 2
 }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --no-build)
-            run_build=0
-            shift
-            ;;
-        --version)
-            if [ "$#" -lt 2 ]; then
-                echo "missing value for --version" >&2
-                exit 2
-            fi
-            version="$2"
-            shift 2
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        *)
-            echo "unknown argument: $1" >&2
-            usage >&2
-            exit 2
-            ;;
+        --no-build) run_build=0; shift ;;
+        --allow-dirty) allow_dirty=1; shift ;;
+        --version) [ "$#" -ge 2 ] || die "missing value for --version"; version="$2"; shift 2 ;;
+        --profile) [ "$#" -ge 2 ] || die "missing value for --profile"; profile="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; die "unknown argument: $1" ;;
     esac
 done
 
+case "$profile" in
+    lab) defaults="sdkconfig.defaults" ;;
+    prod) defaults="sdkconfig.defaults;sdkconfig.prod.defaults" ;;
+    *) die "profile must be lab or prod" ;;
+esac
+build_dir="${build_dir:-build-${profile}}"
+
+if [ "$allow_dirty" != "1" ] && [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    die "working tree has uncommitted changes; commit them or pass --allow-dirty"
+fi
 if [ -z "$version" ]; then
-    version="$(git describe --tags --always --dirty)"
+    version="$(git describe --tags --exact-match 2>/dev/null)" || die "HEAD has no tag; tag it or pass --version"
 fi
-if ! printf '%s\n' "$version" | grep -Eq '^[A-Za-z0-9._-]+$'; then
-    echo "invalid release version: $version" >&2
-    echo "Use only letters, numbers, dot, underscore, and dash." >&2
-    exit 2
-fi
+printf '%s\n' "$version" | grep -Eq '^[A-Za-z0-9._-]+$' || die "invalid release version: $version"
+
+commit="$(git rev-parse HEAD)"
+SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+export SOURCE_DATE_EPOCH
 
 if [ "$run_build" = "1" ]; then
-    if ! command -v idf.py >/dev/null 2>&1; then
-        echo "idf.py not found. Source ESP-IDF export.sh first." >&2
-        exit 127
+    command -v idf.py >/dev/null 2>&1 || { echo "idf.py not found. Source ESP-IDF's export.sh first." >&2; exit 127; }
+    if [ "$profile" = "prod" ]; then
+        scripts/lint_production_profile.py
     fi
-    idf.py build
+    idf.py -B "$build_dir" -D SDKCONFIG="$build_dir/sdkconfig" -D SDKCONFIG_DEFAULTS="$defaults" build
 fi
 
-required_files=(
-    "${build_dir}/bootloader/bootloader.bin"
-    "${build_dir}/partition_table/partition-table.bin"
-    "${build_dir}/ota_data_initial.bin"
-    "${build_dir}/serialite.bin"
-    "tools/flash-latest-firmware.sh"
-    "tools/host/setup-linux-serial-console.sh"
-    "README.md"
-)
-
-for file in "${required_files[@]}"; do
-    if [ ! -s "$file" ]; then
-        echo "missing release artifact: $file" >&2
-        exit 1
-    fi
+for file in flash_args bootloader/bootloader.bin partition_table/partition-table.bin ota_data_initial.bin serialite.bin; do
+    [ -s "$build_dir/$file" ] || { echo "missing build output: $build_dir/$file" >&2; exit 1; }
 done
+idf_version="unknown"
+if [ -f "$build_dir/project_description.json" ]; then
+    idf_version="$(sed -n 's/.*"git_revision": *"\([^"]*\)".*/\1/p' "$build_dir/project_description.json" | head -1)"
+fi
 
-bundle_dir="${dist_dir}/serialite-${version}"
-rm -rf "$bundle_dir"
-mkdir -p "$bundle_dir"
+name="serialite-${version}"
+bundle="$dist_dir/$name"
+rm -rf "$bundle" "$dist_dir/$name.tar.gz" "$dist_dir/$name.tar.gz.sha256"
+mkdir -p "$bundle"
 
-cp "${build_dir}/bootloader/bootloader.bin" "$bundle_dir/"
-cp "${build_dir}/partition_table/partition-table.bin" "$bundle_dir/"
-cp "${build_dir}/ota_data_initial.bin" "$bundle_dir/"
-cp "${build_dir}/serialite.bin" "$bundle_dir/"
-cp tools/flash-latest-firmware.sh "$bundle_dir/"
-cp tools/host/setup-linux-serial-console.sh "$bundle_dir/"
-cp README.md "$bundle_dir/"
+cp "$build_dir/bootloader/bootloader.bin" "$build_dir/partition_table/partition-table.bin" \
+   "$build_dir/ota_data_initial.bin" "$build_dir/serialite.bin" "$bundle/"
+# The build's own offsets, with paths flattened to the bundle layout.
+sed -e 's#bootloader/##' -e 's#partition_table/##' "$build_dir/flash_args" >"$bundle/flash_args"
+cp README.md LICENSE THIRD_PARTY_NOTICES.md "$bundle/"
 
-setup_url="${raw_base_url%/}/${version}/tools/host/setup-linux-serial-console.sh"
-bundle_url="${release_base_url%/}/${version}/serialite-${version}.tar.gz"
-cat >"$bundle_dir/INSTALL.md" <<EOF
+cat >"$bundle/manifest.txt" <<EOF
+Serialite ${version}
+Profile: ${profile}
+Commit: ${commit}
+ESP-IDF: ${idf_version}
+
+Flash with:
+  python3 -m esptool --chip esp32s3 -p /dev/ttyACM<N> write_flash @flash_args
+
+flash_args:
+$(sed 's/^/  /' "$bundle/flash_args")
+EOF
+
+if [ "$profile" = "prod" ]; then
+    cat >"$bundle/INSTALL.md" <<EOF
+# Serialite ${version} (production)
+
+This bundle is signed for Secure Boot. serialite.bin can be installed from the
+web console (Firmware page) on boards provisioned with the same key.
+
+Provisioning a new board burns eFuses and cannot be undone. Follow the ESP-IDF
+Secure Boot v2 and flash encryption guides for first-time flashing; the
+offsets are in flash_args.
+EOF
+else
+    cat >"$bundle/INSTALL.md" <<EOF
 # Serialite ${version}
 
-## Flash Firmware
-
-Download and extract the firmware bundle:
+Flash the board (it verifies the download and asks before writing):
 
 \`\`\`bash
-curl -LO ${bundle_url}
-tar -xzf serialite-${version}.tar.gz
-cd serialite-${version}
+curl -fsSL ${release_base_url%/}/${version}/flash-latest-firmware.sh | bash -s -- --version ${version}
 \`\`\`
 
-Put the ESP32-S3 in bootloader mode if needed, then flash it:
+Or by hand, from this directory:
 
 \`\`\`bash
-python3 -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 460800 --before default_reset --after hard_reset write_flash \\
-  --flash_mode dio --flash_freq 80m --flash_size 16MB \\
-  0x0 bootloader.bin \\
-  0x8000 partition-table.bin \\
-  0xf000 ota_data_initial.bin \\
-  0x20000 serialite.bin
+python3 -m esptool --chip esp32s3 -p /dev/ttyACM<N> write_flash @flash_args
 \`\`\`
 
-If your board appears on a different port, replace \`/dev/ttyACM0\`.
-
-## Host Setup
-
-Run this once on the Linux server connected to Serialite:
+Then set up the Linux server Serialite plugs into; read the script first, it runs as root:
 
 \`\`\`bash
-curl -fsSL ${setup_url} | sudo sh
-\`\`\`
-
-If auto-detection fails:
-
-\`\`\`bash
-curl -fsSL ${setup_url} | sudo sh -s -- --device /dev/ttyACM<N>
-\`\`\`
-
-To remove host setup:
-
-\`\`\`bash
-curl -fsSL ${setup_url} | sudo sh -s -- --uninstall
+curl -fsSLO ${release_base_url%/}/${version}/setup-linux-serial-console.sh
+less setup-linux-serial-console.sh
+sudo sh setup-linux-serial-console.sh
 \`\`\`
 EOF
-
-cat >"$bundle_dir/manifest.txt" <<EOF
-Serialite release ${version}
-
-Flash offsets:
-  bootloader.bin          0x0
-  partition-table.bin     0x8000
-  ota_data_initial.bin    0xd000
-  serialite.bin           0x20000
-
-Host setup:
-  setup-linux-serial-console.sh
-
-Firmware flashing:
-  flash-latest-firmware.sh
-EOF
+fi
 
 (
-    cd "$bundle_dir"
-    sha256sum bootloader.bin partition-table.bin ota_data_initial.bin serialite.bin flash-latest-firmware.sh setup-linux-serial-console.sh README.md INSTALL.md manifest.txt >SHA256SUMS
+    cd "$bundle"
+    sums="$(find . -type f -printf '%P\n' | LC_ALL=C sort | xargs sha256sum)"
+    printf '%s\n' "$sums" >SHA256SUMS
 )
 
-tarball="${bundle_dir}.tar.gz"
-tar -C "$dist_dir" -czf "$tarball" "serialite-${version}"
+# Same inputs give the same archive: fixed order, owners and timestamps.
+tar -C "$dist_dir" --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner -cf - "$name" \
+    | gzip -n >"$dist_dir/$name.tar.gz"
+(cd "$dist_dir" && sha256sum "$name.tar.gz" >"$name.tar.gz.sha256")
+cp tools/flash-latest-firmware.sh tools/host/setup-linux-serial-console.sh "$dist_dir/"
 
-echo "Release bundle: $bundle_dir"
-echo "Release archive: $tarball"
+echo "Release assets in $dist_dir:"
+(cd "$dist_dir" && ls -1 "$name.tar.gz" "$name.tar.gz.sha256" flash-latest-firmware.sh setup-linux-serial-console.sh)

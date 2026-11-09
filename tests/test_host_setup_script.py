@@ -138,12 +138,19 @@ EOF
             self.assertIn("No Serialite serial device found", result.stderr)
             self.assertIn("--device", result.stderr)
 
-    def test_non_root_stdin_mode_fails_with_curl_sudo_instruction(self) -> None:
+    def test_non_root_run_explains_how_to_run_as_root(self) -> None:
         result = self.run_script(env={"SERIALITE_ASSUME_ROOT": "0"}, stdin="")
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("curl", result.stderr)
         self.assertIn("sudo sh", result.stderr)
+
+    def test_install_warns_that_the_login_is_exposed_over_wifi(self) -> None:
+        tmp, env, _ = self.make_fake_host()
+        with tmp:
+            result = self.run_script(env=env)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("anyone on that WiFi network gets this login prompt", result.stdout)
 
     def test_uninstall_removes_managed_files_and_unit(self) -> None:
         tmp, env, root = self.make_fake_host()
