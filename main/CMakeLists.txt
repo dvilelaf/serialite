@@ -1,21 +1,30 @@
 idf_component_register(
     SRCS
         "app_main.c"
+        "app_credentials.c"
+        "ap_exposure_policy.c"
+        "ap_guard.c"
+        "credential_boot_policy.c"
     INCLUDE_DIRS
         "."
-    REQUIRES
-        ble_provisioning
-        storage
+    PRIV_REQUIRES
+        board
+        bootloader_support
+        buttons
         config_transfer
         credentials
+        esp_rom
+        esp_timer
+        event_log
+        https_fingerprint
         local_tls_identity
-        reset_control
-        wifi_ap
-        web_server
-        usb_console
         lvgl_ui
         network_identity
+        nvs_flash
         ota_update
+        storage
         terminal_bridge
-        startup_policy
+        usb_console
+        web_server
+        wifi_ap
 )

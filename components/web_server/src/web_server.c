@@ -1,2278 +1,497 @@
 #include "web_server.h"
 
 #include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 
-#include "ap_exposure_policy.h"
-#include "app_watchdog.h"
-#include "demo_serial_runtime.h"
-#include "diagnostics_export.h"
-#include "event_log.h"
-#include "credentials.h"
-#include "http_rate_limit.h"
-#include "http_route_policy.h"
-#include "https_fingerprint.h"
-#include "ota_update.h"
-#include "ota_update_policy.h"
 #include "esp_app_desc.h"
 #include "esp_check.h"
-#include "esp_http_server.h"
 #include "esp_https_server.h"
 #include "esp_log.h"
-#include "esp_heap_caps.h"
 #include "esp_random.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "event_log.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
-#include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "terminal_bridge.h"
-#include "usb_console.h"
-#include "web_input_policy.h"
-#include "web_demo_policy.h"
-#include "web_macro_policy.h"
-#include "web_security.h"
-#include "web_terminal_ansi.h"
-#include "web_terminal_contract.h"
-#include "wifi_ap.h"
-#include "esp_attr.h"
-#include <stdarg.h>
-#include <stddef.h>
-#include <stdlib.h>
-#include <string.h>
+#include "http_rate_limit.h"
+#include "ota_update_policy.h"
+#include "web_internal.h"
 
 static const char *TAG = "web_server";
 
-extern const uint8_t _binary_xterm_js_start[] asm("_binary_xterm_js_start");
-extern const uint8_t _binary_xterm_js_end[] asm("_binary_xterm_js_end");
-extern const uint8_t _binary_xterm_css_start[] asm("_binary_xterm_css_start");
-extern const uint8_t _binary_xterm_css_end[] asm("_binary_xterm_css_end");
-
-#define WEB_MAX_WS_CLIENTS 4
-#define WEB_TX_QUEUE_DEPTH 16
-#define WEB_TX_CHUNK_MAX 256
-#define WEB_SCROLLBACK_SEND_CHUNK_MAX 256
-#define WEB_REQUEST_BODY_MAX HTTP_ROUTE_CONFIG_IMPORT_BODY_MAX
-#define WEB_HEADER_VALUE_MAX 160
-#define WEB_DIAG_EVENT_LIMIT 16
-#define WEB_PASTE_CONFIRM_BYTES 64
-#define WEB_PASTE_MAX_BYTES 2048
-#define WEB_AP_GUARD_TASK_STACK 3072
-#define WEB_AP_GUARD_TASK_PRIORITY 2
-#define WEB_AP_GUARD_INTERVAL_MS 30000
-#define WEB_OTA_RECV_CHUNK 2048
 #define WEB_HTTPD_STACK_SIZE (16 * 1024)
-#define WEB_TERMINAL_FORMAT_CHUNK_MAX 2048
 #define WEB_HTTPD_MAX_URI_HANDLERS 32
-#define WEB_ROUTE_TRACE_MAGIC 0x4b565754U
-#define WEB_ROUTE_TRACE_VERSION 1U
+#define WEB_HTTPD_MAX_SOCKETS 6
+#define WEB_REBOOT_DELAY_MS 750
+#define WEB_CONFIG_BODY_MAX 512U
+
+web_state_t g_web;
+
+static portMUX_TYPE s_status_lock = portMUX_INITIALIZER_UNLOCKED;
+static web_server_status_t s_status;
+
+/* ---- static assets ------------------------------------------------------ */
+
+#define DECLARE_ASSET(sym)                                                    \
+    extern const uint8_t _binary_##sym##_start[] asm("_binary_" #sym "_start"); \
+    extern const uint8_t _binary_##sym##_end[] asm("_binary_" #sym "_end")
+
+DECLARE_ASSET(terminal_html);
+DECLARE_ASSET(about_html);
+DECLARE_ASSET(config_html);
+DECLARE_ASSET(ota_html);
+DECLARE_ASSET(app_css);
+DECLARE_ASSET(terminal_css);
+DECLARE_ASSET(common_js);
+DECLARE_ASSET(terminal_js);
+DECLARE_ASSET(about_js);
+DECLARE_ASSET(config_js);
+DECLARE_ASSET(ota_js);
+DECLARE_ASSET(xterm_js);
+DECLARE_ASSET(xterm_css);
 
 typedef struct {
-    size_t len;
-    uint8_t data[WEB_TX_CHUNK_MAX];
-} web_tx_chunk_t;
+    const uint8_t *start;
+    const uint8_t *end;
+    const char *content_type;
+} web_asset_t;
+
+#define ASSET(sym, type) &(const web_asset_t){_binary_##sym##_start, _binary_##sym##_end, type}
+#define HTML "text/html; charset=utf-8"
+#define CSS "text/css; charset=utf-8"
+#define JS "application/javascript; charset=utf-8"
+
+/* ---- routes ------------------------------------------------------------- */
+
+typedef esp_err_t (*web_handler_t)(web_request_t *r);
 
 typedef struct {
-    uint32_t magic;
-    uint32_t version;
-    uint32_t checksum;
-    uint32_t sequence;
-    char route[24];
-    char phase[12];
-} web_route_trace_t;
+    const char *uri;
+    httpd_method_t method;
+    web_guard_rule_t rule;
+    web_handler_t handler;
+    const web_asset_t *asset;
+} web_route_t;
 
-typedef struct {
-    int fd;
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-} web_ws_client_t;
+static esp_err_t serve_asset(web_request_t *r);
+static esp_err_t redirect_to_terminal(web_request_t *r);
 
-static httpd_handle_t s_server;
-static bool s_server_tls;
-static web_ws_client_t s_ws_clients[WEB_MAX_WS_CLIENTS];
-static QueueHandle_t s_tx_queue;
-static TaskHandle_t s_web_tx_task;
-static TaskHandle_t s_ap_guard_task;
-static web_terminal_ansi_state_t s_web_ansi_state;
-static web_security_state_t s_security;
-static web_input_policy_state_t s_input_policy;
-static ap_exposure_policy_state_t s_ap_exposure_policy;
-static http_rate_limit_state_t s_http_rate_limit;
-static SemaphoreHandle_t s_http_rate_limit_lock;
-static StaticSemaphore_t s_http_rate_limit_lock_storage;
-static SemaphoreHandle_t s_ws_fds_lock;
-static StaticSemaphore_t s_ws_fds_lock_storage;
-static SemaphoreHandle_t s_demo_writer_lock;
-static StaticSemaphore_t s_demo_writer_lock_storage;
-static portMUX_TYPE s_runtime_status_lock = portMUX_INITIALIZER_UNLOCKED;
-static web_server_status_t s_runtime_status;
-static web_server_rotate_credentials_fn_t s_rotate_credentials;
-static void *s_rotate_credentials_ctx;
-static web_server_export_config_fn_t s_export_config;
-static web_server_import_config_fn_t s_import_config;
-static void *s_config_ctx;
-static bool s_credential_reboot_pending;
-static bool s_macros_enabled;
-static RTC_NOINIT_ATTR web_route_trace_t s_route_trace;
+#define PUBLIC {.access = WEB_ACCESS_PUBLIC}
+#define READ {.access = WEB_ACCESS_SESSION}
+#define WRITE(max_body) {.access = WEB_ACCESS_SESSION_CSRF, .max_body_len = (max_body), .blocked_when_locked = true}
 
-static uint64_t now_ms(void);
-static void reboot_task(void *arg);
+static const web_route_t ROUTES[] = {
+    {"/", HTTP_GET, PUBLIC, redirect_to_terminal, NULL},
+    {"/terminal", HTTP_GET, PUBLIC, serve_asset, ASSET(terminal_html, HTML)},
+    {"/about", HTTP_GET, PUBLIC, serve_asset, ASSET(about_html, HTML)},
+    {"/config", HTTP_GET, PUBLIC, serve_asset, ASSET(config_html, HTML)},
+    {"/ota", HTTP_GET, PUBLIC, serve_asset, ASSET(ota_html, HTML)},
+    {"/assets/app.css", HTTP_GET, PUBLIC, serve_asset, ASSET(app_css, CSS)},
+    {"/assets/terminal.css", HTTP_GET, PUBLIC, serve_asset, ASSET(terminal_css, CSS)},
+    {"/assets/common.js", HTTP_GET, PUBLIC, serve_asset, ASSET(common_js, JS)},
+    {"/assets/terminal.js", HTTP_GET, PUBLIC, serve_asset, ASSET(terminal_js, JS)},
+    {"/assets/about.js", HTTP_GET, PUBLIC, serve_asset, ASSET(about_js, JS)},
+    {"/assets/config.js", HTTP_GET, PUBLIC, serve_asset, ASSET(config_js, JS)},
+    {"/assets/ota.js", HTTP_GET, PUBLIC, serve_asset, ASSET(ota_js, JS)},
+    {"/assets/xterm.js", HTTP_GET, PUBLIC, serve_asset, ASSET(xterm_js, JS)},
+    {"/assets/xterm.css", HTTP_GET, PUBLIC, serve_asset, ASSET(xterm_css, CSS)},
+    {"/api/session", HTTP_POST, {.access = WEB_ACCESS_ORIGIN, .blocked_when_locked = true}, web_api_session, NULL},
+    {"/api/logout", HTTP_POST, WRITE(0), web_api_logout, NULL},
+    {"/api/status", HTTP_GET, READ, web_api_status, NULL},
+    {"/api/about", HTTP_GET, READ, web_api_about, NULL},
+    {"/api/diagnostics", HTTP_GET, READ, web_api_diagnostics, NULL},
+    {"/api/config", HTTP_GET, READ, web_api_config_export, NULL},
+    {"/api/config", HTTP_POST, WRITE(WEB_CONFIG_BODY_MAX), web_api_config_import, NULL},
+    {"/api/ota", HTTP_GET, READ, web_api_ota_status, NULL},
+    {"/api/ota", HTTP_POST, WRITE(OTA_UPDATE_MAX_IMAGE_BYTES), web_api_ota_upload, NULL},
+    {"/api/reboot", HTTP_POST, WRITE(0), web_api_reboot, NULL},
+    {"/api/credentials/rotate", HTTP_POST, WRITE(0), web_api_rotate_credentials, NULL},
+    /* The lock must stay reachable to whoever holds the session, so it is not blocked when locked. */
+    {"/api/emergency-lock", HTTP_POST, {.access = WEB_ACCESS_SESSION_CSRF}, web_api_emergency_lock, NULL},
+};
 
-static uint32_t web_route_trace_checksum(const web_route_trace_t *trace)
+/* ---- helpers ------------------------------------------------------------ */
+
+uint64_t web_now_ms(void)
 {
-    uint32_t hash = 2166136261U;
-    const uint8_t *bytes = (const uint8_t *)trace;
-    for (size_t i = 0; i < sizeof(*trace); ++i) {
-        if (i >= offsetof(web_route_trace_t, checksum) &&
-            i < offsetof(web_route_trace_t, checksum) + sizeof(trace->checksum)) {
-            continue;
-        }
-        hash ^= bytes[i];
-        hash *= 16777619U;
-    }
-    return hash;
+    return (uint64_t)(esp_timer_get_time() / 1000LL);
 }
 
-static bool web_route_trace_valid(void)
-{
-    return s_route_trace.magic == WEB_ROUTE_TRACE_MAGIC &&
-           s_route_trace.version == WEB_ROUTE_TRACE_VERSION &&
-           s_route_trace.checksum == web_route_trace_checksum(&s_route_trace);
-}
-
-static void web_route_trace_mark(const char *route, const char *phase)
-{
-    s_route_trace.magic = WEB_ROUTE_TRACE_MAGIC;
-    s_route_trace.version = WEB_ROUTE_TRACE_VERSION;
-    s_route_trace.sequence++;
-    strlcpy(s_route_trace.route, route, sizeof(s_route_trace.route));
-    strlcpy(s_route_trace.phase, phase, sizeof(s_route_trace.phase));
-    s_route_trace.checksum = web_route_trace_checksum(&s_route_trace);
-}
-
-static bool reset_reason_is_crash_like(esp_reset_reason_t reason)
-{
-    return reason == ESP_RST_PANIC ||
-           reason == ESP_RST_INT_WDT ||
-           reason == ESP_RST_TASK_WDT ||
-           reason == ESP_RST_WDT;
-}
-
-static void web_route_trace_report_previous(void)
-{
-    if (!web_route_trace_valid() || strcmp(s_route_trace.phase, "done") == 0) {
-        return;
-    }
-    if (!reset_reason_is_crash_like(esp_reset_reason())) {
-        return;
-    }
-
-    char message[EVENT_LOG_MESSAGE_MAX];
-    snprintf(message, sizeof(message), "previous web route incomplete: %s/%s", s_route_trace.route, s_route_trace.phase);
-    event_log_append(EVENT_LOG_ERROR, now_ms(), message);
-}
-
-static uint64_t now_ms(void)
-{
-    return (uint64_t)(esp_timer_get_time() / 1000ULL);
-}
-
-static bool security_random(uint8_t *buf, size_t len, void *ctx)
+bool web_random(uint8_t *buf, size_t len, void *ctx)
 {
     (void)ctx;
     esp_fill_random(buf, len);
     return true;
 }
 
-static void runtime_status_set_started(bool started)
+static void status_update(void (*apply)(web_server_status_t *status, uint32_t value), uint32_t value)
 {
-    portENTER_CRITICAL(&s_runtime_status_lock);
-    s_runtime_status.started = started;
-    if (!started) {
-        s_runtime_status.tls_active = false;
+    portENTER_CRITICAL(&s_status_lock);
+    apply(&s_status, value);
+    portEXIT_CRITICAL(&s_status_lock);
+}
+
+static void apply_ws_count(web_server_status_t *status, uint32_t value)
+{
+    status->ws_client_count = value;
+}
+
+static void apply_locked(web_server_status_t *status, uint32_t value)
+{
+    status->locked = value != 0;
+}
+
+void web_status_set_ws_count(uint32_t count)
+{
+    status_update(apply_ws_count, count);
+}
+
+static void set_security_headers(web_request_t *r)
+{
+    httpd_resp_set_hdr(r->req, "X-Content-Type-Options", "nosniff");
+    httpd_resp_set_hdr(r->req, "Referrer-Policy", "no-referrer");
+    httpd_resp_set_hdr(r->req, "X-Frame-Options", "DENY");
+    if (r->csp[0] != '\0') {
+        httpd_resp_set_hdr(r->req, "Content-Security-Policy", r->csp);
     }
-    portEXIT_CRITICAL(&s_runtime_status_lock);
+    if (r->set_cookie[0] != '\0') {
+        httpd_resp_set_hdr(r->req, "Set-Cookie", r->set_cookie);
+    }
 }
 
-static void runtime_status_set_tls_active(bool active)
+static esp_err_t send_body(web_request_t *r, const char *status, const char *type, const char *body)
 {
-    portENTER_CRITICAL(&s_runtime_status_lock);
-    s_runtime_status.tls_active = active;
-    portEXIT_CRITICAL(&s_runtime_status_lock);
+    set_security_headers(r);
+    httpd_resp_set_hdr(r->req, "Cache-Control", "no-store");
+    httpd_resp_set_status(r->req, status);
+    httpd_resp_set_type(r->req, type);
+    return httpd_resp_send(r->req, body, HTTPD_RESP_USE_STRLEN);
 }
 
-static void runtime_status_set_writer_active(bool active)
+esp_err_t web_reply_text(web_request_t *r, const char *status, const char *text)
 {
-    portENTER_CRITICAL(&s_runtime_status_lock);
-    s_runtime_status.writer_active = active;
-    portEXIT_CRITICAL(&s_runtime_status_lock);
+    return send_body(r, status, "text/plain; charset=utf-8", text);
 }
 
-static void runtime_status_set_locked(bool locked)
+esp_err_t web_reply_json(web_request_t *r, const char *json)
 {
-    portENTER_CRITICAL(&s_runtime_status_lock);
-    s_runtime_status.locked = locked;
+    return send_body(r, "200 OK", "application/json", json);
+}
+
+esp_err_t web_reply_error_close(web_request_t *r, const char *status, const char *text)
+{
+    httpd_resp_set_hdr(r->req, "Connection", "close");
+    (void)web_reply_text(r, status, text);
+    return ESP_FAIL;
+}
+
+static esp_err_t redirect_to_terminal(web_request_t *r)
+{
+    set_security_headers(r);
+    httpd_resp_set_status(r->req, "303 See Other");
+    httpd_resp_set_hdr(r->req, "Location", "/terminal");
+    return httpd_resp_send(r->req, "", 0);
+}
+
+static esp_err_t serve_asset(web_request_t *r)
+{
+    const web_asset_t *asset = (const web_asset_t *)((const web_route_t *)r->req->user_ctx)->asset;
+    char quoted_etag[WEB_ETAG_MAX + 2];
+    snprintf(quoted_etag, sizeof(quoted_etag), "\"%s\"", g_web.etag);
+
+    set_security_headers(r);
+    /* Revalidate on every load so a new firmware never runs with old scripts. */
+    httpd_resp_set_hdr(r->req, "Cache-Control", "no-cache");
+    httpd_resp_set_hdr(r->req, "ETag", quoted_etag);
+
+    char if_none_match[WEB_ETAG_MAX + 4];
+    if (httpd_req_get_hdr_value_str(r->req, "If-None-Match", if_none_match, sizeof(if_none_match)) == ESP_OK &&
+        strcmp(if_none_match, quoted_etag) == 0) {
+        httpd_resp_set_status(r->req, "304 Not Modified");
+        return httpd_resp_send(r->req, "", 0);
+    }
+    httpd_resp_set_type(r->req, asset->content_type);
+    return httpd_resp_send(r->req, (const char *)asset->start, (ssize_t)(asset->end - asset->start));
+}
+
+static void build_csp(web_request_t *r, const char *host)
+{
+    /* host already passed the allowlist, so it is safe to echo. */
+    snprintf(
+        r->csp,
+        sizeof(r->csp),
+        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "connect-src 'self' %s://%s; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        g_web.site.tls ? "wss" : "ws",
+        host);
+}
+
+bool web_session_start(web_request_t *r)
+{
+    if (!web_security_start_session(&g_web.security, web_now_ms(), web_random, NULL)) {
+        return false;
+    }
+    /* Only one operator: connections from the previous session go away. */
+    web_ws_close_all();
+    strlcpy(r->session_token, g_web.security.session_token, sizeof(r->session_token));
+    snprintf(
+        r->set_cookie,
+        sizeof(r->set_cookie),
+        WEB_SESSION_COOKIE "=%s; Path=/; HttpOnly; SameSite=Strict%s",
+        r->session_token,
+        g_web.site.tls ? "; Secure" : "");
+    event_log_append(EVENT_LOG_SECURITY, web_now_ms(), "web session started");
+    return true;
+}
+
+void web_session_end(web_request_t *r)
+{
+    web_security_end_session(&g_web.security);
+    web_ws_close_all();
+    if (r != NULL) {
+        r->session_token[0] = '\0';
+        snprintf(r->set_cookie, sizeof(r->set_cookie), WEB_SESSION_COOKIE "=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    }
+}
+
+void web_set_locked(bool locked)
+{
     if (locked) {
-        s_runtime_status.writer_active = false;
-    }
-    portEXIT_CRITICAL(&s_runtime_status_lock);
-}
-
-static bool runtime_status_is_locked(void)
-{
-    portENTER_CRITICAL(&s_runtime_status_lock);
-    const bool locked = s_runtime_status.locked;
-    portEXIT_CRITICAL(&s_runtime_status_lock);
-    return locked;
-}
-
-static void secure_zero(void *ptr, size_t len)
-{
-    if (ptr == NULL) {
-        return;
-    }
-
-    volatile uint8_t *p = (volatile uint8_t *)ptr;
-    while (len-- > 0) {
-        *p++ = 0;
-    }
-}
-
-static void send_no_store_headers(httpd_req_t *req)
-{
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
-    httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
-    httpd_resp_set_hdr(req, "X-Frame-Options", "DENY");
-    httpd_resp_set_hdr(req, "Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'");
-}
-
-static esp_err_t enforce_http_rate_limit(httpd_req_t *req)
-{
-    if (s_http_rate_limit_lock == NULL) {
-        return ESP_OK;
-    }
-
-    xSemaphoreTake(s_http_rate_limit_lock, portMAX_DELAY);
-    const http_rate_limit_result_t result = http_rate_limit_evaluate(&s_http_rate_limit, now_ms());
-    xSemaphoreGive(s_http_rate_limit_lock);
-
-    if (result == HTTP_RATE_LIMIT_ACCEPT) {
-        return ESP_OK;
-    }
-
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), "http rate limit");
-    send_no_store_headers(req);
-    httpd_resp_set_status(req, "429 Too Many Requests");
-    httpd_resp_set_type(req, "text/plain; charset=utf-8");
-    return httpd_resp_send(req, "rate limit", HTTPD_RESP_USE_STRLEN);
-}
-
-static http_route_method_t route_method_from_httpd(httpd_method_t method)
-{
-    switch (method) {
-        case HTTP_GET:
-            return HTTP_ROUTE_METHOD_GET;
-        case HTTP_POST:
-            return HTTP_ROUTE_METHOD_POST;
-        default:
-            return HTTP_ROUTE_METHOD_OTHER;
-    }
-}
-
-static esp_err_t send_route_policy_error(httpd_req_t *req, http_route_policy_result_t result)
-{
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), http_route_policy_result_name(result));
-    switch (result) {
-        case HTTP_ROUTE_POLICY_REJECT_BODY_TOO_LARGE:
-            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "request body too large");
-        case HTTP_ROUTE_POLICY_REJECT_METHOD:
-            return httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "method not allowed");
-        case HTTP_ROUTE_POLICY_REJECT_NOT_FOUND:
-            return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "not found");
-        case HTTP_ROUTE_POLICY_ALLOW:
-        default:
-            return ESP_OK;
-    }
-}
-
-static esp_err_t validate_route_policy(httpd_req_t *req)
-{
-    const http_route_policy_result_t result = http_route_policy_allowed(
-        req->uri,
-        route_method_from_httpd(req->method),
-        req->content_len);
-    return result == HTTP_ROUTE_POLICY_ALLOW ? ESP_OK : send_route_policy_error(req, result);
-}
-
-static esp_err_t validate_same_origin_header(httpd_req_t *req, const char *action)
-{
-    char origin[WEB_HEADER_VALUE_MAX];
-    char host[WEB_HEADER_VALUE_MAX];
-    if (httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) != ESP_OK ||
-        httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) != ESP_OK ||
-        !web_security_origin_allowed(origin, host)) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), action);
-        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid origin");
-    }
-    return ESP_OK;
-}
-
-static bool extract_session_cookie(httpd_req_t *req, char out_token[WEB_SECURITY_TOKEN_BUF_LEN])
-{
-    char cookie[WEB_HEADER_VALUE_MAX];
-    if (httpd_req_get_hdr_value_str(req, "Cookie", cookie, sizeof(cookie)) != ESP_OK) {
-        return false;
-    }
-
-    const char *name = "kvm_session=";
-    char *start = strstr(cookie, name);
-    if (start == NULL) {
-        return false;
-    }
-    start += strlen(name);
-    size_t len = 0;
-    while (start[len] != '\0' && start[len] != ';' && len < WEB_SECURITY_TOKEN_LEN) {
-        len++;
-    }
-    if (len != WEB_SECURITY_TOKEN_LEN) {
-        return false;
-    }
-    memcpy(out_token, start, len);
-    out_token[len] = '\0';
-    return true;
-}
-
-static bool request_authenticated(httpd_req_t *req, char out_token[WEB_SECURITY_TOKEN_BUF_LEN])
-{
-    return extract_session_cookie(req, out_token) &&
-           web_security_session_valid(&s_security, out_token, now_ms());
-}
-
-static esp_err_t redirect_to(httpd_req_t *req, const char *location)
-{
-    send_no_store_headers(req);
-    httpd_resp_set_status(req, "303 See Other");
-    httpd_resp_set_hdr(req, "Location", location);
-    return httpd_resp_send(req, "", 0);
-}
-
-static esp_err_t send_embedded_asset(
-    httpd_req_t *req,
-    const uint8_t *start,
-    const uint8_t *end,
-    const char *content_type)
-{
-    const size_t len = (size_t)(end - start);
-    httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=31536000, immutable");
-    httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
-    httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
-    httpd_resp_set_hdr(req, "X-Frame-Options", "DENY");
-    httpd_resp_set_type(req, content_type);
-    return httpd_resp_send(req, (const char *)start, len);
-}
-
-static esp_err_t xterm_js_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-    return send_embedded_asset(req, _binary_xterm_js_start, _binary_xterm_js_end, "application/javascript; charset=utf-8");
-}
-
-static esp_err_t xterm_css_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-    return send_embedded_asset(req, _binary_xterm_css_start, _binary_xterm_css_end, "text/css; charset=utf-8");
-}
-
-static bool require_auth_or_redirect(httpd_req_t *req, char out_token[WEB_SECURITY_TOKEN_BUF_LEN])
-{
-    if (request_authenticated(req, out_token)) {
-        return true;
-    }
-    (void)redirect_to(req, "/terminal");
-    return false;
-}
-
-static bool ensure_web_session(
-    httpd_req_t *req,
-    char out_token[WEB_SECURITY_TOKEN_BUF_LEN],
-    char out_cookie[96],
-    bool *out_created)
-{
-    if (out_created != NULL) {
-        *out_created = false;
-    }
-    if (request_authenticated(req, out_token)) {
-        return true;
-    }
-
-    const web_security_login_result_t result = web_security_login(
-        &s_security,
-        now_ms(),
-        security_random,
-        NULL);
-    if (result != WEB_SECURITY_LOGIN_OK) {
-        event_log_append(EVENT_LOG_ERROR, now_ms(), "session creation failed");
-        return false;
-    }
-
-    strlcpy(out_token, s_security.session_token, WEB_SECURITY_TOKEN_BUF_LEN);
-    if (out_cookie != NULL) {
-        snprintf(out_cookie, 96, "kvm_session=%s; HttpOnly; SameSite=Strict; Path=/", s_security.session_token);
-    }
-    if (out_created != NULL) {
-        *out_created = true;
-    }
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), "session auto-created");
-    return true;
-}
-
-static bool url_decode(char *value)
-{
-    char *write = value;
-    for (char *read = value; *read != '\0'; ++read) {
-        if (*read == '+') {
-            *write++ = ' ';
-        } else if (*read == '%' && read[1] != '\0' && read[2] != '\0') {
-            char hex[3] = {read[1], read[2], '\0'};
-            char *end = NULL;
-            const long decoded = strtol(hex, &end, 16);
-            if (end == NULL || *end != '\0' || decoded < 0 || decoded > 255) {
-                return false;
-            }
-            *write++ = (char)decoded;
-            read += 2;
-        } else {
-            *write++ = *read;
-        }
-    }
-    *write = '\0';
-    return true;
-}
-
-static bool form_value(const char *body, const char *key, char *out, size_t out_size)
-{
-    if (body == NULL || key == NULL || out == NULL || out_size == 0) {
-        return false;
-    }
-
-    const size_t key_len = strlen(key);
-    const char *cursor = body;
-    while (cursor != NULL && *cursor != '\0') {
-        if (strncmp(cursor, key, key_len) == 0 && cursor[key_len] == '=') {
-            const char *value = cursor + key_len + 1;
-            size_t len = 0;
-            while (value[len] != '\0' && value[len] != '&' && len < out_size - 1) {
-                len++;
-            }
-            out[len] = '\0';
-            memcpy(out, value, len);
-            out[len] = '\0';
-            return url_decode(out);
-        }
-        cursor = strchr(cursor, '&');
-        if (cursor != NULL) {
-            cursor++;
-        }
-    }
-    return false;
-}
-
-static esp_err_t read_small_body(httpd_req_t *req, char *out, size_t out_size)
-{
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route policy rejected");
-    if (req->content_len >= out_size || req->content_len > WEB_REQUEST_BODY_MAX) {
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "request body too large");
-    }
-
-    size_t received = 0;
-    while (received < req->content_len) {
-        const int ret = httpd_req_recv(req, out + received, req->content_len - received);
-        if (ret <= 0) {
-            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "request body read failed");
-        }
-        received += (size_t)ret;
-    }
-    out[received] = '\0';
-    return ESP_OK;
-}
-
-static bool csrf_header_valid(httpd_req_t *req, const char *session_token)
-{
-    char csrf[WEB_HEADER_VALUE_MAX];
-    if (httpd_req_get_hdr_value_str(req, "X-CSRF-Token", csrf, sizeof(csrf)) != ESP_OK) {
-        return false;
-    }
-    return web_security_csrf_valid(&s_security, session_token, csrf, now_ms());
-}
-
-static esp_err_t require_mutating_auth_csrf_origin(
-    httpd_req_t *req,
-    const char *origin_action,
-    const char *csrf_action,
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN])
-{
-    ESP_RETURN_ON_ERROR(validate_same_origin_header(req, origin_action), TAG, "origin rejected");
-    if (!request_authenticated(req, session_token)) {
-        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "auth required");
-    }
-    if (!csrf_header_valid(req, session_token)) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), csrf_action);
-        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid csrf");
-    }
-    return ESP_OK;
-}
-
-static const char *writer_state_name(web_security_writer_state_t state)
-{
-    switch (state) {
-        case WEB_SECURITY_WRITER_READ_ONLY:
-            return "read-only";
-        case WEB_SECURITY_WRITER_ACTIVE:
-            return "write-active";
-        case WEB_SECURITY_WRITER_BUSY:
-            return "writer-busy";
-        case WEB_SECURITY_WRITER_INVALID_SESSION:
-        default:
-            return "locked";
-    }
-}
-
-static const char *level_name(event_log_level_t level)
-{
-    switch (level) {
-        case EVENT_LOG_INFO:
-            return "info";
-        case EVENT_LOG_WARN:
-            return "warn";
-        case EVENT_LOG_ERROR:
-            return "error";
-        case EVENT_LOG_SECURITY:
-            return "security";
-        default:
-            return "unknown";
-    }
-}
-
-static void remove_ws_fd(int fd)
-{
-    if (s_ws_fds_lock != NULL) {
-        xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
-    }
-    for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-        if (s_ws_clients[i].fd == fd) {
-            s_ws_clients[i].fd = -1;
-            memset(s_ws_clients[i].session_token, 0, sizeof(s_ws_clients[i].session_token));
-        }
-    }
-    if (s_ws_fds_lock != NULL) {
-        xSemaphoreGive(s_ws_fds_lock);
-    }
-}
-
-static void clear_ws_fds(void)
-{
-    if (s_ws_fds_lock != NULL) {
-        xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
-    }
-    for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-        s_ws_clients[i].fd = -1;
-        memset(s_ws_clients[i].session_token, 0, sizeof(s_ws_clients[i].session_token));
-    }
-    if (s_ws_fds_lock != NULL) {
-        xSemaphoreGive(s_ws_fds_lock);
-    }
-}
-
-static esp_err_t add_ws_fd(int fd, const char *session_token)
-{
-    if (session_token == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (s_ws_fds_lock != NULL) {
-        xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
-    }
-    for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-        if (s_ws_clients[i].fd == fd) {
-            strlcpy(s_ws_clients[i].session_token, session_token, sizeof(s_ws_clients[i].session_token));
-            if (s_ws_fds_lock != NULL) {
-                xSemaphoreGive(s_ws_fds_lock);
-            }
-            return ESP_OK;
-        }
-    }
-    for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-        if (s_ws_clients[i].fd < 0) {
-            s_ws_clients[i].fd = fd;
-            strlcpy(s_ws_clients[i].session_token, session_token, sizeof(s_ws_clients[i].session_token));
-            if (s_ws_fds_lock != NULL) {
-                xSemaphoreGive(s_ws_fds_lock);
-            }
-            return ESP_OK;
-        }
-    }
-    if (s_ws_fds_lock != NULL) {
-        xSemaphoreGive(s_ws_fds_lock);
-    }
-    return ESP_ERR_NO_MEM;
-}
-
-static bool ws_fd_session_token(int fd, char out_token[WEB_SECURITY_TOKEN_BUF_LEN])
-{
-    bool found = false;
-    if (s_ws_fds_lock != NULL) {
-        xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
-    }
-    for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-        if (s_ws_clients[i].fd == fd) {
-            strlcpy(out_token, s_ws_clients[i].session_token, WEB_SECURITY_TOKEN_BUF_LEN);
-            found = out_token[0] != '\0';
-            break;
-        }
-    }
-    if (s_ws_fds_lock != NULL) {
-        xSemaphoreGive(s_ws_fds_lock);
-    }
-    return found;
-}
-
-static void snapshot_ws_fds(int fds[WEB_MAX_WS_CLIENTS])
-{
-    if (s_ws_fds_lock != NULL) {
-        xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
-    }
-    for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-        fds[i] = s_ws_clients[i].fd;
-    }
-    if (s_ws_fds_lock != NULL) {
-        xSemaphoreGive(s_ws_fds_lock);
-    }
-}
-
-static uint32_t count_ws_clients(void)
-{
-    if (s_ws_fds_lock == NULL) {
-        return 0;
-    }
-
-    uint32_t count = 0;
-    xSemaphoreTake(s_ws_fds_lock, portMAX_DELAY);
-    for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-        if (s_ws_clients[i].fd >= 0) {
-            count++;
-        }
-    }
-    xSemaphoreGive(s_ws_fds_lock);
-    return count;
-}
-
-static void emergency_lock_work(void *arg)
-{
-    (void)arg;
-    runtime_status_set_locked(true);
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock engaged");
-}
-
-static void emergency_unlock_work(void *arg)
-{
-    (void)arg;
-    runtime_status_set_locked(false);
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency unlock engaged");
-}
-
-static void web_tx_task(void *arg)
-{
-    (void)arg;
-    web_tx_chunk_t chunk;
-    while (true) {
-        if (xQueueReceive(s_tx_queue, &chunk, pdMS_TO_TICKS(1000)) != pdTRUE) {
-            continue;
-        }
-
-        httpd_ws_frame_t frame = {
-            .type = HTTPD_WS_TYPE_BINARY,
-            .payload = chunk.data,
-            .len = chunk.len,
-        };
-
-        int fds[WEB_MAX_WS_CLIENTS];
-        snapshot_ws_fds(fds);
-
-        for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-            if (fds[i] >= 0) {
-                esp_err_t err = httpd_ws_send_frame_async(s_server, fds[i], &frame);
-                if (err != ESP_OK) {
-                    ESP_LOGW(TAG, "dropping websocket client fd=%d: %s", fds[i], esp_err_to_name(err));
-                    event_log_append(EVENT_LOG_WARN, now_ms(), "websocket client dropped during broadcast");
-                    remove_ws_fd(fds[i]);
-                }
-            }
-        }
-    }
-}
-
-static void ap_guard_task(void *arg)
-{
-    (void)arg;
-    // This guard intentionally sleeps longer than the task watchdog timeout.
-    // Registering it would create a false-positive reboot loop while the AP is healthy.
-    while (true) {
-        const wifi_ap_status_t wifi = wifi_ap_get_status();
-        if (wifi.connected_clients == 0 && count_ws_clients() > 0) {
-            clear_ws_fds();
-            event_log_append(EVENT_LOG_INFO, now_ms(), "websocket clients cleared after WiFi disconnect");
-        }
-        const ap_exposure_policy_result_t result = ap_exposure_policy_evaluate(
-            &s_ap_exposure_policy,
-            wifi.started,
-            wifi.connected_clients,
-            count_ws_clients(),
-            now_ms());
-        if (result == AP_EXPOSURE_STOP_AP) {
-            event_log_append(EVENT_LOG_SECURITY, now_ms(), "AP idle timeout; stopping AP");
-            const esp_err_t err = wifi_ap_stop();
-            runtime_status_set_started(false);
-            runtime_status_set_writer_active(false);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "AP idle timeout stop failed: %s; keeping firmware alive", esp_err_to_name(err));
-                event_log_append(EVENT_LOG_ERROR, now_ms(), "AP idle timeout stop failed; firmware kept alive");
-            }
-        }
-        vTaskDelay(pdMS_TO_TICKS(WEB_AP_GUARD_INTERVAL_MS));
-    }
-}
-
-static void bridge_output_cb(const uint8_t *data, size_t len, void *ctx)
-{
-    (void)ctx;
-    if (s_tx_queue == NULL || data == NULL || len == 0) {
-        return;
-    }
-
-    size_t offset = 0;
-    while (offset < len) {
-        web_tx_chunk_t chunk = {0};
-        const size_t input_len = (len - offset) > WEB_TX_CHUNK_MAX ? WEB_TX_CHUNK_MAX : (len - offset);
-        chunk.len = web_terminal_ansi_filter(&s_web_ansi_state, data + offset, input_len, chunk.data, sizeof(chunk.data));
-        offset += input_len;
-        if (chunk.len == 0) {
-            continue;
-        }
-        if (xQueueSend(s_tx_queue, &chunk, 0) != pdTRUE) {
-            ESP_LOGW(TAG, "websocket tx queue full; dropped %u bytes", (unsigned)(len - offset));
-            event_log_append(EVENT_LOG_WARN, now_ms(), "websocket tx queue full");
-            return;
-        }
-    }
-}
-
-static void cleanup_failed_start(httpd_handle_t server)
-{
-    if (s_web_tx_task != NULL) {
-        vTaskDelete(s_web_tx_task);
-        s_web_tx_task = NULL;
-    }
-    if (s_ap_guard_task != NULL) {
-        vTaskDelete(s_ap_guard_task);
-        s_ap_guard_task = NULL;
-    }
-    if (s_tx_queue != NULL) {
-        vQueueDelete(s_tx_queue);
-        s_tx_queue = NULL;
-    }
-    if (server != NULL) {
-        if (s_server_tls) {
-            (void)httpd_ssl_stop(server);
-        } else {
-            (void)httpd_stop(server);
-        }
-    }
-    s_server = NULL;
-    s_server_tls = false;
-    runtime_status_set_started(false);
-    runtime_status_set_writer_active(false);
-}
-
-static void send_scrollback_to_ws_client(int fd)
-{
-    uint8_t snapshot[1024];
-    const size_t len = terminal_bridge_snapshot_recent_output(snapshot, sizeof(snapshot));
-    if (len == 0) {
-        return;
-    }
-    uint8_t filtered[1024];
-    web_terminal_ansi_state_t ansi_state;
-    web_terminal_ansi_init(&ansi_state);
-    const size_t filtered_len = web_terminal_ansi_filter(&ansi_state, snapshot, len, filtered, sizeof(filtered));
-    if (filtered_len == 0) {
-        return;
-    }
-
-    size_t offset = 0;
-    while (offset < filtered_len) {
-        httpd_ws_frame_t frame = {
-            .type = HTTPD_WS_TYPE_BINARY,
-            .payload = filtered + offset,
-            .len = filtered_len - offset,
-        };
-        if (frame.len > WEB_SCROLLBACK_SEND_CHUNK_MAX) {
-            frame.len = WEB_SCROLLBACK_SEND_CHUNK_MAX;
-        }
-
-        const esp_err_t err = httpd_ws_send_frame_async(s_server, fd, &frame);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "scrollback send failed fd=%d: %s", fd, esp_err_to_name(err));
-            event_log_append(EVENT_LOG_WARN, now_ms(), "scrollback send failed");
-            remove_ws_fd(fd);
-            return;
-        }
-        offset += frame.len;
-    }
-}
-
-static esp_err_t index_handler(httpd_req_t *req)
-{
-    web_route_trace_mark("/", "enter");
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-    web_route_trace_mark("/", "done");
-    return redirect_to(req, "/terminal");
-}
-
-static esp_err_t about_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!require_auth_or_redirect(req, session_token)) {
-        return ESP_OK;
-    }
-
-    const esp_app_desc_t *app = esp_app_get_description();
-    const terminal_bridge_status_t bridge = terminal_bridge_get_status();
-    const bool https_enabled = s_server_tls;
-
-    char body[2300];
-    const int written = snprintf(
-        body,
-        sizeof(body),
-        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>Serialite About</title><style>body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px}"
-        ".card{border:1px solid #174436;border-radius:16px;padding:14px;background:#030807;max-width:760px}"
-        "dt{color:#7dffe1}dd{margin:0 0 8px 0}a{color:#7dffe1}</style></head><body><main class=\"card\">"
-        "<h1>About Serialite</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/macros\">Macros</a> | <a href=\"/ota\">Firmware</a></p>"
-        "<p>Serial rescue console over local WiFi AP. It is not HDMI KVM, HID remote input, virtual media, host power control, cloud access, or command automation.</p>"
-        "<dl><dt>Firmware</dt><dd>%s</dd><dt>Project</dt><dd>%s</dd><dt>Build date</dt><dd>%s %s</dd>"
-        "<dt>IDF</dt><dd>%s</dd><dt>Security model</dt><dd>Local AP, web auth, CSRF, Origin checks, one active web session, RAM diagnostics.</dd>"
-        "<dt>HTTPS fingerprint mode</dt><dd>%s. See docs/https-fingerprint.md; operators must compare the browser certificate SHA-256 fingerprint with the AMOLED fingerprint before trusting TLS.</dd>"
-        "<dt>Production build</dt><dd>Requires Secure Boot, Flash Encryption, encrypted NVS for persisted secrets, and closed debug/JTAG. Treat unsigned debug builds as lab-only.</dd>"
-        "<dt>Scrollback</dt><dd>%u/%u bytes retained, %llu old bytes dropped.</dd>"
-        "<dt>Emergency lock</dt><dd>Tap PWR to toggle terminal input lock. Hold PWR to power off Serialite.</dd>"
-        "<dt>Factory reset</dt><dd>Hold BOOT for 10 seconds. This clears project NVS config and reboots.</dd></dl>"
-        "</main></body></html>",
-        app != NULL ? app->version : "unknown",
-        app != NULL ? app->project_name : "serialite",
-        app != NULL ? app->date : "unknown",
-        app != NULL ? app->time : "",
-        esp_get_idf_version(),
-        https_enabled ? "enabled" : "disabled by default",
-        (unsigned)bridge.scrollback_retained,
-        (unsigned)bridge.scrollback_capacity,
-        (unsigned long long)bridge.scrollback_dropped_oldest);
-    if (written < 0 || written >= (int)sizeof(body)) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "about overflow");
-    }
-
-    send_no_store_headers(req);
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
-}
-
-static esp_err_t runbook_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!require_auth_or_redirect(req, session_token)) {
-        return ESP_OK;
-    }
-
-    static const char body[] =
-        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>Serialite Runbook</title><style>"
-        "body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px;line-height:1.45}"
-        "main{border:1px solid #174436;border-radius:16px;padding:16px;background:#030807;max-width:820px}"
-        "h2{color:#7dffe1}a{color:#7dffe1}li{margin:8px 0}code{color:#bffff0}</style></head><body><main>"
-        "<h1>Runbook de rescate</h1>"
-        "<p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/diagnostics\">Diagnostics</a> | <a href=\"/credentials\">Credentials</a> | <a href=\"/ota\">Firmware</a> | <a href=\"/about\">About</a></p>"
-        "<h2>Antes de escribir</h2><ol>"
-        "<li>Confirma que estas conectado al AP local correcto y fisicamente junto al servidor.</li>"
-        "<li>Comprueba en Status que USB esta conectado y que no hay drops creciendo rapidamente.</li>"
-        "<li>Abre Terminal y espera salida antes de enviar comandos.</li>"
-        "</ol><h2>Recuperar acceso</h2><ol>"
-        "<li>La sesion web activa tiene control de teclado automaticamente.</li>"
-        "<li>Usa comandos de diagnostico de bajo riesgo primero: <code>ip addr</code>, <code>ip route</code>, <code>systemctl status</code>, <code>journalctl -xb</code>.</li>"
-        "<li>Evita pegar bloques largos. El paste grande se confirma y se trocea, pero sigue ejecutandose en la consola fisica.</li>"
-        "<li>Cierra sesion al terminar. Un nuevo login reemplaza la sesion anterior.</li>"
-        "</ol><h2>Si algo falla</h2><ol>"
-        "<li>Si USB aparece desconectado, revisa cable, puerto y que el servidor exponga consola CDC ACM.</li>"
-        "<li>Si hay rate limit, espera unos segundos y reduce recargas/conexiones.</li>"
-        "<li>Si pierdes control operacional de la terminal web, pulsa PWR para bloquear o desbloquear el input.</li>"
-        "<li>Si las credenciales son desconocidas, pulsa BOOT para revelar temporales o manten BOOT 10s para factory reset.</li>"
-        "<li>Usa Diagnostics para copiar contadores y eventos sin exponer passwords.</li>"
-        "</ol><h2>Limites</h2><p>Esto es consola serie local. No hay HDMI, HID, virtual media, power cycle ni acceso cloud.</p>"
-        "</main></body></html>";
-
-    send_no_store_headers(req);
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
-}
-
-static esp_err_t macros_page_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    char session_cookie[96] = {0};
-    bool session_created = false;
-    if (!ensure_web_session(req, session_token, session_cookie, &session_created)) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "session creation failed");
-    }
-    const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
-    if (csrf == NULL) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "session unavailable");
-    }
-
-    const web_macro_descriptor_t *macros = NULL;
-    const size_t macro_count = web_macro_policy_list(&macros);
-    const usb_console_status_t usb = usb_console_get_status();
-    const demo_serial_runtime_status_t demo = demo_serial_runtime_get_status();
-    const web_security_writer_state_t writer = web_security_writer_state(&s_security, session_token, now_ms());
-    const bool can_run_state = s_macros_enabled && writer == WEB_SECURITY_WRITER_ACTIVE && usb.connected && !demo.active;
-
-    char body[4200];
-    int written = snprintf(
-        body,
-        sizeof(body),
-        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>Serialite Macros</title><style>"
-        "body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px;line-height:1.45}"
-        "main{border:1px solid #174436;border-radius:16px;padding:16px;background:#030807;max-width:820px}"
-        "button{border:1px solid #1f5b4b;border-radius:12px;background:#102a23;color:#e9fff8;padding:10px 12px;font:inherit;font-weight:700}"
-        "button:disabled{opacity:.45}code{color:#bffff0}a{color:#7dffe1}.macro{border-top:1px solid #174436;padding:12px 0}</style></head><body><main>"
-        "<h1>Safe macros</h1><p><a href=\"/terminal\">Terminal</a> | <a href=\"/\">Status</a> | <a href=\"/runbook\">Runbook</a></p>"
-        "<p>Macros are visible for audit but disabled by default. They never run automatically and require explicit confirmation, USB connected, demo off, and the active web session.</p>"
-        "<p>Status: macros=%s, USB=%s, demo=%s, writer=%s.</p>",
-        s_macros_enabled ? "enabled" : "disabled",
-        usb.connected ? "connected" : "disconnected",
-        demo.active ? "active" : "inactive",
-        writer_state_name(writer));
-    if (written < 0 || written >= (int)sizeof(body)) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "macros overflow");
-    }
-
-    for (size_t i = 0; i < macro_count; ++i) {
-        const int remaining = (int)sizeof(body) - written;
-        if (remaining <= 1) {
-            break;
-        }
-        const int add = snprintf(
-            body + written,
-            (size_t)remaining,
-            "<section class=\"macro\"><h2>%s</h2><p><code>%s</code></p>"
-            "<button %s onclick=\"runMacro('%s')\">Run with confirmation</button></section>",
-            macros[i].label,
-            macros[i].command,
-            can_run_state ? "" : "disabled",
-            macros[i].id);
-        if (add < 0 || add >= remaining) {
-            break;
-        }
-        written += add;
-    }
-
-    const int remaining = (int)sizeof(body) - written;
-    const int tail = snprintf(
-        body + written,
-        (size_t)remaining,
-        "<script>const CSRF='%s';async function runMacro(id){if(!confirm('Send macro '+id+' to the physical console?'))return;"
-        "const body='id='+encodeURIComponent(id)+'&confirm=yes';const r=await fetch('/api/macros/run',{method:'POST',headers:{'X-CSRF-Token':CSRF,'Content-Type':'application/x-www-form-urlencoded'},body});alert(r.status+' '+await r.text())}</script>"
-        "</main></body></html>",
-        csrf);
-    if (tail < 0 || tail >= remaining) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "macros overflow");
-    }
-
-    send_no_store_headers(req);
-    if (session_created) {
-        httpd_resp_set_hdr(req, "Set-Cookie", session_cookie);
-    }
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
-}
-
-static esp_err_t logout_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-    ESP_RETURN_ON_ERROR(validate_same_origin_header(req, "logout rejected: origin"), TAG, "origin rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!request_authenticated(req, session_token)) {
-        return redirect_to(req, "/terminal");
-    }
-    if (!csrf_header_valid(req, session_token)) {
-        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid csrf");
-    }
-    web_security_logout(&s_security, session_token);
-    runtime_status_set_writer_active(false);
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), "logout");
-    httpd_resp_set_hdr(req, "Set-Cookie", "kvm_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
-    return redirect_to(req, "/terminal");
-}
-
-static esp_err_t send_terminal_format_chunk(httpd_req_t *req, const char *fmt, ...)
-{
-    char chunk[WEB_TERMINAL_FORMAT_CHUNK_MAX];
-    va_list args;
-    va_start(args, fmt);
-    const int written = vsnprintf(chunk, sizeof(chunk), fmt, args);
-    va_end(args);
-
-    if (written < 0 || written >= (int)sizeof(chunk)) {
-        ESP_LOGE(TAG, "terminal dynamic chunk overflow");
-        return ESP_FAIL;
-    }
-    return httpd_resp_sendstr_chunk(req, chunk);
-}
-
-static esp_err_t terminal_handler(httpd_req_t *req)
-{
-    web_route_trace_mark("/terminal", "enter");
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    char session_cookie[96] = {0};
-    bool session_created = false;
-    if (!ensure_web_session(req, session_token, session_cookie, &session_created)) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "session creation failed");
-    }
-    const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
-    if (csrf == NULL) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "session unavailable");
-    }
-
-    const usb_console_status_t usb = usb_console_get_status();
-
-    send_no_store_headers(req);
-    if (session_created) {
-        httpd_resp_set_hdr(req, "Set-Cookie", session_cookie);
-    }
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    web_route_trace_mark("/terminal", "done");
-
-    ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
-        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<link rel=\"stylesheet\" href=\"/assets/xterm.css\">"
-        "<title>Serial console</title><style>"
-        ":root{--bg:#002B36;--bar:#073642;--line:#174652;--hot:#2aa198;--warn:#b58900;--bad:#dc322f;--text:#93A1A1;--muted:#657b83;--ok:#859900}"
-        "*{box-sizing:border-box}html,body{margin:0;height:100%%;background:#002B36;color:var(--text);font:14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}"
-        "body{overflow:hidden}"
-        "#hud{position:fixed;right:12px;top:12px;z-index:5;display:flex;align-items:center;gap:8px;padding:7px;border:1px solid #174652;border-radius:999px;background:rgba(7,54,66,.88);backdrop-filter:blur(14px);box-shadow:0 14px 40px #001b22cc}"), TAG, "terminal head chunk failed");
-    ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
-        ".pill{border:1px solid var(--line);border-radius:999px;padding:5px 9px;color:var(--muted);background:#00212a;font-size:12px;letter-spacing:.04em}.stream{display:flex;align-items:center;gap:7px;max-width:74px;overflow:hidden;white-space:nowrap;transition:max-width .16s ease,color .16s ease}.stream.expanded,.stream:hover,.stream:focus{max-width:min(360px,calc(100vw - 32px));color:var(--text)}.dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%%;background:var(--warn);box-shadow:0 0 12px var(--warn)}.dot.ok{background:var(--ok);box-shadow:0 0 14px var(--ok)}.dot.bad{background:var(--bad);box-shadow:0 0 14px var(--bad)}#streamText{overflow:hidden;text-overflow:ellipsis}.stream.expanded #streamText,.stream:hover #streamText,.stream:focus #streamText{text-overflow:clip}"
-        ".usb{border-color:var(--warn);color:var(--warn)}.locked{border-color:var(--bad);color:var(--bad)}"
-        "button,a{font:inherit;color:var(--text)}button{border:1px solid var(--line);border-radius:10px;background:#073642;padding:6px 10px;font-weight:700}button.round{width:34px;height:34px;border-radius:50%%;display:inline-grid;place-items:center;padding:0}.icon-btn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}button.primary{border-color:var(--hot)}button.danger{border-color:var(--bad);color:#eee8d5}button:disabled{opacity:.42}"), TAG, "terminal css chunk failed");
-    ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
-        "#menu{position:relative}#keys{display:none;position:fixed;right:12px;top:62px;z-index:4;width:min(360px,calc(100vw - 24px));max-height:calc(100svh - 74px);overflow:auto;padding:12px;border:1px solid var(--line);border-radius:16px;background:rgba(7,54,66,.97);box-shadow:0 20px 50px #001b22cc}"
-        "#keys.open{display:block}.actions-head{display:flex;align-items:center;justify-content:space-between;margin:0 0 10px}.actions-head strong{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#eee8d5}.actions-close{width:28px;height:28px;border-radius:50%%;padding:0}.action-section{margin-top:12px}.action-section h3{margin:0 0 7px;color:var(--muted);font-size:11px;letter-spacing:.12em;text-transform:uppercase}.action-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.action-grid.two{grid-template-columns:repeat(2,1fr)}.action-grid button{min-height:36px}.action-grid .wide{grid-column:1/-1}"), TAG, "terminal css chunk failed");
-    ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
-        "#diagBackdrop{display:none;position:fixed;inset:0;z-index:6;background:rgba(0,22,27,.38);backdrop-filter:blur(2px)}#diagBackdrop.open{display:block}"
-        "#diagnosticsPanel{position:fixed;right:12px;top:62px;bottom:12px;z-index:7;width:min(420px,calc(100vw - 24px));overflow:auto;padding:14px;border:1px solid var(--line);border-radius:18px;background:rgba(7,54,66,.98);box-shadow:0 24px 70px #001b22e6;transform:translateX(calc(100%% + 24px));visibility:hidden;transition:transform .16s ease,visibility .16s ease}#diagnosticsPanel.open{transform:translateX(0);visibility:visible}"
-        ".diag-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}.diag-head h2{margin:0;color:#eee8d5;font-size:15px}.diag-head button{border-radius:50%%;width:30px;height:30px;padding:0}.diag-card{border:1px solid var(--line);border-radius:13px;background:#00212a;padding:11px;margin:9px 0}.diag-card h3{margin:0 0 9px;color:var(--hot);font-size:12px;letter-spacing:.1em;text-transform:uppercase}.diag-row{display:flex;justify-content:space-between;gap:12px;padding:4px 0;color:var(--muted)}.diag-row b{color:var(--text);font-weight:700;text-align:right}.diag-events{margin:0;white-space:pre-wrap;color:var(--text);font-size:12px;line-height:1.45}"), TAG, "terminal diagnostics css chunk failed");
-    ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
-        "#terminal{position:fixed;inset:0;outline:none;padding:14px 14px 64px;background:#002B36}"
-        "#consoleNotice{position:fixed;left:50%%;top:50%%;z-index:3;transform:translate(-50%%,-50%%);width:min(680px,calc(100vw - 28px));padding:18px 20px;border:1px solid #174652;border-radius:18px;background:rgba(7,54,66,.94);box-shadow:0 24px 70px #001b22d9;color:var(--text)}#consoleNotice.hidden{display:none}#consoleNotice h2{margin:0 0 8px;font-size:17px;color:var(--warn)}#consoleNotice p{margin:6px 0;color:var(--muted);line-height:1.45}#consoleNotice code{display:block;margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:#00212a;color:var(--hot);white-space:normal;overflow-wrap:anywhere}"
-        "#terminal:focus{box-shadow:inset 0 0 0 1px #21483d}.xterm{height:100%%}.xterm-viewport{background:transparent!important}.xterm-screen{background:transparent!important}"
-        "@media(max-width:640px){#hud{right:8px;top:8px;gap:6px;padding:6px;overflow:visible}.pill{font-size:11px;padding:5px 7px}button{padding:7px 9px}button.round{width:32px;height:32px;padding:0}#keys{right:8px;top:58px;width:min(360px,calc(100vw - 16px));max-height:calc(100svh - 70px)}.action-grid button{min-height:40px}#diagnosticsPanel{left:8px;right:8px;top:auto;bottom:8px;width:auto;max-height:82svh;transform:translateY(calc(100%% + 24px))}#diagnosticsPanel.open{transform:translateY(0)}#terminal{padding:12px 12px 76px;font-size:13px}}"
-        "</style></head><body><div id=\"hud\"><span id=\"state\" class=\"pill stream\"><span id=\"streamDot\" class=\"dot\"></span><span id=\"streamText\">STREAM ...</span></span>"), TAG, "terminal layout chunk failed");
-    ESP_RETURN_ON_ERROR(httpd_resp_sendstr_chunk(req,
-        "<button id=\"fullscreenBtn\" class=\"round icon-btn\" aria-label=\"Fullscreen\" title=\"Fullscreen\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><!-- Lucide maximize-2 --><polyline points=\"15 3 21 3 21 9\"></polyline><polyline points=\"9 21 3 21 3 15\"></polyline><line x1=\"21\" x2=\"14\" y1=\"3\" y2=\"10\"></line><line x1=\"3\" x2=\"10\" y1=\"21\" y2=\"14\"></line></svg></button>"
-        "<div id=\"menu\"><button id=\"menuBtn\" class=\"round\" aria-label=\"More controls\" title=\"More controls\">+</button><div id=\"keys\" aria-label=\"Operator actions\">"
-        "<div class=\"actions-head\"><strong>Actions</strong><button id=\"closeMenuBtn\" class=\"actions-close icon-btn\" aria-label=\"Close controls\" title=\"Close controls\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><!-- Lucide x --><path d=\"M18 6 6 18\"></path><path d=\"m6 6 12 12\"></path></svg></button></div>"
-        "<section class=\"action-section\"><h3>Keys</h3><div class=\"action-grid\">"), TAG, "terminal controls chunk failed");
-    ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
-        "<button data-k=\"ctrl-c\">%s</button><button data-k=\"ctrl-d\">%s</button><button data-k=\"ctrl-l\">%s</button>"
-        "<button data-k=\"enter\">%s</button><button data-k=\"esc\">%s</button><button data-k=\"tab\">%s</button>"
-        "<button data-k=\"up\">%s</button><button data-k=\"down\">%s</button><button data-k=\"left\">%s</button><button data-k=\"right\">%s</button></div></section>"
-        "<section class=\"action-section\"><h3>Terminal</h3><div class=\"action-grid two\"><button id=\"fitTty\">Fit TTY</button><button id=\"clearTerm\">Clear terminal</button></div></section>"
-        "<section class=\"action-section\"><h3>Device</h3><div class=\"action-grid two\"><button id=\"diagnosticsBtn\">Diagnostics</button><button id=\"rotateWifi\">Rotate WiFi</button></div></section>"
-        "<section class=\"action-section\"><h3>Danger</h3><div class=\"action-grid\"><button class=\"danger wide\" id=\"panic\">Emergency lock</button></div></section>"
-        "</div></div></div>",
-        WEB_TERMINAL_KEY_CTRL_C,
-        WEB_TERMINAL_KEY_CTRL_D,
-        WEB_TERMINAL_KEY_CTRL_L,
-        WEB_TERMINAL_KEY_ENTER,
-        WEB_TERMINAL_KEY_ESC,
-        WEB_TERMINAL_KEY_TAB,
-        WEB_TERMINAL_KEY_UP,
-        WEB_TERMINAL_KEY_DOWN,
-        WEB_TERMINAL_KEY_LEFT,
-        WEB_TERMINAL_KEY_RIGHT), TAG, "terminal key chunk failed");
-    ESP_RETURN_ON_ERROR(httpd_resp_sendstr_chunk(req,
-        "<div id=\"terminal\" tabindex=\"0\"></div>"
-        "<div id=\"diagBackdrop\"></div><aside id=\"diagnosticsPanel\" aria-label=\"Diagnostics\" aria-hidden=\"true\">"
-        "<div class=\"diag-head\"><h2>System Health</h2><button id=\"closeDiagnostics\" aria-label=\"Close diagnostics\">x</button></div>"
-        "<div id=\"diagnosticsBody\"><section class=\"diag-card\"><h3>Status</h3><div class=\"diag-row\"><span>Loading</span><b>...</b></div></section></div>"
-        "</aside>"
-        "<section id=\"consoleNotice\" class=\"hidden\" role=\"status\" aria-live=\"polite\"><h2>No serial console detected</h2><p>The USB link is up, but the Linux host has not sent a login prompt or console output yet.</p><p>On the host, run the Serialite setup script or start the installed getty:</p><code>sudo systemctl start serialite-serial-console.service</code></section>"
-        "<script src=\"/assets/xterm.js\"></script><script>"), TAG, "terminal body chunk failed");
-    ESP_RETURN_ON_ERROR(send_terminal_format_chunk(req,
-        "const CSRF='%s';let canWrite=false,usbConnected=%s,writerState='write-active',locked=false,connected=false,empty=true,lastRx=0,lastInput=0,openedAt=0;"
-        "const CHUNK=%u,PASTE_CONFIRM=%u,PASTE_MAX=%u;",
-        csrf,
-        usb.connected ? "true" : "false",
-        (unsigned)WEB_INPUT_POLICY_FRAME_MAX,
-        (unsigned)WEB_PASTE_CONFIRM_BYTES,
-        (unsigned)WEB_PASTE_MAX_BYTES), TAG, "terminal config chunk failed");
-    ESP_RETURN_ON_ERROR(httpd_resp_sendstr_chunk(req,
-        "const terminal=document.getElementById('terminal'),state=document.getElementById('state'),streamText=document.getElementById('streamText'),streamDot=document.getElementById('streamDot'),consoleNotice=document.getElementById('consoleNotice'),diagPanel=document.getElementById('diagnosticsPanel'),diagBackdrop=document.getElementById('diagBackdrop'),diagBody=document.getElementById('diagnosticsBody');"
-        "const term=new KvmTerminal.Terminal({cursorBlink:true,convertEol:false,scrollback:2000,fontFamily:'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',fontSize:14,theme:{background:'#002B36',foreground:'#93A1A1',cursor:'#839496',black:'#073642',red:'#dc322f',green:'#859900',yellow:'#b58900',blue:'#268bd2',magenta:'#d33682',cyan:'#2aa198',white:'#eee8d5',brightBlack:'#002b36',brightRed:'#dc322f',brightGreen:'#586e75',brightYellow:'#657b83',brightBlue:'#839496',brightMagenta:'#6c71c4',brightCyan:'#93a1a1',brightWhite:'#fdf6e3'}});"
-        "const fit=new KvmTerminal.FitAddon();term.loadAddon(fit);term.open(terminal);function refitTerminal(){fit.fit()}refitTerminal();requestAnimationFrame(refitTerminal);setTimeout(refitTerminal,250);addEventListener('resize',refitTerminal);addEventListener('orientationchange',refitTerminal);if(window.visualViewport){visualViewport.addEventListener('resize',refitTerminal);visualViewport.addEventListener('scroll',refitTerminal)}term.write('Serial console ready.\\r\\n');"
-        "function streamExpanded(){return state.classList.contains('expanded')||state.matches(':hover,:focus')}"
-        "function renderStreamLabel(){streamText.textContent=streamExpanded()?state.dataset.detail:state.dataset.compact}"
-        "function setStream(text,ok){state.dataset.detail=text;state.dataset.compact=ok?'OK':'ERROR';state.title=text;renderStreamLabel();streamDot.className='dot '+(ok?'ok':'bad')}"
-        "function hideConsoleNotice(){consoleNotice.classList.add('hidden')}"
-        "function showConsoleNotice(){if(!empty)return;consoleNotice.classList.remove('hidden');setStream('USB link up; no console output yet',false)}"
-        "function checkConsoleSilence(){if(!connected||locked||!usbConnected||!empty)return;const now=Date.now();if(openedAt&&now-openedAt>4000&&!lastRx)showConsoleNotice();if(lastInput&&now-lastInput>3000&&!lastRx)showConsoleNotice()}"
-        "function render(){canWrite=connected&&usbConnected&&writerState==='write-active'&&!locked;term.options.disableStdin=!canWrite;document.querySelectorAll('#keys button[data-k]').forEach(b=>b.disabled=!canWrite);terminal.setAttribute('aria-label',canWrite?'Serial terminal, keyboard control active':'Serial terminal unavailable');if(!usbConnected)hideConsoleNotice()}"
-        "let ws,backoff=500;"
-        "function connect(){setStream('Stream ...',false);connected=false;render();const scheme=location.protocol==='https:'?'wss://':'ws://';ws=new WebSocket(scheme+location.host+'/ws');ws.binaryType='arraybuffer';"
-        "ws.onopen=()=>{openedAt=Date.now();lastRx=0;setStream('Stream OK',true);connected=true;writerState='write-active';backoff=500;render();refreshStatus();term.focus()};"
-        "ws.onmessage=e=>{lastRx=Date.now();hideConsoleNotice();setStream('Stream OK',true);if(empty){term.clear();empty=false}if(e.data instanceof ArrayBuffer)term.write(new Uint8Array(e.data));else term.write(e.data)};"
-        "ws.onclose=()=>{connected=false;writerState='write-active';if(locked)return;setStream('Stream off',false);render();refreshStatus();setTimeout(connect,backoff);backoff=Math.min(backoff*2,5000)};"
-        "ws.onerror=()=>ws.close()}"
-        "async function recoverSession(){try{const r=await fetch('/terminal',{cache:'no-store'});if(r.status===200){location.reload();return}if(r.status===423){locked=true;setStream('Locked by device',false);render();return}}catch(e){}locked=true;setStream('Session expired',false);render()}"
-        "async function refreshStatus(){try{const r=await fetch('/terminal-status.json',{cache:'no-store'});if(r.status===401||r.redirected){await recoverSession();return}if(!r.ok)return;const s=await r.json();usbConnected=!!s.usb_connected;writerState=s.writer_state||'write-active';locked=writerState==='locked';if(locked)setStream('Input locked; press PWR to unlock',false);render()}catch(e){}}"
-        "async function post(u){const r=await fetch(u,{method:'POST',headers:{'X-CSRF-Token':CSRF}});const t=await r.text();await refreshStatus();if(!r.ok)alert(t||('Request failed: '+r.status));return r.ok}"
-        "let pending='',flushTimer=0;function flushSend(){if(!(canWrite&&ws&&ws.readyState===1)){pending='';flushTimer=0;return}const data=pending;pending='';flushTimer=0;if(!data)return;if(data.length<=CHUNK){ws.send(data);return}for(let i=0;i<data.length;i+=CHUNK)ws.send(data.slice(i,i+CHUNK))}"
-        "function send(data){if(!(canWrite&&ws&&ws.readyState===1))return;lastInput=Date.now();if(pending.length+data.length>CHUNK)flushSend();pending+=data;if(!flushTimer)flushTimer=setTimeout(flushSend,20)}"
-        "function fitHostTty(){if(!canWrite)return;fit.fit();send(`stty rows ${term.rows} cols ${term.cols}\\r`);setTimeout(()=>send('\\u000c'),120)}"
-        "function toggleFullscreen(){const target=document.documentElement;if(!document.fullscreenElement){target.requestFullscreen&&target.requestFullscreen()}else{document.exitFullscreen&&document.exitFullscreen()}setTimeout(()=>{fit.fit();term.focus()},120)}"
-        "function focusTerminal(){terminal.focus();term.focus()}"
-        "function esc(v){return String(v==null?'':v).replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]))}"
-        "function yes(v){return v?'OK':'OFF'}"
-        "function bytes(v){v=Number(v||0);if(v>1048576)return (v/1048576).toFixed(1)+' MB';if(v>1024)return (v/1024).toFixed(1)+' KB';return v+' B'}"
-        "function row(k,v){return `<div class=\"diag-row\"><span>${esc(k)}</span><b>${esc(v)}</b></div>`}"
-        "function renderDiagnostics(d){const events=(d.events||[]).slice(-8).map(e=>`${e.timestamp_ms}ms [${e.level}] ${e.message}`).join('\\n')||'No recent events';diagBody.innerHTML=`<section class=\"diag-card\"><h3>System Health</h3>${row('USB',yes(d.usb&&d.usb.connected))}${row('AP',yes(d.ap&&d.ap.started))}${row('Clients',d.ap?d.ap.clients:0)}${row('Uptime',Math.floor((d.uptime_ms||0)/1000)+'s')}${row('Heap free',bytes(d.heap&&d.heap.free))}</section><section class=\"diag-card\"><h3>Traffic</h3>${row('USB RX',bytes(d.usb&&d.usb.rx_bytes))}${row('USB TX',bytes(d.usb&&d.usb.tx_bytes))}${row('Drops RX',d.bridge?d.bridge.dropped_usb_rx:0)}${row('Drops TX',d.bridge?d.bridge.dropped_usb_tx:0)}${row('Subscribers',d.bridge?d.bridge.subscribers:0)}</section><section class=\"diag-card\"><h3>Recent Events</h3><pre class=\"diag-events\">${esc(events)}</pre></section><section class=\"diag-card\"><h3>Actions</h3><div class=\"action-grid two\"><button id=\"copyDiagJson\">Copy JSON</button><button id=\"refreshDiag\">Refresh</button></div></section>`;document.getElementById('refreshDiag').onclick=loadDiagnostics;document.getElementById('copyDiagJson').onclick=()=>navigator.clipboard&&navigator.clipboard.writeText(JSON.stringify(d,null,2))}"
-        "async function loadDiagnostics(){diagBody.innerHTML='<section class=\"diag-card\"><h3>Status</h3>'+row('Loading','...')+'</section>';try{const r=await fetch('/diagnostics.json',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);renderDiagnostics(await r.json())}catch(e){diagBody.innerHTML='<section class=\"diag-card\"><h3>Status</h3>'+row('Diagnostics',e.message||'Unavailable')+'</section>'}}"
-        "function openDiagnostics(){closeMenu();diagBackdrop.classList.add('open');diagPanel.classList.add('open');diagPanel.setAttribute('aria-hidden','false');loadDiagnostics()}"
-        "function closeDiagnostics(){diagPanel.classList.remove('open');diagBackdrop.classList.remove('open');diagPanel.setAttribute('aria-hidden','true');focusTerminal()}"
-        "function safePaste(t){if(!canWrite)return;if(t.length>PASTE_MAX){alert('Paste too large; max '+PASTE_MAX+' bytes');return}"
-        "if((t.length>PASTE_CONFIRM||t.includes('\\n'))&&!confirm('Send '+t.length+' bytes to the physical console?'))return;send(t)}"
-        "const QUICK_KEYS={'ctrl-c':'\\u0003','ctrl-d':'\\u0004','ctrl-l':'\\u000c',enter:'\\r',esc:'\\u001b',tab:'\\t',up:'\\u001b[A',down:'\\u001b[B',left:'\\u001b[D',right:'\\u001b[C'};"
-        "function sendQuickKey(id){const data=QUICK_KEYS[id];if(data)send(data)}"
-        "function terminalHasFocus(){return document.activeElement===terminal||terminal.contains(document.activeElement)||document.activeElement===term.textarea}"
-        "function captureTerminalShortcuts(e){if(!canWrite)return;if(e.ctrlKey&&!e.altKey&&!e.metaKey&&e.key&&e.key.toLowerCase()==='l'&&terminalHasFocus()){e.preventDefault();e.stopPropagation();send('\\u000c');return false}}"
-        "term.onData(data=>send(data));term.attachCustomKeyEventHandler(e=>{if(e.ctrlKey&&e.key.toLowerCase()==='l'){send('\\u000c');return false}return true});addEventListener('keydown',captureTerminalShortcuts,true);"
-        "terminal.addEventListener('click',focusTerminal);terminal.addEventListener('touchstart',()=>setTimeout(focusTerminal,0),{passive:true});terminal.addEventListener('paste',e=>{const t=(e.clipboardData||window.clipboardData).getData('text');e.preventDefault();safePaste(t)});"
-        "document.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>{sendQuickKey(b.dataset.k);closeMenu();focusTerminal()});"
-        "document.getElementById('fitTty').onclick=fitHostTty;"
-        "document.getElementById('clearTerm').onclick=()=>{term.clear();focusTerminal()};"
-        "document.getElementById('fullscreenBtn').onclick=toggleFullscreen;"
-        "const keys=document.getElementById('keys'),menuBtn=document.getElementById('menuBtn'),rotateWifi=document.getElementById('rotateWifi');"
-        "function closeMenu(){keys.classList.remove('open');menuBtn.blur()}"
-        "menuBtn.onclick=()=>keys.classList.toggle('open');document.getElementById('closeMenuBtn').onclick=closeMenu;document.getElementById('diagnosticsBtn').onclick=openDiagnostics;document.getElementById('closeDiagnostics').onclick=closeDiagnostics;diagBackdrop.onclick=closeDiagnostics;keys.onmouseleave=closeMenu;keys.onblur=e=>{if(!keys.contains(e.relatedTarget))closeMenu()};addEventListener('keydown',e=>{if(e.key==='Escape'){closeMenu();closeDiagnostics()}});state.tabIndex=0;state.onclick=()=>{state.classList.add('expanded');renderStreamLabel()};state.onmouseleave=()=>{state.classList.remove('expanded');state.blur();renderStreamLabel()};state.onfocus=renderStreamLabel;state.onblur=()=>{state.classList.remove('expanded');renderStreamLabel()};"
-        "rotateWifi.onclick=async()=>{if(confirm('WiFi password will rotate now. The ESP32 will reboot automatically. Continue?')){await post('/api/credentials/rotate')}};"
-        "document.getElementById('panic').onclick=async()=>{if(confirm('Emergency lock blocks terminal input. Press PWR to unlock. Continue?')){const ok=await post('/api/emergency-lock');if(ok){locked=true;setStream('Input locked; press PWR to unlock',false);render();closeMenu();focusTerminal()}}};"
-        "render();refreshStatus();setInterval(refreshStatus,2000);setInterval(checkConsoleSilence,1000);connect();term.focus();"
-        "</script></body></html>"), TAG, "terminal script chunk failed");
-    return httpd_resp_sendstr_chunk(req, NULL);
-}
-
-static esp_err_t terminal_status_handler(httpd_req_t *req)
-{
-    web_route_trace_mark("/terminal-status", "enter");
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!request_authenticated(req, session_token)) {
-        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "auth required");
-    }
-
-    const usb_console_status_t usb = usb_console_get_status();
-    const demo_serial_runtime_status_t demo = demo_serial_runtime_get_status();
-    web_security_writer_state_t writer = web_security_writer_state(&s_security, session_token, now_ms());
-    if (runtime_status_is_locked()) {
-        writer = WEB_SECURITY_WRITER_INVALID_SESSION;
-    }
-    runtime_status_set_writer_active(writer == WEB_SECURITY_WRITER_ACTIVE);
-
-    char body[192];
-    const int written = snprintf(
-        body,
-        sizeof(body),
-        "{\"usb_connected\":%s,\"demo_active\":%s,\"demo_bytes\":%llu,\"writer_state\":\"%s\"}",
-        usb.connected ? "true" : "false",
-        demo.active ? "true" : "false",
-        (unsigned long long)demo.bytes_emitted,
-        writer_state_name(writer));
-    if (written < 0 || written >= (int)sizeof(body)) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "terminal status overflow");
-    }
-
-    send_no_store_headers(req);
-    httpd_resp_set_type(req, "application/json");
-    web_route_trace_mark("/terminal-status", "done");
-    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
-}
-
-static esp_err_t demo_start_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(
-        require_mutating_auth_csrf_origin(req, "demo start rejected: origin", "demo start rejected: csrf", session_token),
-        TAG,
-        "demo start auth failed");
-
-    xSemaphoreTake(s_demo_writer_lock, portMAX_DELAY);
-    const usb_console_status_t usb = usb_console_get_status();
-    const web_security_writer_state_t writer = web_security_writer_state(&s_security, session_token, now_ms());
-    if (!web_demo_policy_can_start(usb.connected, writer)) {
-        xSemaphoreGive(s_demo_writer_lock);
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "demo serial start rejected: unsafe state");
-        httpd_resp_set_status(req, "409 Conflict");
-        return httpd_resp_send(req, "demo unavailable while USB or writer is active", HTTPD_RESP_USE_STRLEN);
-    }
-    const esp_err_t err = demo_serial_runtime_enable(false);
-    xSemaphoreGive(s_demo_writer_lock);
-    if (err != ESP_OK) {
-        httpd_resp_set_status(req, "409 Conflict");
-        return httpd_resp_send(req, "demo unavailable while USB or writer is active", HTTPD_RESP_USE_STRLEN);
-    }
-    return httpd_resp_sendstr(req, "ok");
-}
-
-static esp_err_t demo_stop_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(
-        require_mutating_auth_csrf_origin(req, "demo stop rejected: origin", "demo stop rejected: csrf", session_token),
-        TAG,
-        "demo stop auth failed");
-
-    demo_serial_runtime_disable();
-    return httpd_resp_sendstr(req, "ok");
-}
-
-static esp_err_t macro_run_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(
-        require_mutating_auth_csrf_origin(req, "macro run rejected: origin", "macro run rejected: csrf", session_token),
-        TAG,
-        "macro run auth failed");
-
-    char body[HTTP_ROUTE_MACRO_RUN_BODY_MAX + 1];
-    ESP_RETURN_ON_ERROR(read_small_body(req, body, sizeof(body)), TAG, "macro body failed");
-
-    char macro_id[32];
-    char confirm[8];
-    const bool parsed = form_value(body, "id", macro_id, sizeof(macro_id)) &&
-                        form_value(body, "confirm", confirm, sizeof(confirm));
-    if (!parsed) {
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing macro confirmation");
-    }
-
-    const web_macro_descriptor_t *macro = web_macro_policy_find(macro_id);
-    const usb_console_status_t usb = usb_console_get_status();
-    const demo_serial_runtime_status_t demo = demo_serial_runtime_get_status();
-    const bool writer_active = !runtime_status_is_locked() && web_security_can_write(&s_security, session_token, now_ms());
-    const bool user_confirmed = strcmp(confirm, "yes") == 0;
-    if (!web_macro_policy_can_run(macro_id, s_macros_enabled, writer_active, usb.connected, demo.active, user_confirmed)) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "macro rejected");
-        httpd_resp_set_status(req, "409 Conflict");
-        return httpd_resp_send(req, "macros disabled or unsafe state", HTTPD_RESP_USE_STRLEN);
-    }
-
-    const size_t command_len = strlen(macro->command);
-    const size_t written = terminal_bridge_submit_input(TERMINAL_BRIDGE_SOURCE_WEB, (const uint8_t *)macro->command, command_len);
-    if (written != command_len) {
-        event_log_append(EVENT_LOG_WARN, now_ms(), "macro partially queued");
-        httpd_resp_set_status(req, "503 Service Unavailable");
-        return httpd_resp_send(req, "macro queue full", HTTPD_RESP_USE_STRLEN);
-    }
-
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), "macro queued");
-    return httpd_resp_sendstr(req, "queued");
-}
-
-static esp_err_t emergency_lock_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(
-        require_mutating_auth_csrf_origin(req, "emergency lock rejected: origin", "emergency lock rejected: csrf", session_token),
-        TAG,
-        "emergency lock auth failed");
-
-    const esp_err_t err = httpd_queue_work(s_server, emergency_lock_work, NULL);
-    if (err != ESP_OK) {
-        event_log_append(EVENT_LOG_ERROR, now_ms(), "emergency lock queue failed");
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "emergency lock failed");
-    }
-    return httpd_resp_sendstr(req, "locking");
-}
-
-static esp_err_t credentials_page_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-    return redirect_to(req, "/terminal");
-}
-
-static esp_err_t credentials_rotate_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(
-        require_mutating_auth_csrf_origin(req, "credential rotation rejected: origin", "credential rotation rejected: csrf", session_token),
-        TAG,
-        "credential rotation auth failed");
-
-    if (s_rotate_credentials == NULL) {
-        event_log_append(EVENT_LOG_ERROR, now_ms(), "credential rotation unavailable");
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "rotation unavailable");
-    }
-
-    char wifi_password[WEB_SECURITY_PASSWORD_MAX_LEN];
-    if (credentials_generate_human_password(wifi_password, sizeof(wifi_password), security_random, NULL) != CREDENTIALS_OK) {
-        secure_zero(wifi_password, sizeof(wifi_password));
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "password generation failed");
-    }
-
-    const web_server_credential_rotation_t rotation = {
-        .wifi_password = wifi_password,
-        .reveal_on_local_display = true,
-        .reboot_required = true,
-    };
-    esp_err_t err = s_rotate_credentials(&rotation, s_rotate_credentials_ctx);
-    if (err == ESP_OK) {
-        web_security_invalidate_all(&s_security);
-    }
-
-    secure_zero(wifi_password, sizeof(wifi_password));
-    if (err != ESP_OK) {
-        event_log_append(EVENT_LOG_ERROR, now_ms(), "credential rotation failed");
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, esp_err_to_name(err));
-    }
-
-    runtime_status_set_writer_active(false);
-    runtime_status_set_locked(true);
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), "credentials rotated");
-    if (xTaskCreate(reboot_task, "wifi_rotate_reboot", 2048, NULL, 5, NULL) != pdPASS) {
-        event_log_append(EVENT_LOG_ERROR, now_ms(), "credential reboot task creation failed");
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "reboot task failed");
-    }
-    send_no_store_headers(req);
-    return httpd_resp_sendstr(req, "WiFi password rotated; rebooting");
-}
-
-static esp_err_t config_page_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!require_auth_or_redirect(req, session_token)) {
-        return ESP_OK;
-    }
-    const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
-    if (csrf == NULL) {
-        return redirect_to(req, "/terminal");
-    }
-
-    char body[3000];
-    const int written = snprintf(
-        body,
-        sizeof(body),
-        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>Serialite Config</title><style>"
-        "*{box-sizing:border-box}body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px;line-height:1.45}"
-        "main{border:1px solid #174436;border-radius:18px;padding:18px;background:#030807;max-width:760px;width:100%%}"
-        "button,textarea{font:inherit}button{border:1px solid #2ee6b8;border-radius:12px;background:#123d32;color:#bffff0;padding:11px 14px;margin:8px 8px 8px 0}"
-        "textarea{width:100%%;min-height:160px;background:#000;color:#e9fff8;border:1px solid #245c4c;border-radius:12px;padding:12px}"
-        "a{color:#7dffe1}.warn{color:#ffcf7a}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><main>"
-        "<h1>Configuration</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/config.json\">Export JSON</a></p>"
-        "<p class=\"warn\">Export excludes WiFi password and serial data. Import validates schema and checksum, then requires reboot to apply AP changes.</p>"
-        "<textarea id=\"cfg\" placeholder=\"Paste serialite config JSON here\"></textarea>"
-        "<p><button id=\"load\">Load current export</button><button id=\"import\">Import config</button></p><pre id=\"out\"></pre><script>"
-        "const CSRF='%s',out=document.getElementById('out'),cfg=document.getElementById('cfg');"
-        "function say(s){out.textContent+=s+'\\n'}"
-        "document.getElementById('load').onclick=async()=>{const r=await fetch('/config.json'),t=await r.text();"
-        "if(!r.ok||!(r.headers.get('content-type')||'').includes('application/json')){say('export failed: '+r.status+' '+t);return}"
-        "cfg.value=t;say(r.status+' export loaded')};"
-        "document.getElementById('import').onclick=async()=>{if(!confirm('Import non-secret config and require reboot?'))return;"
-        "const r=await fetch('/api/config/import',{method:'POST',headers:{'X-CSRF-Token':CSRF,'Content-Type':'application/json'},body:cfg.value});say(r.status+' '+await r.text())};"
-        "</script></main></body></html>",
-        csrf);
-    if (written < 0 || written >= (int)sizeof(body)) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config page overflow");
-    }
-
-    send_no_store_headers(req);
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
-}
-
-static esp_err_t config_json_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!require_auth_or_redirect(req, session_token)) {
-        return ESP_OK;
-    }
-    if (s_export_config == NULL) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config export unavailable");
-    }
-
-    char body[HTTP_ROUTE_CONFIG_IMPORT_BODY_MAX];
-    const esp_err_t err = s_export_config(body, sizeof(body), s_config_ctx);
-    if (err != ESP_OK) {
-        event_log_append(EVENT_LOG_ERROR, now_ms(), "config export failed");
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, esp_err_to_name(err));
-    }
-
-    send_no_store_headers(req);
-    httpd_resp_set_type(req, "application/json");
-    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
-}
-
-static esp_err_t config_import_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(
-        require_mutating_auth_csrf_origin(req, "config import rejected: origin", "config import rejected: csrf", session_token),
-        TAG,
-        "config import auth failed");
-    if (s_import_config == NULL) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config import unavailable");
-    }
-
-    char body[HTTP_ROUTE_CONFIG_IMPORT_BODY_MAX + 1U];
-    esp_err_t err = read_small_body(req, body, sizeof(body));
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    err = s_import_config(body, s_config_ctx);
-    secure_zero(body, sizeof(body));
-    if (err != ESP_OK) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "config import rejected");
-        if (err != ESP_ERR_INVALID_ARG) {
-            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "import failed: config could not be saved safely; no changes saved");
-        }
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "import rejected: invalid JSON, schema, checksum, or unsupported value; no changes saved");
-    }
-
-    s_credential_reboot_pending = true;
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), "config imported; reboot pending");
-    send_no_store_headers(req);
-    return httpd_resp_sendstr(req, "config imported; reboot required to apply AP settings");
+        web_session_end(NULL);
+    }
+    g_web.locked = locked;
+    status_update(apply_locked, locked ? 1U : 0U);
+    event_log_append(EVENT_LOG_SECURITY, web_now_ms(), locked ? "emergency lock engaged" : "emergency lock released");
 }
 
 static void reboot_task(void *arg)
 {
     (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(250));
+    vTaskDelay(pdMS_TO_TICKS(WEB_REBOOT_DELAY_MS));
     esp_restart();
 }
 
-static esp_err_t ota_page_handler(httpd_req_t *req)
+void web_schedule_reboot(void)
 {
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!require_auth_or_redirect(req, session_token)) {
-        return ESP_OK;
-    }
-    const char *csrf = web_security_csrf_for_session(&s_security, session_token, now_ms());
-    if (csrf == NULL) {
-        return redirect_to(req, "/terminal");
-    }
-
-    const ota_update_status_t ota = ota_update_get_status();
-    char body[3600];
-    const int written = snprintf(
-        body,
-        sizeof(body),
-        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>Serialite OTA</title><style>"
-        "*{box-sizing:border-box}body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px;line-height:1.45}"
-        "main{border:1px solid #174436;border-radius:18px;padding:18px;background:#030807;max-width:760px;width:100%%}"
-        "button,input{font:inherit}button{border:1px solid #2ee6b8;border-radius:12px;background:#123d32;color:#bffff0;padding:11px 14px;margin:8px 8px 8px 0}"
-        "button:disabled{opacity:.45}button.danger{border-color:#ff875c;color:#ffd2c0;background:#24110c}input[type=file]{max-width:100%%}"
-        "code{color:#bffff0}a{color:#7dffe1}.warn{color:#ffcf7a}@media(max-width:480px){button{display:block;width:100%%}}</style></head><body><main>"
-        "<h1>Firmware update</h1><p><a href=\"/\">Status</a> | <a href=\"/terminal\">Terminal</a> | <a href=\"/about\">About</a></p>"
-        "<p class=\"warn\">Manual local OTA only. Upload a complete ESP-IDF app image built for this board. In production, Secure Boot rejects unsigned or wrongly signed images.</p>"
-        "<dl><dt>State</dt><dd id=\"otaState\">%s</dd><dt>Target slot</dt><dd>%s</dd><dt>Bytes</dt><dd>%u / %u</dd><dt>Last error</dt><dd>%s</dd></dl>"
-        "<input id=\"fw\" type=\"file\" accept=\".bin,application/octet-stream\">"
-        "<p><button id=\"upload\">Upload firmware</button><button class=\"danger\" id=\"reboot\" %s>Reboot to pending image</button></p>"
-        "<pre id=\"out\"></pre><script>"
-        "const CSRF='%s',out=document.getElementById('out'),otaState=document.getElementById('otaState'),reboot=document.getElementById('reboot');let pending=%s;"
-        "function say(s){out.textContent+=s+'\\n'}"
-        "async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'X-CSRF-Token':CSRF,'Content-Type':'application/octet-stream'},body:b});const t=await r.text();say(r.status+' '+t);return r.ok}"
-        "document.getElementById('upload').onclick=async()=>{const f=document.getElementById('fw').files[0];if(!f){say('choose firmware first');return}"
-        "if(f.size===0||f.size>%u){say('invalid size; max %u bytes');return}"
-        "if(!confirm('Install '+f.name+' ('+f.size+' bytes) on the inactive OTA slot?'))return;"
-        "const ok=await post('/api/ota',f);if(ok){pending=true;otaState.textContent='pending reboot';reboot.disabled=false;say('upload accepted; reboot explicitly when ready')}};"
-        "reboot.onclick=async()=>{if(!pending){say('no pending image');return}if(confirm('Reboot Serialite now? Serial bridge will disconnect briefly.'))await post('/api/reboot',null)};"
-        "</script></main></body></html>",
-        ota.in_progress ? "uploading" : (ota.pending_reboot ? "pending reboot" : "idle"),
-        ota.target_label[0] != '\0' ? ota.target_label : "next OTA slot",
-        (unsigned)ota.written_bytes,
-        (unsigned)ota.expected_bytes,
-        esp_err_to_name(ota.last_error),
-        ota_update_policy_reboot_allowed(ota.pending_reboot, ota.in_progress) ? "" : "disabled",
-        csrf,
-        ota_update_policy_reboot_allowed(ota.pending_reboot, ota.in_progress) ? "true" : "false",
-        (unsigned)OTA_UPDATE_MAX_IMAGE_BYTES,
-        (unsigned)OTA_UPDATE_MAX_IMAGE_BYTES);
-    if (written < 0 || written >= (int)sizeof(body)) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota page overflow");
-    }
-
-    send_no_store_headers(req);
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
-}
-
-static esp_err_t ota_upload_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(
-        require_mutating_auth_csrf_origin(req, "ota upload rejected: origin", "ota upload rejected: csrf", session_token),
-        TAG,
-        "ota upload auth failed");
-
-    const ota_update_status_t status = ota_update_get_status();
-    const ota_update_policy_result_t policy = ota_update_policy_evaluate(req->content_len, status.in_progress);
-    if (policy != OTA_UPDATE_POLICY_ACCEPT) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), ota_update_policy_result_name(policy));
-        if (policy == OTA_UPDATE_POLICY_REJECT_BUSY) {
-            httpd_resp_set_status(req, "409 Conflict");
-            return httpd_resp_send(req, "ota busy", HTTPD_RESP_USE_STRLEN);
-        }
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, ota_update_policy_result_name(policy));
-    }
-
-    ota_update_session_t session = {0};
-    esp_err_t err = ota_update_begin(req->content_len, &session);
-    if (err != ESP_OK) {
-        event_log_append(EVENT_LOG_ERROR, now_ms(), "ota begin failed");
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, esp_err_to_name(err));
-    }
-
-    uint8_t buf[WEB_OTA_RECV_CHUNK];
-    size_t received = 0;
-    unsigned consecutive_timeouts = 0;
-    const uint64_t upload_start_ms = now_ms();
-    while (received < req->content_len) {
-        if (ota_update_policy_deadline_exceeded(upload_start_ms, now_ms())) {
-            ota_update_abort(&session);
-            event_log_append(EVENT_LOG_ERROR, now_ms(), "ota upload deadline exceeded");
-            httpd_resp_set_status(req, "408 Request Timeout");
-            return httpd_resp_send(req, "upload deadline exceeded", HTTPD_RESP_USE_STRLEN);
-        }
-        const size_t remaining = req->content_len - received;
-        const size_t want = remaining > sizeof(buf) ? sizeof(buf) : remaining;
-        const int got = httpd_req_recv(req, (char *)buf, want);
-        if (got == HTTPD_SOCK_ERR_TIMEOUT) {
-            consecutive_timeouts++;
-            if (ota_update_policy_timeout_exhausted(consecutive_timeouts)) {
-                ota_update_abort(&session);
-                event_log_append(EVENT_LOG_ERROR, now_ms(), "ota upload timed out");
-                httpd_resp_set_status(req, "408 Request Timeout");
-                return httpd_resp_send(req, "upload timed out", HTTPD_RESP_USE_STRLEN);
-            }
-            continue;
-        }
-        if (got <= 0) {
-            ota_update_abort(&session);
-            event_log_append(EVENT_LOG_ERROR, now_ms(), "ota upload read failed");
-            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload read failed");
-        }
-        consecutive_timeouts = 0;
-        err = ota_update_write(&session, buf, (size_t)got);
-        if (err != ESP_OK) {
-            ota_update_abort(&session);
-            event_log_append(EVENT_LOG_ERROR, now_ms(), "ota write failed");
-            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, esp_err_to_name(err));
-        }
-        received += (size_t)got;
-    }
-    memset(buf, 0, sizeof(buf));
-
-    err = ota_update_finish(&session);
-    if (err != ESP_OK) {
-        event_log_append(EVENT_LOG_ERROR, now_ms(), "ota validation failed");
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, esp_err_to_name(err));
-    }
-
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), "ota image accepted; reboot pending");
-    send_no_store_headers(req);
-    return httpd_resp_sendstr(req, "ota accepted; reboot required");
-}
-
-static esp_err_t reboot_handler(httpd_req_t *req)
-{
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    ESP_RETURN_ON_ERROR(
-        require_mutating_auth_csrf_origin(req, "reboot rejected: origin", "reboot rejected: csrf", session_token),
-        TAG,
-        "reboot auth failed");
-
-    const ota_update_status_t ota = ota_update_get_status();
-    if (!ota_update_policy_reboot_allowed(ota.pending_reboot, ota.in_progress) && !s_credential_reboot_pending) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "reboot rejected: no pending action");
-        httpd_resp_set_status(req, "409 Conflict");
-        return httpd_resp_send(req, "no pending reboot action", HTTPD_RESP_USE_STRLEN);
-    }
     if (xTaskCreate(reboot_task, "web_reboot", 2048, NULL, 5, NULL) != pdPASS) {
-        event_log_append(EVENT_LOG_ERROR, now_ms(), "reboot task creation failed");
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "reboot task failed");
+        ESP_LOGE(TAG, "reboot task creation failed; restarting now");
+        esp_restart();
     }
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), "manual reboot requested");
-    send_no_store_headers(req);
-    return httpd_resp_sendstr(req, "rebooting");
 }
 
-static esp_err_t diagnostics_handler(httpd_req_t *req)
+/* ---- dispatcher --------------------------------------------------------- */
+
+static bool header_value(httpd_req_t *req, const char *name, char *out, size_t out_size)
 {
-    web_route_trace_mark("/diagnostics", "enter");
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!require_auth_or_redirect(req, session_token)) {
-        return ESP_OK;
-    }
-
-    const usb_console_status_t usb = usb_console_get_status();
-    const wifi_ap_status_t wifi = wifi_ap_get_status();
-    const terminal_bridge_status_t bridge = terminal_bridge_get_status();
-    const event_log_status_t log_status = event_log_get_status();
-    event_log_entry_t events[WEB_DIAG_EVENT_LIMIT];
-    const size_t event_count = event_log_snapshot(events, WEB_DIAG_EVENT_LIMIT);
-
-    char body[4096];
-    int written = snprintf(
-        body,
-        sizeof(body),
-        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>Serialite Diagnostics</title><style>"
-        "body{background:#050b09;color:#e9fff8;font:15px sans-serif;margin:20px}"
-        "code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}"
-        ".card{border:1px solid #174436;border-radius:16px;padding:14px;margin:12px 0;background:#030807}"
-        ".back{display:inline-block;border:1px solid #7dffe1;border-radius:999px;padding:9px 13px;color:#e9fff8;text-decoration:none;background:#0a1813;font-weight:700}"
-        "dt{color:#7dffe1}dd{margin:0 0 8px 0}</style></head><body>"
-        "<p><a class=\"back\" href=\"/terminal\">Back to terminal</a></p>"
-        "<h1>Diagnostics</h1><p><a href=\"/\">Status</a> | <a href=\"/runbook\">Runbook</a> | <a href=\"/diagnostics.json\">JSON</a></p>"
-        "<section class=\"card\"><h2>Runtime</h2><dl>"
-        "<dt>Uptime ms</dt><dd>%llu</dd>"
-        "<dt>Reset reason</dt><dd>%d</dd>"
-        "<dt>Heap free</dt><dd>%u</dd>"
-        "<dt>Heap minimum</dt><dd>%u</dd>"
-        "<dt>Event log retained/written/dropped</dt><dd>%u / %u / %u</dd>"
-        "</dl></section>"
-        "<section class=\"card\"><h2>Network and USB</h2><dl>"
-        "<dt>AP</dt><dd>%s %s clients=%u</dd>"
-        "<dt>USB</dt><dd>%s rx=%llu tx=%llu</dd>"
-        "<dt>Bridge</dt><dd>usb_rx=%llu usb_tx=%llu drop_rx=%llu drop_tx=%llu subscribers=%u scrollback=%u/%u dropped_old=%llu</dd>"
-        "</dl></section>"
-        "<section class=\"card\"><h2>Recent events</h2><pre>",
-        (unsigned long long)now_ms(),
-        (int)esp_reset_reason(),
-        (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-        (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
-        (unsigned)log_status.retained,
-        (unsigned)log_status.written,
-        (unsigned)log_status.dropped_oldest,
-        wifi.started ? "active" : "inactive",
-        wifi.ip_addr,
-        wifi.connected_clients,
-        usb.connected ? "connected" : "disconnected",
-        (unsigned long long)usb.bytes_received,
-        (unsigned long long)usb.bytes_sent,
-        (unsigned long long)bridge.bytes_from_usb,
-        (unsigned long long)bridge.bytes_to_usb,
-        (unsigned long long)bridge.dropped_from_usb,
-        (unsigned long long)bridge.dropped_to_usb,
-        (unsigned)bridge.subscriber_count,
-        (unsigned)bridge.scrollback_retained,
-        (unsigned)bridge.scrollback_capacity,
-        (unsigned long long)bridge.scrollback_dropped_oldest);
-    if (written < 0 || written >= (int)sizeof(body)) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "diagnostics overflow");
-    }
-
-    for (size_t i = 0; i < event_count; ++i) {
-        const int remaining = (int)sizeof(body) - written;
-        if (remaining <= 1) {
-            break;
-        }
-        char escaped_message[EVENT_LOG_MESSAGE_MAX * 6];
-        if (diagnostics_export_write_html_escaped(escaped_message, sizeof(escaped_message), events[i].message) < 0) {
-            strncpy(escaped_message, "[event message unavailable]", sizeof(escaped_message) - 1);
-            escaped_message[sizeof(escaped_message) - 1] = '\0';
-        }
-
-        const int add = snprintf(
-            body + written,
-            (size_t)remaining,
-            "#%u %llums [%s] %s\n",
-            (unsigned)events[i].sequence,
-            (unsigned long long)events[i].timestamp_ms,
-            level_name(events[i].level),
-            escaped_message);
-        if (add < 0 || add >= remaining) {
-            break;
-        }
-        written += add;
-    }
-
-    const char tail[] = "</pre></section><p><a class=\"back\" href=\"/terminal\">Back to terminal</a></p></body></html>";
-    if ((size_t)written + sizeof(tail) > sizeof(body)) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "diagnostics overflow");
-    }
-    memcpy(body + written, tail, sizeof(tail));
-
-    send_no_store_headers(req);
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    web_route_trace_mark("/diagnostics", "done");
-    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+    out[0] = '\0';
+    return httpd_req_get_hdr_value_str(req, name, out, out_size) == ESP_OK;
 }
 
-static esp_err_t diagnostics_json_handler(httpd_req_t *req)
+/*
+ * Reads every header the guard needs before anything is sent: once a response
+ * starts, httpd drops the request headers.
+ */
+static web_guard_facts_t gather_facts(web_request_t *r, char host[WEB_HEADER_VALUE_MAX])
 {
-    web_route_trace_mark("/diagnostics.json", "enter");
-    ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-    ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
+    char origin[WEB_HEADER_VALUE_MAX];
+    char cookie[WEB_COOKIE_HEADER_MAX];
+    char csrf[WEB_HEADER_VALUE_MAX];
+    char token[WEB_SECURITY_TOKEN_BUF_LEN];
+    const uint64_t now = web_now_ms();
 
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!request_authenticated(req, session_token)) {
-        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "auth required");
-    }
-
-    const usb_console_status_t usb = usb_console_get_status();
-    const wifi_ap_status_t wifi = wifi_ap_get_status();
-    const terminal_bridge_status_t bridge = terminal_bridge_get_status();
-    event_log_entry_t events[WEB_DIAG_EVENT_LIMIT];
-    const size_t event_count = event_log_snapshot(events, WEB_DIAG_EVENT_LIMIT);
-
-    const diagnostics_export_snapshot_t snapshot = {
-        .uptime_ms = now_ms(),
-        .reset_reason = (int)esp_reset_reason(),
-        .heap_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-        .heap_minimum = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
-        .event_log = event_log_get_status(),
-        .ap_started = wifi.started,
-        .ap_ip = wifi.ip_addr,
-        .wifi_clients = wifi.connected_clients,
-        .usb_connected = usb.connected,
-        .usb_bytes_received = usb.bytes_received,
-        .usb_bytes_sent = usb.bytes_sent,
-        .bridge_bytes_from_usb = bridge.bytes_from_usb,
-        .bridge_bytes_to_usb = bridge.bytes_to_usb,
-        .bridge_dropped_from_usb = bridge.dropped_from_usb,
-        .bridge_dropped_to_usb = bridge.dropped_to_usb,
-        .bridge_subscribers = bridge.subscriber_count,
-        .events = events,
-        .event_count = event_count,
+    web_guard_facts_t facts = {
+        .rate_limited = http_rate_limit_evaluate(&g_web.rate_limit, now) != HTTP_RATE_LIMIT_ACCEPT,
+        .host_allowed = header_value(r->req, "Host", host, WEB_HEADER_VALUE_MAX) &&
+                        web_request_host_allowed(&g_web.site, host),
+        .origin_allowed = header_value(r->req, "Origin", origin, sizeof(origin)) &&
+                          web_request_origin_allowed(&g_web.site, origin),
+        .locked = g_web.locked,
+        .body_len = r->req->content_len,
     };
-
-    char body[4096];
-    if (diagnostics_export_write_json(body, sizeof(body), &snapshot) < 0) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "diagnostics json overflow");
+    if (header_value(r->req, "Cookie", cookie, sizeof(cookie)) &&
+        web_request_cookie_value(cookie, WEB_SESSION_COOKIE, token, sizeof(token)) &&
+        web_security_touch(&g_web.security, token, now)) {
+        facts.session_valid = true;
+        strlcpy(r->session_token, token, sizeof(r->session_token));
+        facts.csrf_valid = header_value(r->req, "X-CSRF-Token", csrf, sizeof(csrf)) &&
+                           web_security_csrf_valid(&g_web.security, token, csrf, now);
     }
-
-    send_no_store_headers(req);
-    httpd_resp_set_type(req, "application/json");
-    web_route_trace_mark("/diagnostics.json", "done");
-    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+    return facts;
 }
 
-static esp_err_t websocket_handler(httpd_req_t *req)
+static esp_err_t dispatch(httpd_req_t *req)
 {
-    web_route_trace_mark("/ws", "enter");
-    if (req->method == HTTP_GET) {
-        ESP_RETURN_ON_ERROR(enforce_http_rate_limit(req), TAG, "http rate limited");
-        ESP_RETURN_ON_ERROR(validate_route_policy(req), TAG, "route rejected");
-    }
+    const web_route_t *route = (const web_route_t *)req->user_ctx;
+    web_request_t r = {.req = req};
+    char host[WEB_HEADER_VALUE_MAX];
+    const web_guard_facts_t facts = gather_facts(&r, host);
 
-    char session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (req->method == HTTP_GET) {
-        if (!request_authenticated(req, session_token)) {
-            return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "auth required");
+    const web_guard_result_t verdict = web_guard_evaluate(&route->rule, &facts);
+    if (verdict != WEB_GUARD_ALLOW) {
+        char message[EVENT_LOG_MESSAGE_MAX];
+        snprintf(message, sizeof(message), "%s rejected: %s", route->uri, web_guard_result_name(verdict));
+        event_log_append(verdict == WEB_GUARD_REJECT_RATE_LIMIT ? EVENT_LOG_WARN : EVENT_LOG_SECURITY, web_now_ms(), message);
+        r.session_token[0] = '\0';
+        /* Close instead of draining a body the client was not allowed to send. */
+        if (req->content_len > 0) {
+            return web_reply_error_close(&r, web_guard_status(verdict), web_guard_result_name(verdict));
         }
-    } else if (!ws_fd_session_token(httpd_req_to_sockfd(req), session_token) ||
-               !web_security_session_valid(&s_security, session_token, now_ms())) {
-        remove_ws_fd(httpd_req_to_sockfd(req));
-        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "auth required");
+        return web_reply_text(&r, web_guard_status(verdict), web_guard_result_name(verdict));
     }
 
-    if (req->method == HTTP_GET) {
-        char origin[WEB_HEADER_VALUE_MAX];
-        char host[WEB_HEADER_VALUE_MAX];
-        if (httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) != ESP_OK ||
-            httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) != ESP_OK ||
-            !web_security_origin_allowed(origin, host)) {
-            event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket rejected: origin");
-            return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "invalid origin");
-        }
-
-        const int fd = httpd_req_to_sockfd(req);
-        if (add_ws_fd(fd, session_token) != ESP_OK) {
-            event_log_append(EVENT_LOG_WARN, now_ms(), "websocket rejected: too many clients");
-            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "too many websocket clients");
-        }
-        ESP_LOGI(TAG, "websocket client connected fd=%d", fd);
-        event_log_append(EVENT_LOG_INFO, now_ms(), "websocket client connected");
-        send_scrollback_to_ws_client(fd);
-        web_route_trace_mark("/ws", "done");
-        return ESP_OK;
-    }
-
-    httpd_ws_frame_t frame = {
-        .type = HTTPD_WS_TYPE_BINARY,
-        .payload = NULL,
-        .len = 0,
-    };
-    ESP_RETURN_ON_ERROR(httpd_ws_recv_frame(req, &frame, 0), TAG, "ws frame header failed");
-    if (frame.len > WEB_INPUT_POLICY_FRAME_MAX) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input rejected: frame too large");
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "websocket frame too large");
-    }
-
-    uint8_t payload[WEB_INPUT_POLICY_FRAME_MAX];
-    frame.payload = payload;
-    ESP_RETURN_ON_ERROR(httpd_ws_recv_frame(req, &frame, frame.len), TAG, "ws frame payload failed");
-    if (frame.type == HTTPD_WS_TYPE_CLOSE) {
-        remove_ws_fd(httpd_req_to_sockfd(req));
-        event_log_append(EVENT_LOG_INFO, now_ms(), "websocket client closed");
-        web_route_trace_mark("/ws", "done");
-        return ESP_OK;
-    }
-    if (frame.type != HTTPD_WS_TYPE_BINARY && frame.type != HTTPD_WS_TYPE_TEXT) {
-        web_route_trace_mark("/ws", "done");
-        return ESP_OK;
-    }
-
-    if (runtime_status_is_locked() || !web_security_can_write(&s_security, session_token, now_ms())) {
-        ESP_LOGW(TAG, "dropping websocket input without active session");
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input dropped: inactive session");
-        web_route_trace_mark("/ws", "done");
-        return ESP_OK;
-    }
-    if (demo_serial_runtime_get_status().active) {
-        ESP_LOGW(TAG, "dropping websocket input while demo is active");
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input dropped: demo active");
-        web_route_trace_mark("/ws", "done");
-        return ESP_OK;
-    }
-
-    const web_input_policy_result_t policy = web_input_policy_evaluate(&s_input_policy, frame.len, now_ms());
-    if (policy != WEB_INPUT_POLICY_ACCEPT) {
-        ESP_LOGW(TAG, "dropping websocket input: %s", web_input_policy_result_name(policy));
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "websocket input rejected by policy");
-        web_route_trace_mark("/ws", "done");
-        return ESP_OK;
-    }
-
-    const size_t written = terminal_bridge_submit_input(TERMINAL_BRIDGE_SOURCE_WEB, payload, frame.len);
-    if (written < frame.len) {
-        ESP_LOGW(TAG, "bridge input queue full; accepted %u/%u bytes", (unsigned)written, (unsigned)frame.len);
-        event_log_append(EVENT_LOG_WARN, now_ms(), "bridge input queue full");
-    }
-    web_route_trace_mark("/ws", "done");
-    return ESP_OK;
+    build_csp(&r, host);
+    return route->handler(&r);
 }
 
-static esp_err_t http_error_handler(httpd_req_t *req, httpd_err_code_t error)
+static esp_err_t not_found_handler(httpd_req_t *req, httpd_err_code_t error)
 {
-    if (enforce_http_rate_limit(req) != ESP_OK) {
-        return ESP_OK;
-    }
-
-    http_route_policy_result_t result = HTTP_ROUTE_POLICY_REJECT_NOT_FOUND;
-    const char *status = "404 Not Found";
-    const char *message = "not found";
-    if (error == HTTPD_405_METHOD_NOT_ALLOWED) {
-        result = HTTP_ROUTE_POLICY_REJECT_METHOD;
-        status = "405 Method Not Allowed";
-        message = "method not allowed";
-    }
-    event_log_append(EVENT_LOG_SECURITY, now_ms(), http_route_policy_result_name(result));
-    send_no_store_headers(req);
-    httpd_resp_set_status(req, status);
-    httpd_resp_set_type(req, "text/plain; charset=utf-8");
-    return httpd_resp_send(req, message, HTTPD_RESP_USE_STRLEN);
+    web_request_t r = {.req = req};
+    const bool method = error == HTTPD_405_METHOD_NOT_ALLOWED;
+    return web_reply_text(&r, method ? "405 Method Not Allowed" : "404 Not Found", method ? "method not allowed" : "not found");
 }
 
-esp_err_t web_server_start(const web_server_config_t *server_config)
+static void on_socket_close(httpd_handle_t server, int fd)
 {
-    ESP_RETURN_ON_FALSE(server_config != NULL, ESP_ERR_INVALID_ARG, TAG, "missing web config");
-    web_route_trace_report_previous();
+    (void)server;
+    web_ws_on_socket_close(fd);
+    close(fd);
+}
 
-    ESP_RETURN_ON_FALSE(web_security_init_session_only(&s_security), ESP_ERR_INVALID_ARG, TAG, "invalid web session config");
-    web_input_policy_init(&s_input_policy);
-    web_terminal_ansi_init(&s_web_ansi_state);
-    ap_exposure_policy_init(&s_ap_exposure_policy);
-    http_rate_limit_init(&s_http_rate_limit);
-    s_http_rate_limit_lock = xSemaphoreCreateMutexStatic(&s_http_rate_limit_lock_storage);
-    ESP_RETURN_ON_FALSE(s_http_rate_limit_lock != NULL, ESP_ERR_NO_MEM, TAG, "http rate lock failed");
-    s_ws_fds_lock = xSemaphoreCreateMutexStatic(&s_ws_fds_lock_storage);
-    ESP_RETURN_ON_FALSE(s_ws_fds_lock != NULL, ESP_ERR_NO_MEM, TAG, "websocket fd lock failed");
-    s_demo_writer_lock = xSemaphoreCreateMutexStatic(&s_demo_writer_lock_storage);
-    ESP_RETURN_ON_FALSE(s_demo_writer_lock != NULL, ESP_ERR_NO_MEM, TAG, "demo writer lock failed");
-    event_log_init();
-    event_log_append(EVENT_LOG_INFO, now_ms(), "web server starting");
-    s_rotate_credentials = server_config->rotate_credentials;
-    s_rotate_credentials_ctx = server_config->rotate_credentials_ctx;
-    s_export_config = server_config->export_config;
-    s_import_config = server_config->import_config;
-    s_config_ctx = server_config->config_ctx;
-    s_macros_enabled = web_macro_policy_default_enabled();
+/* ---- lifecycle ---------------------------------------------------------- */
 
-    if (!wifi_ap_get_status().started) {
-        return ESP_ERR_INVALID_STATE;
+static esp_err_t start_httpd(const web_server_config_t *config)
+{
+    if (config->tls_identity != NULL) {
+        httpd_ssl_config_t https = HTTPD_SSL_CONFIG_DEFAULT();
+        https.httpd.stack_size = WEB_HTTPD_STACK_SIZE;
+        https.httpd.max_uri_handlers = WEB_HTTPD_MAX_URI_HANDLERS;
+        https.httpd.max_open_sockets = WEB_HTTPD_MAX_SOCKETS;
+        https.httpd.lru_purge_enable = true;
+        https.httpd.close_fn = on_socket_close;
+        https.port_secure = g_web.site.port;
+        https.servercert = (const uint8_t *)config->tls_identity->cert_pem;
+        https.servercert_len = config->tls_identity->cert_pem_len + 1U;
+        https.prvtkey_pem = (const uint8_t *)config->tls_identity->key_pem;
+        https.prvtkey_len = config->tls_identity->key_pem_len + 1U;
+        return httpd_ssl_start(&g_web.server, &https);
     }
 
-    httpd_handle_t server = NULL;
-    bool tls_server = false;
-    if (server_config->tls_identity != NULL) {
-        const https_fingerprint_policy_request_t https_policy = {
-            .requested = true,
-            .certificate_present = server_config->tls_identity->cert_pem_len > 0U &&
-                                   server_config->tls_identity->key_pem_len > 0U,
-            .fingerprint_displayed_locally = server_config->tls_fingerprint_displayed_locally,
-            .operator_acknowledged_fingerprint = false,
-        };
-        const https_fingerprint_policy_result_t https_result = https_fingerprint_policy_can_start_listener(&https_policy);
-        if (https_result == HTTPS_FINGERPRINT_POLICY_ALLOW) {
-            httpd_ssl_config_t https_config = HTTPD_SSL_CONFIG_DEFAULT();
-            https_config.httpd.lru_purge_enable = true;
-            https_config.httpd.max_uri_handlers = WEB_HTTPD_MAX_URI_HANDLERS;
-            https_config.httpd.stack_size = WEB_HTTPD_STACK_SIZE;
-            https_config.servercert = (const uint8_t *)server_config->tls_identity->cert_pem;
-            https_config.servercert_len = server_config->tls_identity->cert_pem_len + 1U;
-            https_config.prvtkey_pem = (const uint8_t *)server_config->tls_identity->key_pem;
-            https_config.prvtkey_len = server_config->tls_identity->key_pem_len + 1U;
-            const esp_err_t tls_err = httpd_ssl_start(&server, &https_config);
-            if (tls_err == ESP_OK) {
-                tls_server = true;
-                event_log_append(EVENT_LOG_INFO, now_ms(), "https server started");
-            } else {
-                ESP_LOGE(TAG, "https start failed after displaying fingerprint: %s", esp_err_to_name(tls_err));
-                event_log_append(EVENT_LOG_ERROR, now_ms(), "https start failed after fingerprint display");
-                return tls_err;
-            }
-        } else {
-            ESP_LOGW(TAG, "https disabled by policy: %s", https_fingerprint_policy_result_name(https_result));
-            event_log_append(EVENT_LOG_WARN, now_ms(), "https disabled by policy");
-        }
-    }
-    if (server == NULL) {
-        httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
+    httpd_config_t http = HTTPD_DEFAULT_CONFIG();
+    http.server_port = g_web.site.port;
 #ifdef CONFIG_IDF_TARGET_LINUX
-        http_config.server_port = 8080;
-        http_config.stack_size = 64 * 1024;
+    http.stack_size = 64 * 1024;
 #else
-        http_config.stack_size = WEB_HTTPD_STACK_SIZE;
+    http.stack_size = WEB_HTTPD_STACK_SIZE;
 #endif
-        http_config.lru_purge_enable = true;
-        http_config.max_uri_handlers = WEB_HTTPD_MAX_URI_HANDLERS;
-        ESP_RETURN_ON_ERROR(httpd_start(&server, &http_config), TAG, "httpd_start failed");
-    }
-    s_server = server;
-    s_server_tls = tls_server;
-    runtime_status_set_started(true);
-    runtime_status_set_tls_active(tls_server);
-    runtime_status_set_locked(false);
-    runtime_status_set_writer_active(false);
-    for (size_t i = 0; i < WEB_MAX_WS_CLIENTS; ++i) {
-        s_ws_clients[i].fd = -1;
-        memset(s_ws_clients[i].session_token, 0, sizeof(s_ws_clients[i].session_token));
-    }
-    s_tx_queue = xQueueCreate(WEB_TX_QUEUE_DEPTH, sizeof(web_tx_chunk_t));
-    if (s_tx_queue == NULL) {
-        cleanup_failed_start(server);
-        return ESP_ERR_NO_MEM;
-    }
+    http.max_uri_handlers = WEB_HTTPD_MAX_URI_HANDLERS;
+    http.max_open_sockets = WEB_HTTPD_MAX_SOCKETS;
+    http.lru_purge_enable = true;
+    http.close_fn = on_socket_close;
+    return httpd_start(&g_web.server, &http);
+}
 
-    const httpd_uri_t index_uri = {
-        .uri = "/",
-        .method = HTTP_GET,
-        .handler = index_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t xterm_js_uri = {
-        .uri = "/assets/xterm.js",
-        .method = HTTP_GET,
-        .handler = xterm_js_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t xterm_css_uri = {
-        .uri = "/assets/xterm.css",
-        .method = HTTP_GET,
-        .handler = xterm_css_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t terminal_uri = {
-        .uri = "/terminal",
-        .method = HTTP_GET,
-        .handler = terminal_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t terminal_status_uri = {
-        .uri = "/terminal-status.json",
-        .method = HTTP_GET,
-        .handler = terminal_status_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t about_uri = {
-        .uri = "/about",
-        .method = HTTP_GET,
-        .handler = about_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t runbook_uri = {
-        .uri = "/runbook",
-        .method = HTTP_GET,
-        .handler = runbook_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t ota_page_uri = {
-        .uri = "/ota",
-        .method = HTTP_GET,
-        .handler = ota_page_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t credentials_page_uri = {
-        .uri = "/credentials",
-        .method = HTTP_GET,
-        .handler = credentials_page_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t config_page_uri = {
-        .uri = "/config",
-        .method = HTTP_GET,
-        .handler = config_page_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t config_json_uri = {
-        .uri = "/config.json",
-        .method = HTTP_GET,
-        .handler = config_json_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t macros_page_uri = {
-        .uri = "/macros",
-        .method = HTTP_GET,
-        .handler = macros_page_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t credentials_rotate_uri = {
-        .uri = "/api/credentials/rotate",
-        .method = HTTP_POST,
-        .handler = credentials_rotate_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t config_import_uri = {
-        .uri = "/api/config/import",
-        .method = HTTP_POST,
-        .handler = config_import_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t macro_run_uri = {
-        .uri = "/api/macros/run",
-        .method = HTTP_POST,
-        .handler = macro_run_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t ota_upload_uri = {
-        .uri = "/api/ota",
-        .method = HTTP_POST,
-        .handler = ota_upload_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t reboot_uri = {
-        .uri = "/api/reboot",
-        .method = HTTP_POST,
-        .handler = reboot_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t diagnostics_uri = {
-        .uri = "/diagnostics",
-        .method = HTTP_GET,
-        .handler = diagnostics_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t diagnostics_json_uri = {
-        .uri = "/diagnostics.json",
-        .method = HTTP_GET,
-        .handler = diagnostics_json_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t logout_uri = {
-        .uri = "/logout",
-        .method = HTTP_POST,
-        .handler = logout_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t emergency_lock_uri = {
-        .uri = "/api/emergency-lock",
-        .method = HTTP_POST,
-        .handler = emergency_lock_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t demo_start_uri = {
-        .uri = "/api/demo/start",
-        .method = HTTP_POST,
-        .handler = demo_start_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t demo_stop_uri = {
-        .uri = "/api/demo/stop",
-        .method = HTTP_POST,
-        .handler = demo_stop_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t ws_uri = {
+static esp_err_t register_routes(void)
+{
+    for (size_t i = 0; i < sizeof(ROUTES) / sizeof(ROUTES[0]); ++i) {
+        const httpd_uri_t uri = {
+            .uri = ROUTES[i].uri,
+            .method = ROUTES[i].method,
+            .handler = dispatch,
+            .user_ctx = (void *)&ROUTES[i],
+        };
+        ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_web.server, &uri), TAG, "register %s failed", ROUTES[i].uri);
+    }
+    const httpd_uri_t ws = {
         .uri = "/ws",
         .method = HTTP_GET,
-        .handler = websocket_handler,
-        .user_ctx = NULL,
+        .handler = web_ws_handler,
         .is_websocket = true,
     };
-
-    esp_err_t ret = ESP_OK;
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &index_uri), fail, TAG, "index handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &xterm_js_uri), fail, TAG, "xterm js handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &xterm_css_uri), fail, TAG, "xterm css handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &logout_uri), fail, TAG, "logout handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &terminal_uri), fail, TAG, "terminal handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &terminal_status_uri), fail, TAG, "terminal status handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &about_uri), fail, TAG, "about handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &runbook_uri), fail, TAG, "runbook handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &credentials_page_uri), fail, TAG, "credentials page handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &config_page_uri), fail, TAG, "config page handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &config_json_uri), fail, TAG, "config json handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &macros_page_uri), fail, TAG, "macros page handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ota_page_uri), fail, TAG, "ota page handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_uri), fail, TAG, "diagnostics handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &diagnostics_json_uri), fail, TAG, "diagnostics json handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &emergency_lock_uri), fail, TAG, "emergency lock handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &demo_start_uri), fail, TAG, "demo start handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &demo_stop_uri), fail, TAG, "demo stop handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ota_upload_uri), fail, TAG, "ota upload handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &reboot_uri), fail, TAG, "reboot handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &credentials_rotate_uri), fail, TAG, "credentials rotate handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &config_import_uri), fail, TAG, "config import handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &macro_run_uri), fail, TAG, "macro run handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_uri_handler(server, &ws_uri), fail, TAG, "websocket handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, http_error_handler), fail, TAG, "404 handler failed");
-    ESP_GOTO_ON_ERROR(httpd_register_err_handler(server, HTTPD_405_METHOD_NOT_ALLOWED, http_error_handler), fail, TAG, "405 handler failed");
-    BaseType_t task_ok = xTaskCreate(web_tx_task, "web_tx", 4096, NULL, 3, &s_web_tx_task);
-    ESP_GOTO_ON_FALSE(task_ok == pdPASS, ESP_ERR_NO_MEM, fail, TAG, "web tx task failed");
-    task_ok = xTaskCreate(ap_guard_task, "ap_guard", WEB_AP_GUARD_TASK_STACK, NULL, WEB_AP_GUARD_TASK_PRIORITY, &s_ap_guard_task);
-    ESP_GOTO_ON_FALSE(task_ok == pdPASS, ESP_ERR_NO_MEM, fail, TAG, "ap guard task failed");
-    ESP_GOTO_ON_ERROR(terminal_bridge_register_output_callback(bridge_output_cb, NULL), fail, TAG, "bridge callback failed");
-    ESP_GOTO_ON_ERROR(demo_serial_runtime_start(), fail, TAG, "demo serial runtime failed");
-
-    ESP_LOGI(TAG, "%s server started", tls_server ? "HTTPS" : "HTTP");
-    return ESP_OK;
-
-fail:
-    cleanup_failed_start(server);
-    return ret;
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_web.server, &ws), TAG, "register /ws failed");
+    ESP_RETURN_ON_ERROR(httpd_register_err_handler(g_web.server, HTTPD_404_NOT_FOUND, not_found_handler), TAG, "404 handler failed");
+    return httpd_register_err_handler(g_web.server, HTTPD_405_METHOD_NOT_ALLOWED, not_found_handler);
 }
 
-esp_err_t web_server_emergency_lock(void)
+esp_err_t web_server_start(const web_server_config_t *config)
 {
-    if (s_server == NULL) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock ignored before http start");
-        return ESP_OK;
-    }
+    ESP_RETURN_ON_FALSE(config != NULL && config->allowed_hosts != NULL && config->allowed_host_count > 0,
+                        ESP_ERR_INVALID_ARG, TAG, "allowed hosts are required");
+    ESP_RETURN_ON_FALSE(g_web.server == NULL, ESP_ERR_INVALID_STATE, TAG, "already started");
 
-    demo_serial_runtime_disable();
-    const esp_err_t err = httpd_queue_work(s_server, emergency_lock_work, NULL);
+    memset(&g_web, 0, sizeof(g_web));
+    g_web.config = *config;
+    g_web.site = (web_request_site_t){
+        .hosts = config->allowed_hosts,
+        .host_count = config->allowed_host_count,
+        .tls = config->tls_identity != NULL,
+        .port = config->port != 0 ? config->port : (config->tls_identity != NULL ? 443 : 80),
+    };
+    web_security_init(&g_web.security);
+    http_rate_limit_init(&g_web.rate_limit);
+    char elf_sha[WEB_ETAG_MAX];
+    if (esp_app_get_elf_sha256(elf_sha, sizeof(elf_sha)) <= 0) {
+        strlcpy(elf_sha, "serialite", sizeof(elf_sha));
+    }
+    strlcpy(g_web.etag, elf_sha, sizeof(g_web.etag));
+    web_ws_init();
+
+    esp_err_t err = start_httpd(config);
     if (err != ESP_OK) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock queue failed; stopping AP");
-        const esp_err_t stop_err = wifi_ap_stop();
-        if (stop_err != ESP_OK) {
-            ESP_LOGE(TAG, "emergency lock could not stop AP: %s; firmware kept alive for local recovery", esp_err_to_name(stop_err));
-            event_log_append(EVENT_LOG_ERROR, now_ms(), "emergency lock AP stop failed; firmware kept alive");
+        ESP_LOGE(TAG, "%s server start failed: %s", g_web.site.tls ? "HTTPS" : "HTTP", esp_err_to_name(err));
+        g_web.server = NULL;
+        return err;
+    }
+    err = register_routes();
+    if (err == ESP_OK) {
+        err = web_ws_attach_bridge();
+    }
+    if (err != ESP_OK) {
+        if (g_web.site.tls) {
+            (void)httpd_ssl_stop(g_web.server);
+        } else {
+            (void)httpd_stop(g_web.server);
         }
+        g_web.server = NULL;
+        return err;
     }
-    return err;
+
+    portENTER_CRITICAL(&s_status_lock);
+    s_status = (web_server_status_t){.started = true, .tls_active = g_web.site.tls};
+    portEXIT_CRITICAL(&s_status_lock);
+    event_log_append(EVENT_LOG_INFO, web_now_ms(), g_web.site.tls ? "https server started" : "http server started");
+    ESP_LOGI(TAG, "%s server listening on port %u", g_web.site.tls ? "HTTPS" : "HTTP", (unsigned)g_web.site.port);
+    return ESP_OK;
 }
 
-esp_err_t web_server_emergency_lock_toggle(void)
+static void toggle_lock_work(void *arg)
 {
-    if (s_server == NULL) {
-        event_log_append(EVENT_LOG_SECURITY, now_ms(), "emergency lock toggle ignored before http start");
-        return ESP_OK;
-    }
+    (void)arg;
+    web_set_locked(!g_web.locked);
+}
 
-    demo_serial_runtime_disable();
-    const esp_err_t err = httpd_queue_work(
-        s_server,
-        runtime_status_is_locked() ? emergency_unlock_work : emergency_lock_work,
-        NULL);
-    if (err != ESP_OK) {
-        event_log_append(EVENT_LOG_ERROR, now_ms(), "emergency lock toggle queue failed");
-    }
-    return err;
+static void close_clients_work(void *arg)
+{
+    (void)arg;
+    web_ws_close_all();
+}
+
+esp_err_t web_server_toggle_lock(void)
+{
+    ESP_RETURN_ON_FALSE(g_web.server != NULL, ESP_ERR_INVALID_STATE, TAG, "server not running");
+    return httpd_queue_work(g_web.server, toggle_lock_work, NULL);
+}
+
+esp_err_t web_server_close_clients(void)
+{
+    ESP_RETURN_ON_FALSE(g_web.server != NULL, ESP_ERR_INVALID_STATE, TAG, "server not running");
+    return httpd_queue_work(g_web.server, close_clients_work, NULL);
 }
 
 web_server_status_t web_server_get_status(void)
 {
-    web_server_status_t status;
-    portENTER_CRITICAL(&s_runtime_status_lock);
-    status = s_runtime_status;
-    portEXIT_CRITICAL(&s_runtime_status_lock);
-    status.ws_client_count = count_ws_clients();
+    portENTER_CRITICAL(&s_status_lock);
+    const web_server_status_t status = s_status;
+    portEXIT_CRITICAL(&s_status_lock);
     return status;
 }

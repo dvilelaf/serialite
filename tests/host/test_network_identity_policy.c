@@ -6,7 +6,7 @@
 static network_identity_policy_config_t valid_config(void)
 {
     return (network_identity_policy_config_t){
-        .hostname = "kvm",
+        .hostname = "serialite",
         .instance_name = "Serialite",
         .service_type = "_http",
         .port = 80,
@@ -29,15 +29,15 @@ static void rejects_invalid_hostnames(void)
     assert(!network_identity_config_is_valid(&config));
 
     config = valid_config();
-    config.hostname = "-kvm";
+    config.hostname = "-serialite";
     assert(!network_identity_config_is_valid(&config));
 
     config = valid_config();
-    config.hostname = "kvm-";
+    config.hostname = "serialite-";
     assert(!network_identity_config_is_valid(&config));
 
     config = valid_config();
-    config.hostname = "kvm.local";
+    config.hostname = "serialite.local";
     assert(!network_identity_config_is_valid(&config));
 }
 

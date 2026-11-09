@@ -96,12 +96,22 @@ static void test_rejects_missing_event_array_when_events_are_requested(void)
     CHECK(diagnostics_export_write_json(json, sizeof(json), &snapshot) < 0);
 }
 
-static void test_html_escape_prevents_breaking_diagnostics_page(void)
+static void test_firmware_status_events_are_not_redacted(void)
 {
-    char html[128];
+    const event_log_entry_t events[] = {
+        {.timestamp_ms = 1, .sequence = 1, .level = EVENT_LOG_SECURITY, .message = "web session started"},
+        {.timestamp_ms = 2, .sequence = 2, .level = EVENT_LOG_SECURITY, .message = "/api/ota rejected: csrf token"},
+    };
+    const diagnostics_export_snapshot_t snapshot = {
+        .ap_ip = "192.168.4.1",
+        .events = events,
+        .event_count = 2,
+    };
+    char json[1024];
 
-    CHECK(diagnostics_export_write_html_escaped(html, sizeof(html), "</pre><script>alert('x')</script> & \"") > 0);
-    CHECK(strcmp(html, "&lt;/pre&gt;&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt; &amp; &quot;") == 0);
+    CHECK(diagnostics_export_write_json(json, sizeof(json), &snapshot) > 0);
+    CHECK(strstr(json, "web session started") != NULL);
+    CHECK(strstr(json, "rejected: csrf token") != NULL);
 }
 
 int main(void)
@@ -109,6 +119,6 @@ int main(void)
     test_writes_json_without_secrets_or_invalid_strings();
     test_reports_overflow_instead_of_truncating_json();
     test_rejects_missing_event_array_when_events_are_requested();
-    test_html_escape_prevents_breaking_diagnostics_page();
+    test_firmware_status_events_are_not_redacted();
     return 0;
 }

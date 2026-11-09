@@ -4,9 +4,10 @@ idf_component_register(
         "src/ota_update_policy.c"
     INCLUDE_DIRS
         "include"
-    REQUIRES
+    PRIV_REQUIRES
         app_update
+        bootloader_support
+        esp_app_format
         esp_partition
-        esp_timer
         freertos
 )

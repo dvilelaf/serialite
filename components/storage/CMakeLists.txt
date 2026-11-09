@@ -4,6 +4,6 @@ idf_component_register(
         "src/storage_config.c"
     INCLUDE_DIRS
         "include"
-    REQUIRES
+    PRIV_REQUIRES
         nvs_flash
 )

@@ -2,6 +2,7 @@
 
 #include <mbedtls/ecp.h>
 #include <mbedtls/pk.h>
+#include <mbedtls/platform_util.h>
 #include <mbedtls/sha256.h>
 #include <mbedtls/version.h>
 #include <mbedtls/x509_crt.h>
@@ -48,17 +49,6 @@ static bool common_name_valid(const char *common_name)
         }
     }
     return len > 0;
-}
-
-static void secure_zero(void *ptr, size_t len)
-{
-    if (ptr == NULL) {
-        return;
-    }
-    volatile uint8_t *p = (volatile uint8_t *)ptr;
-    while (len-- > 0U) {
-        *p++ = 0;
-    }
 }
 
 static local_tls_identity_result_t compute_cert_fingerprint(local_tls_identity_t *identity)
@@ -142,12 +132,12 @@ local_tls_identity_result_t local_tls_identity_generate(
     serial[sizeof(serial) - 1U] |= 0x01U;
 #if MBEDTLS_VERSION_NUMBER >= 0x03000000
     ret = mbedtls_x509write_crt_set_serial_raw(&cert, serial, sizeof(serial));
-    secure_zero(serial, sizeof(serial));
+    mbedtls_platform_zeroize(serial, sizeof(serial));
 #else
     mbedtls_mpi serial_mpi;
     mbedtls_mpi_init(&serial_mpi);
     ret = mbedtls_mpi_read_binary(&serial_mpi, serial, sizeof(serial));
-    secure_zero(serial, sizeof(serial));
+    mbedtls_platform_zeroize(serial, sizeof(serial));
     if (ret == 0) {
         ret = mbedtls_x509write_crt_set_serial(&cert, &serial_mpi);
     }
@@ -227,7 +217,7 @@ void local_tls_identity_zeroize(local_tls_identity_t *identity)
     if (identity == NULL) {
         return;
     }
-    secure_zero(identity, sizeof(*identity));
+    mbedtls_platform_zeroize(identity, sizeof(*identity));
 }
 
 const char *local_tls_identity_result_name(local_tls_identity_result_t result)

@@ -1,0 +1,32 @@
+menu "Serialite board"
+
+choice SERIALITE_BOARD
+    prompt "Target board"
+    default SERIALITE_BOARD_WAVESHARE_AMOLED_1_8
+    help
+        Selects the board implementation behind board.h. Add a new board by
+        writing one source file under components/board/src and a choice here.
+
+config SERIALITE_BOARD_WAVESHARE_AMOLED_1_8
+    bool "Waveshare ESP32-S3-Touch-AMOLED-1.8"
+    select SERIALITE_BOARD_HAS_DISPLAY
+
+config SERIALITE_BOARD_GENERIC_HEADLESS
+    bool "Generic ESP32-S3 devkit without display"
+    help
+        One button and no display. Without a display, generated credentials
+        cannot be shown, so the AP only starts with credentials stored in
+        encrypted NVS.
+
+endchoice
+
+config SERIALITE_BOARD_HAS_DISPLAY
+    bool
+
+config SERIALITE_BOARD_PRIMARY_BUTTON_GPIO
+    int "Primary button GPIO (active low)"
+    depends on SERIALITE_BOARD_GENERIC_HEADLESS
+    range 0 48
+    default 0
+
+endmenu

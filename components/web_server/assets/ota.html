@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Serialite firmware</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<main>
+  <h1>Firmware update</h1>
+  <nav><a href="/terminal">Terminal</a> <a href="/about">About</a> <a href="/config">Config</a></nav>
+  <p class="warn">Upload a complete Serialite app image (<code>serialite.bin</code>). Images for other projects are refused. Production builds also refuse unsigned images and older security versions.</p>
+  <dl>
+    <dt>State</dt><dd id="otaState">...</dd>
+    <dt>Target slot</dt><dd id="otaTarget">...</dd>
+    <dt>Bytes</dt><dd id="otaBytes">...</dd>
+    <dt>Last error</dt><dd id="otaError">...</dd>
+  </dl>
+  <input id="fw" type="file" accept=".bin,application/octet-stream">
+  <p>
+    <button id="upload">Upload firmware</button>
+    <button id="reboot" class="danger" disabled>Reboot to new image</button>
+  </p>
+  <pre id="out"></pre>
+</main>
+<script src="/assets/common.js"></script>
+<script src="/assets/ota.js"></script>
+</body>
+</html>

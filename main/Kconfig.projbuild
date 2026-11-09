@@ -1,21 +1,41 @@
 menu "Serialite"
 
-config ESP32_KVM_HTTPS_LOCAL_ENABLE
-    bool "Enable local HTTPS listener with on-screen fingerprint"
-    default n
+config SERIALITE_AP_SSID
+    string "Access point SSID"
+    default "Serialite"
     help
-        Starts a local HTTPS listener on the rescue AP when a per-boot
-        certificate can be generated and its SHA-256 fingerprint is shown on
-        the AMOLED. Disabled by default to preserve the simpler HTTP-only
-        rescue path unless operators explicitly opt in.
+        SSID used when no configuration is stored. A stored configuration
+        (encrypted NVS only) can override it.
 
-config ESP32_KVM_BLE_PROVISIONING_ENABLE
-    bool "Enable gated BLE provisioning runtime"
+config SERIALITE_AP_CHANNEL
+    int "Access point channel"
+    range 1 13
+    default 6
+
+config SERIALITE_HOSTNAME
+    string "mDNS host name"
+    default "serialite"
+    help
+        Clients can reach the console at <name>.local. The web server only
+        answers to this name and to the AP address.
+
+config SERIALITE_HTTPS
+    bool "Serve the console over HTTPS"
     default n
     help
-        Enables the BLE provisioning runtime gate. This does not replace the
-        offline AP flow. The runtime is fail-closed and must not start a BLE
-        radio unless physical presence, local pairing, encrypted NVS, and
-        bounded time windows are all satisfied.
+        Generates a self-signed certificate on every boot. Its SHA-256
+        fingerprint appears on the device screen (press BOOT twice) so the
+        operator can compare it with the browser. Without a display, HTTPS
+        falls back to HTTP because the fingerprint could not be checked.
+        Production builds must enable this.
+
+config SERIALITE_UART_SHOW_PASSWORD
+    bool "Print generated WiFi passwords on the debug UART"
+    depends on !SERIALITE_BOARD_HAS_DISPLAY
+    default n
+    help
+        For boards without a display. The password is written to the UART0
+        log, which needs physical access to read. Never enable this on a
+        board whose UART0 is wired to the monitored server.
 
 endmenu

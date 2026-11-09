@@ -3,10 +3,8 @@ idf_component_register(
         "src/usb_console.c"
     INCLUDE_DIRS
         "include"
-    REQUIRES
+    PRIV_REQUIRES
         app_watchdog
         esp_driver_usb_serial_jtag
-        freertos
-        log
         terminal_bridge
 )

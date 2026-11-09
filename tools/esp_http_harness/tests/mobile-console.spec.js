@@ -83,17 +83,13 @@ test('mobile operator opens xterm console and terminal controls work end-to-end'
   await page.getByRole('button', { name: 'Emergency lock' }).click();
   await expect(page).toHaveURL(/\/terminal$/);
   await expect(page.locator('#state')).toContainText('ERROR');
-  await expect
-    .poll(async () => {
-      const response = await page.request.get('/terminal-status.json');
-      if (response.status() !== 200) return `http-${response.status()}`;
-      return (await response.json()).writer_state;
-    })
-    .toBe('locked');
+  await expect(page.locator('#state')).toHaveAttribute('title', 'Input locked; press PWR to unlock');
+  // The lock ends the session and refuses new ones until PWR is pressed on the device.
+  await expect.poll(async () => (await page.request.get('/api/status')).status()).toBe(401);
   await page.locator('#terminal').click();
   await page.keyboard.type('blocked-input');
   await expect(page.locator('#terminal')).not.toContainText('blocked-input');
 
   expect(pageErrors).toEqual([]);
-  expect(failedRequests).toEqual([]);
+  expect(failedRequests.filter((r) => !r.includes('/ws'))).toEqual([]);
 });

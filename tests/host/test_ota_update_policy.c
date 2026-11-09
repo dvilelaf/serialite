@@ -59,8 +59,47 @@ static void test_upload_deadline_limits_slow_trickle_clients(void)
     CHECK(!ota_update_policy_deadline_exceeded(1000, 999));
 }
 
+static void build_image_head(uint8_t head[OTA_UPDATE_IMAGE_HEAD_BYTES], const char *project)
+{
+    memset(head, 0, OTA_UPDATE_IMAGE_HEAD_BYTES);
+    head[0] = 0xE9;
+    head[OTA_UPDATE_APP_DESC_OFFSET + 0] = 0x32;
+    head[OTA_UPDATE_APP_DESC_OFFSET + 1] = 0x54;
+    head[OTA_UPDATE_APP_DESC_OFFSET + 2] = 0xCD;
+    head[OTA_UPDATE_APP_DESC_OFFSET + 3] = 0xAB;
+    memcpy(head + OTA_UPDATE_APP_DESC_OFFSET + OTA_UPDATE_APP_DESC_PROJECT_OFFSET, project, strlen(project));
+}
+
+static void test_image_head_must_be_an_app_for_this_project(void)
+{
+    uint8_t head[OTA_UPDATE_IMAGE_HEAD_BYTES];
+
+    build_image_head(head, "serialite");
+    CHECK(ota_update_policy_check_image_head(head, sizeof(head), "serialite") == OTA_UPDATE_POLICY_ACCEPT);
+    CHECK(ota_update_policy_check_image_head(head, sizeof(head) - 1U, "serialite") == OTA_UPDATE_POLICY_REJECT_NOT_APP_IMAGE);
+    CHECK(ota_update_policy_check_image_head(head, sizeof(head), "serialit") == OTA_UPDATE_POLICY_REJECT_WRONG_PROJECT);
+    CHECK(ota_update_policy_check_image_head(head, sizeof(head), "serialite2") == OTA_UPDATE_POLICY_REJECT_WRONG_PROJECT);
+
+    build_image_head(head, "other-firmware");
+    CHECK(ota_update_policy_check_image_head(head, sizeof(head), "serialite") == OTA_UPDATE_POLICY_REJECT_WRONG_PROJECT);
+
+    build_image_head(head, "serialite");
+    head[0] = 0x00;
+    CHECK(ota_update_policy_check_image_head(head, sizeof(head), "serialite") == OTA_UPDATE_POLICY_REJECT_NOT_APP_IMAGE);
+
+    build_image_head(head, "serialite");
+    head[OTA_UPDATE_APP_DESC_OFFSET] = 0x00;
+    CHECK(ota_update_policy_check_image_head(head, sizeof(head), "serialite") == OTA_UPDATE_POLICY_REJECT_NOT_APP_IMAGE);
+
+    build_image_head(head, "serialite");
+    memset(head + OTA_UPDATE_APP_DESC_OFFSET + OTA_UPDATE_APP_DESC_PROJECT_OFFSET, 'a', OTA_UPDATE_APP_DESC_PROJECT_LEN);
+    CHECK(ota_update_policy_check_image_head(head, sizeof(head), "serialite") == OTA_UPDATE_POLICY_REJECT_WRONG_PROJECT);
+    CHECK(ota_update_policy_check_image_head(NULL, sizeof(head), "serialite") == OTA_UPDATE_POLICY_REJECT_NOT_APP_IMAGE);
+}
+
 int main(void)
 {
+    test_image_head_must_be_an_app_for_this_project();
     test_accepts_non_empty_image_within_ota_slot();
     test_rejects_empty_oversized_or_concurrent_updates();
     test_result_names_are_stable_for_audit_logs();

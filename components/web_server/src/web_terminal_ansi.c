@@ -4,7 +4,7 @@
 
 void web_terminal_ansi_init(web_terminal_ansi_state_t *state)
 {
-    if (state != 0) {
+    if (state != NULL) {
         state->mode = WEB_TERMINAL_ANSI_TEXT;
         state->sequence_len = 0;
         state->sequence_dropped = false;
@@ -19,6 +19,42 @@ static bool is_safe_text_byte(uint8_t value)
 static bool csi_final_byte(uint8_t value)
 {
     return value >= 0x40 && value <= 0x7e;
+}
+
+/* ESC P (DCS), ESC X (SOS), ESC ] (OSC), ESC ^ (PM), ESC _ (APC) open strings ended by BEL or ST. */
+static bool starts_string_sequence(uint8_t value)
+{
+    return value == 'P' || value == 'X' || value == ']' || value == '^' || value == '_';
+}
+
+static bool sequence_contains(const web_terminal_ansi_state_t *state, uint8_t value)
+{
+    for (size_t i = 0; i < state->sequence_len; ++i) {
+        if (state->sequence[i] == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/*
+ * CSI sequences that make the terminal send a reply as if the operator had
+ * typed it: DA (c), DSR (n), window reports (t), DECRQM ($p), XTVERSION (>q).
+ */
+static bool csi_requests_reply(const web_terminal_ansi_state_t *state, uint8_t final)
+{
+    switch (final) {
+        case 'c':
+        case 'n':
+        case 't':
+            return true;
+        case 'p':
+            return sequence_contains(state, '$');
+        case 'q':
+            return sequence_contains(state, '>');
+        default:
+            return false;
+    }
 }
 
 static void reset_sequence(web_terminal_ansi_state_t *state)
@@ -62,7 +98,7 @@ size_t web_terminal_ansi_filter(
     uint8_t *output,
     size_t output_len)
 {
-    if (state == 0 || input == 0 || output == 0 || output_len == 0) {
+    if (state == NULL || input == NULL || output == NULL || output_len == 0) {
         return 0;
     }
 
@@ -76,8 +112,8 @@ size_t web_terminal_ansi_filter(
                     reset_sequence(state);
                     append_sequence(state, ch);
                     state->mode = WEB_TERMINAL_ANSI_ESC;
-                } else if (is_safe_text_byte(ch) && written < output_len) {
-                    output[written++] = ch;
+                } else if (is_safe_text_byte(ch)) {
+                    written = write_byte(ch, output, written, output_len);
                 }
                 break;
 
@@ -85,13 +121,12 @@ size_t web_terminal_ansi_filter(
                 if (ch == '[') {
                     append_sequence(state, ch);
                     state->mode = WEB_TERMINAL_ANSI_CSI;
-                } else if (ch == ']') {
+                } else if (starts_string_sequence(ch)) {
                     reset_sequence(state);
-                    state->mode = WEB_TERMINAL_ANSI_OSC;
+                    state->mode = WEB_TERMINAL_ANSI_STRING;
                 } else if (ch == 0x1b) {
                     reset_sequence(state);
                     append_sequence(state, ch);
-                    state->mode = WEB_TERMINAL_ANSI_ESC;
                 } else {
                     append_sequence(state, ch);
                     written = flush_sequence(state, output, written, output_len);
@@ -102,24 +137,28 @@ size_t web_terminal_ansi_filter(
             case WEB_TERMINAL_ANSI_CSI:
                 append_sequence(state, ch);
                 if (csi_final_byte(ch)) {
-                    written = flush_sequence(state, output, written, output_len);
+                    if (csi_requests_reply(state, ch)) {
+                        reset_sequence(state);
+                    } else {
+                        written = flush_sequence(state, output, written, output_len);
+                    }
                     state->mode = WEB_TERMINAL_ANSI_TEXT;
                 }
                 break;
 
-            case WEB_TERMINAL_ANSI_OSC:
+            case WEB_TERMINAL_ANSI_STRING:
                 if (ch == '\a') {
                     state->mode = WEB_TERMINAL_ANSI_TEXT;
                 } else if (ch == 0x1b) {
-                    state->mode = WEB_TERMINAL_ANSI_OSC_ESC;
+                    state->mode = WEB_TERMINAL_ANSI_STRING_ESC;
                 }
                 break;
 
-            case WEB_TERMINAL_ANSI_OSC_ESC:
+            case WEB_TERMINAL_ANSI_STRING_ESC:
                 if (ch == '\\') {
                     state->mode = WEB_TERMINAL_ANSI_TEXT;
                 } else if (ch != 0x1b) {
-                    state->mode = WEB_TERMINAL_ANSI_OSC;
+                    state->mode = WEB_TERMINAL_ANSI_STRING;
                 }
                 break;
 

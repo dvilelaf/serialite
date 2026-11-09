@@ -94,6 +94,47 @@ static void test_respects_output_capacity(void)
     CHECK(strcmp(output, "abc") == 0);
 }
 
+static void test_strips_queries_that_make_the_terminal_answer(void)
+{
+    web_terminal_ansi_state_t state;
+    web_terminal_ansi_init(&state);
+
+    char output[128];
+    filter_text(&state, "a\x1b[cb\x1b[>0cc\x1b[6nd\x1b[18te\x1b[?25$pf\x1b[>qg", output, sizeof(output));
+    CHECK(strcmp(output, "abcdefg") == 0);
+
+    filter_text(&state, "x\x1b[2 qy", output, sizeof(output));
+    CHECK(strcmp(output, "x\x1b[2 qy") == 0);
+}
+
+static void test_strips_dcs_and_other_string_sequences(void)
+{
+    web_terminal_ansi_state_t state;
+    web_terminal_ansi_init(&state);
+
+    char output[128];
+    filter_text(&state, "a\x1bP$qm\x1b\\b\x1b_apc\x1b\\c\x1b^pm\ad\x1bXsos\x1b\\e", output, sizeof(output));
+    CHECK(strcmp(output, "abcde") == 0);
+}
+
+static void test_split_chunk_output_stays_within_documented_bound(void)
+{
+    web_terminal_ansi_state_t state;
+    web_terminal_ansi_init(&state);
+
+    uint8_t first[WEB_TERMINAL_ANSI_MAX_CARRY - 1U];
+    first[0] = 0x1b;
+    first[1] = '[';
+    memset(first + 2, '1', sizeof(first) - 2U);
+    uint8_t output[2 * WEB_TERMINAL_ANSI_MAX_CARRY + 8U];
+    CHECK(web_terminal_ansi_filter(&state, first, sizeof(first), output, sizeof(output)) == 0);
+
+    const uint8_t second[] = {'m', 'x'};
+    const size_t written = web_terminal_ansi_filter(&state, second, sizeof(second), output, sizeof(second) + WEB_TERMINAL_ANSI_MAX_CARRY);
+    CHECK(written == sizeof(first) + sizeof(second));
+    CHECK(output[0] == 0x1b && output[written - 2U] == 'm' && output[written - 1U] == 'x');
+}
+
 int main(void)
 {
     test_preserves_sgr_and_cursor_csi_sequences();
@@ -102,5 +143,8 @@ int main(void)
     test_strips_osc_title_sequences();
     test_preserves_safe_terminal_controls_only();
     test_respects_output_capacity();
+    test_strips_queries_that_make_the_terminal_answer();
+    test_strips_dcs_and_other_string_sequences();
+    test_split_chunk_output_stays_within_documented_bound();
     return 0;
 }

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Serial console</title>
+<link rel="stylesheet" href="/assets/xterm.css">
+<link rel="stylesheet" href="/assets/terminal.css">
+</head>
+<body>
+<div id="hud">
+  <span id="state" class="pill stream"><span id="streamDot" class="dot"></span><span id="streamText">STREAM ...</span></span>
+  <button id="fullscreenBtn" class="round icon-btn" aria-label="Fullscreen" title="Fullscreen">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><!-- Lucide maximize-2 --><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" x2="14" y1="3" y2="10"></line><line x1="3" x2="10" y1="21" y2="14"></line></svg>
+  </button>
+  <div id="menu">
+    <button id="menuBtn" class="round" aria-label="More controls" title="More controls">+</button>
+    <div id="keys" aria-label="Operator actions">
+      <div class="actions-head">
+        <strong>Actions</strong>
+        <button id="closeMenuBtn" class="actions-close icon-btn" aria-label="Close controls" title="Close controls">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><!-- Lucide x --><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+        </button>
+      </div>
+      <section class="action-section">
+        <h3>Keys</h3>
+        <div class="action-grid">
+          <button data-k="ctrl-c">Ctrl+C</button><button data-k="ctrl-d">Ctrl+D</button><button data-k="ctrl-l">Ctrl+L</button>
+          <button data-k="enter">Enter</button><button data-k="esc">Esc</button><button data-k="tab">Tab</button>
+          <button data-k="up">Up</button><button data-k="down">Down</button><button data-k="left">Left</button><button data-k="right">Right</button>
+        </div>
+      </section>
+      <section class="action-section">
+        <h3>Terminal</h3>
+        <div class="action-grid two"><button id="fitTty">Fit TTY</button><button id="clearTerm">Clear terminal</button></div>
+      </section>
+      <section class="action-section">
+        <h3>Device</h3>
+        <div class="action-grid two"><button id="diagnosticsBtn">Diagnostics</button><button id="rotateWifi">Rotate WiFi</button></div>
+        <p class="action-links"><a href="/about">About</a> <a href="/config">Config</a> <a href="/ota">Firmware</a></p>
+      </section>
+      <section class="action-section">
+        <h3>Danger</h3>
+        <div class="action-grid"><button class="danger wide" id="panic">Emergency lock</button></div>
+      </section>
+    </div>
+  </div>
+</div>
+<div id="terminal" tabindex="0"></div>
+<div id="diagBackdrop"></div>
+<aside id="diagnosticsPanel" aria-label="Diagnostics" aria-hidden="true">
+  <div class="diag-head"><h2>System Health</h2><button id="closeDiagnostics" aria-label="Close diagnostics">x</button></div>
+  <div id="diagnosticsBody"><section class="diag-card"><h3>Status</h3><div class="diag-row"><span>Loading</span><b>...</b></div></section></div>
+</aside>
+<section id="consoleNotice" class="hidden" role="status" aria-live="polite">
+  <h2>No serial console detected</h2>
+  <p>The USB link is up, but the Linux host has not sent a login prompt or console output yet.</p>
+  <p>On the host, run the Serialite setup script or start the installed getty:</p>
+  <code>sudo systemctl start serialite-serial-console.service</code>
+</section>
+<script src="/assets/xterm.js"></script>
+<script src="/assets/common.js"></script>
+<script src="/assets/terminal.js"></script>
+</body>
+</html>

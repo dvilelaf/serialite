@@ -1,0 +1,101 @@
+/* Secondary pages: about, config, firmware. */
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    background: #050b09;
+    color: #e9fff8;
+    font: 15px/1.45 system-ui, sans-serif;
+    margin: 20px;
+}
+
+main {
+    border: 1px solid #174436;
+    border-radius: 18px;
+    padding: 18px;
+    background: #030807;
+    max-width: 820px;
+    width: 100%;
+}
+
+nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-bottom: 12px;
+}
+
+a,
+dt,
+h2 {
+    color: #7dffe1;
+}
+
+dd {
+    margin: 0 0 8px;
+}
+
+li {
+    margin: 6px 0;
+}
+
+code {
+    color: #bffff0;
+}
+
+.warn {
+    color: #ffcf7a;
+}
+
+button,
+input,
+textarea {
+    font: inherit;
+}
+
+button {
+    border: 1px solid #2ee6b8;
+    border-radius: 12px;
+    background: #123d32;
+    color: #bffff0;
+    padding: 11px 14px;
+    margin: 8px 8px 8px 0;
+}
+
+button:disabled {
+    opacity: 0.45;
+}
+
+button.danger {
+    border-color: #ff875c;
+    color: #ffd2c0;
+    background: #24110c;
+}
+
+textarea {
+    width: 100%;
+    min-height: 160px;
+    background: #000;
+    color: #e9fff8;
+    border: 1px solid #245c4c;
+    border-radius: 12px;
+    padding: 12px;
+}
+
+input[type=file] {
+    max-width: 100%;
+}
+
+pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+    button {
+        display: block;
+        width: 100%;
+    }
+}

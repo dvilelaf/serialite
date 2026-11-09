@@ -2,351 +2,103 @@
 
 #include <string.h>
 
-#define SESSION_TTL_MS (15ULL * 60ULL * 1000ULL)
-#define LOCKOUT_AFTER_FAILURES 3
-#define LOCKOUT_MS (60ULL * 1000ULL)
-#define MIN_PASSWORD_LEN 6
-#define TOKEN_RANDOM_BYTES 16
+#include "web_request.h"
 
-static bool bounded_strlen(const char *value, size_t max_len, size_t *out_len)
+#define TOKEN_RANDOM_BYTES (WEB_SECURITY_TOKEN_LEN / 2)
+
+static void wipe(void *ptr, size_t len)
 {
-    if (value == NULL) {
-        return false;
+    volatile uint8_t *p = (volatile uint8_t *)ptr;
+    while (len-- > 0) {
+        *p++ = 0;
     }
-
-    size_t len = 0;
-    while (len <= max_len && value[len] != '\0') {
-        len++;
-    }
-    if (len > max_len) {
-        return false;
-    }
-    if (out_len != NULL) {
-        *out_len = len;
-    }
-    return true;
-}
-
-static bool password_for_hash_setup(const char *input, char out[WEB_SECURITY_PASSWORD_MAX_LEN])
-{
-    if (input == NULL || out == NULL) {
-        return false;
-    }
-    size_t len = 0;
-    if (!bounded_strlen(input, WEB_SECURITY_PASSWORD_MAX_LEN - 1, &len) || len == 0) {
-        return false;
-    }
-    memcpy(out, input, len + 1U);
-    return true;
-}
-
-static void token_from_bytes(const uint8_t *bytes, char out[WEB_SECURITY_TOKEN_BUF_LEN])
-{
-    static const char hex[] = "0123456789abcdef";
-    for (size_t i = 0; i < TOKEN_RANDOM_BYTES; ++i) {
-        out[i * 2] = hex[(bytes[i] >> 4) & 0x0f];
-        out[(i * 2) + 1] = hex[bytes[i] & 0x0f];
-    }
-    out[WEB_SECURITY_TOKEN_LEN] = '\0';
 }
 
 static bool make_token(char out[WEB_SECURITY_TOKEN_BUF_LEN], web_security_random_fn_t random_fn, void *random_ctx)
 {
-    if (random_fn == NULL) {
-        return false;
-    }
-
+    static const char hex[] = "0123456789abcdef";
     uint8_t bytes[TOKEN_RANDOM_BYTES];
-    if (!random_fn(bytes, sizeof(bytes), random_ctx)) {
-        memset(bytes, 0, sizeof(bytes));
+    if (random_fn == NULL || !random_fn(bytes, sizeof(bytes), random_ctx)) {
+        wipe(bytes, sizeof(bytes));
         return false;
     }
-    token_from_bytes(bytes, out);
-    memset(bytes, 0, sizeof(bytes));
+    for (size_t i = 0; i < sizeof(bytes); ++i) {
+        out[i * 2] = hex[(bytes[i] >> 4) & 0x0f];
+        out[(i * 2) + 1] = hex[bytes[i] & 0x0f];
+    }
+    out[WEB_SECURITY_TOKEN_LEN] = '\0';
+    wipe(bytes, sizeof(bytes));
     return true;
 }
 
-static web_security_session_t *find_session(web_security_state_t *state, const char *token, uint64_t now_ms)
+static bool token_well_formed(const char *token)
 {
-    if (state == NULL || token == NULL) {
-        return NULL;
-    }
-    for (size_t i = 0; i < WEB_SECURITY_MAX_SESSIONS; ++i) {
-        web_security_session_t *session = &state->sessions[i];
-        if (session->active && now_ms <= session->expires_ms &&
-            strncmp(session->session_token, token, WEB_SECURITY_TOKEN_BUF_LEN) == 0) {
-            return session;
-        }
-    }
-    return NULL;
+    return token != NULL && strnlen(token, WEB_SECURITY_TOKEN_BUF_LEN) == WEB_SECURITY_TOKEN_LEN;
 }
 
-static web_security_session_t *find_session_by_token(web_security_state_t *state, const char *token)
+static bool live_session_matches(const web_security_state_t *state, const char *token, uint64_t now_ms)
 {
-    if (state == NULL || token == NULL) {
-        return NULL;
-    }
-    for (size_t i = 0; i < WEB_SECURITY_MAX_SESSIONS; ++i) {
-        web_security_session_t *session = &state->sessions[i];
-        if (session->active && strncmp(session->session_token, token, WEB_SECURITY_TOKEN_BUF_LEN) == 0) {
-            return session;
-        }
-    }
-    return NULL;
+    return state != NULL && state->active && now_ms <= state->expires_ms && token_well_formed(token) &&
+           web_request_secret_equal(state->session_token, token, WEB_SECURITY_TOKEN_LEN);
 }
 
-static const web_security_session_t *find_session_const(const web_security_state_t *state, const char *token, uint64_t now_ms)
+void web_security_init(web_security_state_t *state)
 {
-    return find_session((web_security_state_t *)state, token, now_ms);
+    if (state != NULL) {
+        wipe(state, sizeof(*state));
+    }
 }
 
-bool web_security_init(
-    web_security_state_t *state,
-    const char *password,
-    web_security_random_fn_t random_fn,
-    void *random_ctx)
-{
-    char hash_password[WEB_SECURITY_PASSWORD_MAX_LEN];
-    size_t len = 0;
-    if (state == NULL ||
-        !password_for_hash_setup(password, hash_password) ||
-        !bounded_strlen(hash_password, WEB_SECURITY_PASSWORD_MAX_LEN - 1, &len) ||
-        len < MIN_PASSWORD_LEN) {
-        return false;
-    }
-
-    memset(state, 0, sizeof(*state));
-    if (random_fn == NULL ||
-        !random_fn(state->password_salt, sizeof(state->password_salt), random_ctx) ||
-        !web_password_hash_derive(hash_password, state->password_salt, state->password_hash)) {
-        memset(state, 0, sizeof(*state));
-        memset(hash_password, 0, sizeof(hash_password));
-        return false;
-    }
-    memset(hash_password, 0, sizeof(hash_password));
-    state->password_hash_configured = true;
-    return true;
-}
-
-bool web_security_init_session_only(web_security_state_t *state)
+bool web_security_start_session(web_security_state_t *state, uint64_t now_ms, web_security_random_fn_t random_fn, void *random_ctx)
 {
     if (state == NULL) {
         return false;
     }
-    memset(state, 0, sizeof(*state));
+    web_security_state_t next = {0};
+    if (!make_token(next.session_token, random_fn, random_ctx) || !make_token(next.csrf_token, random_fn, random_ctx)) {
+        wipe(&next, sizeof(next));
+        return false;
+    }
+    next.expires_ms = now_ms + WEB_SECURITY_SESSION_IDLE_MS;
+    next.active = true;
+    *state = next;
+    wipe(&next, sizeof(next));
     return true;
-}
-
-bool web_security_rotate_password(
-    web_security_state_t *state,
-    const char *new_password,
-    web_security_random_fn_t random_fn,
-    void *random_ctx)
-{
-    if (state == NULL) {
-        return false;
-    }
-    uint8_t new_salt[WEB_PASSWORD_SALT_LEN];
-    uint8_t new_hash[WEB_PASSWORD_HASH_LEN];
-    if (!web_security_prepare_password_hash(new_password, random_fn, random_ctx, new_salt, new_hash)) {
-        return false;
-    }
-
-    web_security_apply_password_hash(state, new_salt, new_hash);
-    memset(new_salt, 0, sizeof(new_salt));
-    memset(new_hash, 0, sizeof(new_hash));
-    return true;
-}
-
-bool web_security_prepare_password_hash(
-    const char *password,
-    web_security_random_fn_t random_fn,
-    void *random_ctx,
-    uint8_t out_salt[WEB_PASSWORD_SALT_LEN],
-    uint8_t out_hash[WEB_PASSWORD_HASH_LEN])
-{
-    char hash_password[WEB_SECURITY_PASSWORD_MAX_LEN];
-    size_t len = 0;
-    if (!password_for_hash_setup(password, hash_password) ||
-        !bounded_strlen(hash_password, WEB_SECURITY_PASSWORD_MAX_LEN - 1, &len) ||
-        len < MIN_PASSWORD_LEN || random_fn == NULL || out_salt == NULL || out_hash == NULL) {
-        return false;
-    }
-    if (!random_fn(out_salt, WEB_PASSWORD_SALT_LEN, random_ctx) ||
-        !web_password_hash_derive(hash_password, out_salt, out_hash)) {
-        memset(out_salt, 0, WEB_PASSWORD_SALT_LEN);
-        memset(out_hash, 0, WEB_PASSWORD_HASH_LEN);
-        memset(hash_password, 0, sizeof(hash_password));
-        return false;
-    }
-    memset(hash_password, 0, sizeof(hash_password));
-    return true;
-}
-
-bool web_security_init_from_hash(
-    web_security_state_t *state,
-    const uint8_t salt[WEB_PASSWORD_SALT_LEN],
-    const uint8_t hash[WEB_PASSWORD_HASH_LEN])
-{
-    if (state == NULL || salt == NULL || hash == NULL) {
-        return false;
-    }
-    memset(state, 0, sizeof(*state));
-    memcpy(state->password_salt, salt, sizeof(state->password_salt));
-    memcpy(state->password_hash, hash, sizeof(state->password_hash));
-    state->password_hash_configured = true;
-    return true;
-}
-
-void web_security_apply_password_hash(
-    web_security_state_t *state,
-    const uint8_t salt[WEB_PASSWORD_SALT_LEN],
-    const uint8_t hash[WEB_PASSWORD_HASH_LEN])
-{
-    if (state == NULL || salt == NULL || hash == NULL) {
-        return;
-    }
-    web_security_invalidate_all(state);
-    memcpy(state->password_salt, salt, sizeof(state->password_salt));
-    memcpy(state->password_hash, hash, sizeof(state->password_hash));
-    state->lockout_until_ms = 0;
-    state->failed_logins = 0;
-    state->password_hash_configured = true;
-}
-
-web_security_login_result_t web_security_login(
-    web_security_state_t *state,
-    uint64_t now_ms,
-    web_security_random_fn_t random_fn,
-    void *random_ctx)
-{
-    if (state == NULL) {
-        return WEB_SECURITY_LOGIN_DENIED;
-    }
-    if (now_ms < state->lockout_until_ms) {
-        return WEB_SECURITY_LOGIN_LOCKED;
-    }
-
-    char new_session_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    char new_csrf_token[WEB_SECURITY_TOKEN_BUF_LEN];
-    if (!make_token(new_session_token, random_fn, random_ctx) ||
-        !make_token(new_csrf_token, random_fn, random_ctx)) {
-        return WEB_SECURITY_LOGIN_DENIED;
-    }
-
-    web_security_invalidate_all(state);
-    web_security_session_t *session = &state->sessions[0];
-    memset(session, 0, sizeof(*session));
-    memcpy(session->session_token, new_session_token, sizeof(new_session_token));
-    memcpy(session->csrf_token, new_csrf_token, sizeof(new_csrf_token));
-    session->expires_ms = now_ms + SESSION_TTL_MS;
-    session->active = true;
-
-    memcpy(state->session_token, new_session_token, sizeof(new_session_token));
-    memcpy(state->csrf_token, new_csrf_token, sizeof(new_csrf_token));
-    state->session_expires_ms = session->expires_ms;
-    state->session_active = true;
-    state->failed_logins = 0;
-    state->lockout_until_ms = 0;
-    return WEB_SECURITY_LOGIN_OK;
 }
 
 bool web_security_session_valid(const web_security_state_t *state, const char *token, uint64_t now_ms)
 {
-    return find_session_const(state, token, now_ms) != NULL;
+    return live_session_matches(state, token, now_ms);
+}
+
+bool web_security_touch(web_security_state_t *state, const char *token, uint64_t now_ms)
+{
+    if (!live_session_matches(state, token, now_ms)) {
+        return false;
+    }
+    state->expires_ms = now_ms + WEB_SECURITY_SESSION_IDLE_MS;
+    return true;
 }
 
 bool web_security_csrf_valid(const web_security_state_t *state, const char *session_token, const char *csrf_token, uint64_t now_ms)
 {
-    const web_security_session_t *session = find_session_const(state, session_token, now_ms);
-    return session != NULL && csrf_token != NULL &&
-           strncmp(session->csrf_token, csrf_token, WEB_SECURITY_TOKEN_BUF_LEN) == 0;
+    return live_session_matches(state, session_token, now_ms) && token_well_formed(csrf_token) &&
+           web_request_secret_equal(state->csrf_token, csrf_token, WEB_SECURITY_TOKEN_LEN);
 }
 
-const char *web_security_csrf_for_session(const web_security_state_t *state, const char *session_token, uint64_t now_ms)
+const char *web_security_csrf_for_session(const web_security_state_t *state, const char *token, uint64_t now_ms)
 {
-    const web_security_session_t *session = find_session_const(state, session_token, now_ms);
-    return session != NULL ? session->csrf_token : NULL;
+    return live_session_matches(state, token, now_ms) ? state->csrf_token : NULL;
 }
 
-void web_security_logout(web_security_state_t *state, const char *token)
+bool web_security_has_session(const web_security_state_t *state, uint64_t now_ms)
 {
-    web_security_session_t *session = find_session_by_token(state, token);
-    if (session != NULL) {
-        memset(session, 0, sizeof(*session));
+    return state != NULL && state->active && now_ms <= state->expires_ms;
+}
+
+void web_security_end_session(web_security_state_t *state)
+{
+    if (state != NULL) {
+        wipe(state, sizeof(*state));
     }
-}
-
-void web_security_invalidate_all(web_security_state_t *state)
-{
-    if (state == NULL) {
-        return;
-    }
-
-    memset(state->session_token, 0, sizeof(state->session_token));
-    memset(state->csrf_token, 0, sizeof(state->csrf_token));
-    memset(state->writer_token, 0, sizeof(state->writer_token));
-    memset(state->sessions, 0, sizeof(state->sessions));
-    state->session_expires_ms = 0;
-    state->session_active = false;
-}
-
-bool web_security_acquire_writer(web_security_state_t *state, const char *token, uint64_t now_ms)
-{
-    return state != NULL && find_session(state, token, now_ms) != NULL;
-}
-
-void web_security_release_writer(web_security_state_t *state, const char *token)
-{
-    (void)state;
-    (void)token;
-}
-
-bool web_security_can_write(const web_security_state_t *state, const char *token, uint64_t now_ms)
-{
-    return state != NULL && token != NULL &&
-           find_session_const(state, token, now_ms) != NULL;
-}
-
-web_security_writer_state_t web_security_writer_state(web_security_state_t *state, const char *token, uint64_t now_ms)
-{
-    if (state == NULL || token == NULL || find_session(state, token, now_ms) == NULL) {
-        return WEB_SECURITY_WRITER_INVALID_SESSION;
-    }
-
-    return WEB_SECURITY_WRITER_ACTIVE;
-}
-
-bool web_security_origin_allowed(const char *origin, const char *host)
-{
-    if (origin == NULL || host == NULL || host[0] == '\0') {
-        return false;
-    }
-
-    const char *origin_host = NULL;
-    const char *default_port = NULL;
-    const char http_prefix[] = "http://";
-    const char https_prefix[] = "https://";
-    if (strncmp(origin, http_prefix, sizeof(http_prefix) - 1U) == 0) {
-        origin_host = origin + sizeof(http_prefix) - 1U;
-        default_port = ":80";
-    } else if (strncmp(origin, https_prefix, sizeof(https_prefix) - 1U) == 0) {
-        origin_host = origin + sizeof(https_prefix) - 1U;
-        default_port = ":443";
-    } else {
-        return false;
-    }
-
-    size_t host_len = strlen(host);
-    const size_t default_port_len = strlen(default_port);
-    if (host_len > default_port_len &&
-        strcmp(host + host_len - default_port_len, default_port) == 0) {
-        host_len -= default_port_len;
-    }
-    if (strncmp(origin_host, host, host_len) != 0) {
-        return false;
-    }
-
-    const char next = origin_host[host_len];
-    return next == '\0' || (next == ':' && strcmp(origin_host + host_len, default_port) == 0);
 }

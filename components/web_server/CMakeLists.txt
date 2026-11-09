@@ -1,41 +1,42 @@
 idf_component_register(
     SRCS
-        "src/ap_exposure_policy.c"
-        "src/http_route_policy.c"
         "src/http_rate_limit.c"
+        "src/web_api.c"
+        "src/web_guard.c"
+        "src/web_input_policy.c"
+        "src/web_request.c"
+        "src/web_security.c"
         "src/web_server.c"
         "src/web_terminal_ansi.c"
-        "src/web_terminal_contract.c"
-        "src/web_input_policy.c"
-        "src/web_demo_policy.c"
-        "src/web_macro_policy.c"
-        "src/web_password_hash.c"
-        "src/web_security.c"
-        "src/web_transport_policy.c"
+        "src/web_ws.c"
     INCLUDE_DIRS
         "include"
     EMBED_FILES
-        "assets/xterm.js"
+        "assets/about.html"
+        "assets/about.js"
+        "assets/app.css"
+        "assets/common.js"
+        "assets/config.html"
+        "assets/config.js"
+        "assets/ota.html"
+        "assets/ota.js"
+        "assets/terminal.css"
+        "assets/terminal.html"
+        "assets/terminal.js"
         "assets/xterm.css"
+        "assets/xterm.js"
     REQUIRES
-        app_watchdog
-        credentials
-        demo_serial
-        diagnostics_export
-        event_log
-        esp_app_format
         esp_http_server
+        local_tls_identity
+    PRIV_REQUIRES
+        diagnostics_export
+        esp_app_format
         esp_https_server
         esp_timer
-        https_fingerprint
-        local_tls_identity
-        mbedtls
+        event_log
+        json_writer
         ota_update
-        wifi_ap
-        usb_console
         terminal_bridge
+        usb_console
+        wifi_ap
 )
-
-if(CONFIG_IDF_TARGET_LINUX)
-    target_sources(${COMPONENT_LIB} PRIVATE "src/esp_timer_linux_compat.c")
-endif()

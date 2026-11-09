@@ -3,11 +3,6 @@
 #include <assert.h>
 #include <string.h>
 
-static void https_is_disabled_by_default(void)
-{
-    assert(!https_fingerprint_default_enabled());
-}
-
 static void formats_sha256_fingerprint_as_uppercase_colon_hex(void)
 {
     uint8_t digest[HTTPS_FINGERPRINT_SHA256_LEN];
@@ -31,49 +26,9 @@ static void rejects_bad_fingerprint_inputs(void)
     assert(https_fingerprint_format_sha256(digest, sizeof(digest), out, sizeof(out) - 1U) == HTTPS_FINGERPRINT_ERR_OUTPUT_TOO_SMALL);
 }
 
-static void enable_requires_fingerprint_local_display_and_operator_ack(void)
-{
-    assert(https_fingerprint_policy_can_enable(NULL) == HTTPS_FINGERPRINT_POLICY_REJECT_DISABLED);
-    assert(https_fingerprint_policy_can_start_listener(NULL) == HTTPS_FINGERPRINT_POLICY_REJECT_DISABLED);
-
-    https_fingerprint_policy_request_t req = {
-        .requested = true,
-        .certificate_present = true,
-        .fingerprint_displayed_locally = true,
-        .operator_acknowledged_fingerprint = true,
-    };
-    assert(https_fingerprint_policy_can_enable(&req) == HTTPS_FINGERPRINT_POLICY_ALLOW);
-
-    req.requested = false;
-    assert(https_fingerprint_policy_can_enable(&req) == HTTPS_FINGERPRINT_POLICY_REJECT_DISABLED);
-
-    req.requested = true;
-    req.certificate_present = false;
-    assert(https_fingerprint_policy_can_enable(&req) == HTTPS_FINGERPRINT_POLICY_REJECT_NO_CERT);
-
-    req.certificate_present = true;
-    req.fingerprint_displayed_locally = false;
-    assert(https_fingerprint_policy_can_enable(&req) == HTTPS_FINGERPRINT_POLICY_REJECT_NOT_DISPLAYED);
-
-    req.fingerprint_displayed_locally = true;
-    req.operator_acknowledged_fingerprint = false;
-    assert(https_fingerprint_policy_can_start_listener(&req) == HTTPS_FINGERPRINT_POLICY_ALLOW);
-    assert(https_fingerprint_policy_can_enable(&req) == HTTPS_FINGERPRINT_POLICY_REJECT_NO_ACK);
-}
-
-static void policy_result_names_are_stable(void)
-{
-    assert(strcmp(https_fingerprint_policy_result_name(HTTPS_FINGERPRINT_POLICY_ALLOW), "allow") == 0);
-    assert(strcmp(https_fingerprint_policy_result_name(HTTPS_FINGERPRINT_POLICY_REJECT_NOT_DISPLAYED), "not_displayed") == 0);
-    assert(strcmp(https_fingerprint_policy_result_name((https_fingerprint_policy_result_t)999), "unknown") == 0);
-}
-
 int main(void)
 {
-    https_is_disabled_by_default();
     formats_sha256_fingerprint_as_uppercase_colon_hex();
     rejects_bad_fingerprint_inputs();
-    enable_requires_fingerprint_local_display_and_operator_ack();
-    policy_result_names_are_stable();
     return 0;
 }

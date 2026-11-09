@@ -27,5 +27,5 @@ typedef struct {
     size_t event_count;
 } diagnostics_export_snapshot_t;
 
+/* Returns the JSON length, or -1 if it does not fit. Event messages that look secret are redacted. */
 int diagnostics_export_write_json(char *out, size_t out_size, const diagnostics_export_snapshot_t *snapshot);
-int diagnostics_export_write_html_escaped(char *out, size_t out_size, const char *value);

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>About Serialite</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<main>
+  <h1>About Serialite</h1>
+  <nav><a href="/terminal">Terminal</a> <a href="/config">Config</a> <a href="/ota">Firmware</a></nav>
+  <p>Serial rescue console over a local WiFi access point. It is not a video KVM: no HDMI, no remote keyboard or mouse, no virtual media, no host power control and no cloud access.</p>
+  <dl id="info"><dt>Firmware</dt><dd>Loading...</dd></dl>
+
+  <h2>Before typing</h2>
+  <ol>
+    <li>Make sure you joined the right access point and are physically next to the server.</li>
+    <li>Check that the USB link is up and that the drop counters in Diagnostics are not climbing.</li>
+    <li>Wait for console output before sending commands.</li>
+  </ol>
+
+  <h2>Recovering access</h2>
+  <ol>
+    <li>The open web session has the keyboard. Opening the console elsewhere takes it over.</li>
+    <li>Start with low-risk commands: <code>ip addr</code>, <code>ip route</code>, <code>systemctl status</code>, <code>journalctl -xb</code>.</li>
+    <li>Avoid pasting long blocks. Large pastes ask for confirmation and are sent in chunks, but they still run on the real console.</li>
+  </ol>
+
+  <h2>If something fails</h2>
+  <ol>
+    <li>USB shown as lost: check the cable and port, and that the server runs the Serialite getty (see the setup script).</li>
+    <li>Too many requests: wait a few seconds and reload less often.</li>
+    <li>Lost control of the web console: tap PWR on the device. That ends the web session and blocks new ones until PWR is tapped again.</li>
+    <li>Unknown WiFi password: press BOOT to show it, or hold BOOT for 10 seconds to factory reset.</li>
+    <li>Diagnostics never contain passwords; you can paste them into a ticket.</li>
+  </ol>
+
+  <h2>Device buttons</h2>
+  <ul>
+    <li>BOOT: wake the screen; press again to show the WiFi password and, with HTTPS, the certificate fingerprint.</li>
+    <li>BOOT held 10 s: factory reset. A countdown appears after 2 s.</li>
+    <li>PWR tap: emergency lock on or off. PWR held 3 s: power off.</li>
+  </ul>
+</main>
+<script src="/assets/common.js"></script>
+<script src="/assets/about.js"></script>
+</body>
+</html>

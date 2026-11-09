@@ -4,6 +4,6 @@ idf_component_register(
         "src/network_identity_policy.c"
     INCLUDE_DIRS
         "include"
-    REQUIRES
+    PRIV_REQUIRES
         espressif__mdns
 )

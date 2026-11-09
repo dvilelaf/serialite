@@ -8,6 +8,7 @@
 
 typedef struct {
     httpd_config_t httpd;
+    uint16_t port_secure;
     const uint8_t *servercert;
     size_t servercert_len;
     const uint8_t *prvtkey_pem;

@@ -14,15 +14,9 @@
 static storage_config_t sample_config(void)
 {
     storage_config_t config = {0};
-    strcpy(config.wifi.ssid, "KVM");
+    strcpy(config.wifi.ssid, "Serialite");
     strcpy(config.wifi.password, "secret-password-that-must-not-export");
     config.wifi.channel = 6;
-    config.wifi.max_clients = 4;
-    config.web_password_hash_configured = true;
-    memset(config.web_password_salt, 0x11, sizeof(config.web_password_salt));
-    memset(config.web_password_hash, 0x22, sizeof(config.web_password_hash));
-    config.brightness = 80;
-    config.font_size = 16;
     return config;
 }
 
@@ -35,8 +29,7 @@ static void test_export_omits_secrets_and_includes_checksum(void)
     CHECK(strstr(json, CONFIG_TRANSFER_SCHEMA) != NULL);
     CHECK(strstr(json, "\"checksum\":\"") != NULL);
     CHECK(strstr(json, "secret-password") == NULL);
-    CHECK(strstr(json, "2222") == NULL);
-    CHECK(strstr(json, "1111") == NULL);
+    CHECK(strstr(json, "password") == NULL);
 }
 
 static void test_import_round_trip_preserves_secrets(void)
@@ -46,19 +39,13 @@ static void test_import_round_trip_preserves_secrets(void)
     strcpy(imported.wifi.ssid, "OLD");
     strcpy(imported.wifi.password, "existing-secret-password");
     imported.wifi.channel = 1;
-    imported.wifi.max_clients = 1;
-    imported.brightness = 1;
-    imported.font_size = 2;
     char json[CONFIG_TRANSFER_MAX_JSON];
 
     CHECK(config_transfer_export_json(&exported, json, sizeof(json)) == CONFIG_TRANSFER_OK);
     CHECK(config_transfer_import_json(json, &imported) == CONFIG_TRANSFER_OK);
-    CHECK(strcmp(imported.wifi.ssid, "KVM") == 0);
+    CHECK(strcmp(imported.wifi.ssid, "Serialite") == 0);
     CHECK(strcmp(imported.wifi.password, "existing-secret-password") == 0);
     CHECK(imported.wifi.channel == 6);
-    CHECK(imported.wifi.max_clients == 4);
-    CHECK(imported.brightness == 80);
-    CHECK(imported.font_size == 16);
 }
 
 static void test_import_rejects_tampering_schema_and_unsafe_values(void)
@@ -117,8 +104,15 @@ static void test_import_rejects_noncanonical_or_secret_bearing_json(void)
     CHECK(config_transfer_import_json(tampered, &config) == CONFIG_TRANSFER_ERR_PARSE);
 
     CHECK(strcmp(config.wifi.password, before.wifi.password) == 0);
-    CHECK(memcmp(config.web_password_hash, before.web_password_hash, sizeof(config.web_password_hash)) == 0);
-    CHECK(memcmp(config.web_password_salt, before.web_password_salt, sizeof(config.web_password_salt)) == 0);
+    CHECK(strcmp(config.wifi.ssid, before.wifi.ssid) == 0);
+}
+
+static void test_import_rejects_out_of_range_channel(void)
+{
+    storage_config_t config = sample_config();
+    const char *json = "{\"schema\":\"" CONFIG_TRANSFER_SCHEMA "\",\"ssid\":\"Serialite\",\"channel\":14,\"checksum\":\"00000000\"}";
+    CHECK(config_transfer_import_json(json, &config) == CONFIG_TRANSFER_ERR_UNSAFE_VALUE);
+    CHECK(config.wifi.channel == 6);
 }
 
 int main(void)
@@ -127,5 +121,6 @@ int main(void)
     test_import_round_trip_preserves_secrets();
     test_import_rejects_tampering_schema_and_unsafe_values();
     test_import_rejects_noncanonical_or_secret_bearing_json();
+    test_import_rejects_out_of_range_channel();
     return 0;
 }

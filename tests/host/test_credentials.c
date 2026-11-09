@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "credentials.h"
+#include "credentials_wordlist.h"
 
 #define CHECK(expr) do { \
     if (!(expr)) { \
@@ -71,7 +72,7 @@ static void test_human_password_uses_six_words(void)
 static void test_human_password_uses_eff_large_wordlist_endpoints(void)
 {
     char password[128];
-    const uint32_t values[] = {0U, 7775U, 0U, 0U, 0U, 0U};
+    const uint32_t values[] = {0U, CREDENTIALS_WORDLIST_COUNT - 1U, 0U, 0U, 0U, 0U};
     struct u32_sequence sequence = {
         .values = values,
         .count = sizeof(values) / sizeof(values[0]),
@@ -106,8 +107,8 @@ static void test_wifi_qr_payload_uses_standard_wifi_format(void)
 {
     char payload[128];
 
-    CHECK(credentials_wifi_qr_payload("KVM", "alpha bravo charlie delta echo foxtrot", payload, sizeof(payload)));
-    CHECK(strcmp(payload, "WIFI:S:KVM;T:WPA;P:alphabravocharliedeltaechofoxtrot;;") == 0);
+    CHECK(credentials_wifi_qr_payload("Serialite", "alpha bravo charlie delta echo foxtrot", payload, sizeof(payload)));
+    CHECK(strcmp(payload, "WIFI:S:Serialite;T:WPA;P:alphabravocharliedeltaechofoxtrot;;") == 0);
 }
 
 static void test_wifi_qr_payload_escapes_reserved_characters(void)
@@ -171,19 +172,31 @@ static void test_human_password_output_too_small_fails(void)
     CHECK(credentials_generate_human_password(password, sizeof(password), u32_sequence_random, &sequence) == CREDENTIALS_ERR_OUTPUT_TOO_SMALL);
 }
 
-static void test_rotation_requires_local_display_and_allows_ephemeral_fallback(void)
+static void test_wordlist_only_has_lowercase_words(void)
 {
-    CHECK(credential_rotation_policy_evaluate(true, true) == CREDENTIAL_ROTATION_ACCEPT);
-    CHECK(credential_rotation_policy_evaluate(false, true) == CREDENTIAL_ROTATION_REJECT_NO_LOCAL_DISPLAY);
-    CHECK(credential_rotation_policy_evaluate(true, false) == CREDENTIAL_ROTATION_ACCEPT);
+    for (size_t i = 0; i < CREDENTIALS_WORDLIST_COUNT; ++i) {
+        const char *word = CREDENTIALS_WORDLIST[i];
+        CHECK(word[0] != '\0');
+        for (const char *p = word; *p != '\0'; ++p) {
+            CHECK(*p >= 'a' && *p <= 'z');
+        }
+    }
 }
 
-static void test_rotation_policy_names_are_stable(void)
+static void test_every_word_yields_a_valid_compactable_phrase(void)
 {
-    CHECK(strcmp(credential_rotation_policy_result_name(CREDENTIAL_ROTATION_ACCEPT), "accept") == 0);
-    CHECK(strcmp(credential_rotation_policy_result_name(CREDENTIAL_ROTATION_REJECT_NO_LOCAL_DISPLAY), "no_local_display") == 0);
-    CHECK(strcmp(credential_rotation_policy_result_name(CREDENTIAL_ROTATION_REJECT_PERSISTENCE_UNSAFE), "persistence_unsafe") == 0);
-    CHECK(strcmp(credential_rotation_policy_result_name((credential_rotation_policy_result_t)99), "unknown") == 0);
+    for (uint32_t i = 0; i < CREDENTIALS_WORDLIST_COUNT; ++i) {
+        const uint32_t values[] = {i, i, i, i, i, i};
+        struct u32_sequence sequence = {
+            .values = values,
+            .count = sizeof(values) / sizeof(values[0]),
+        };
+        char password[128];
+        char compact[128];
+        CHECK(credentials_generate_human_password(password, sizeof(password), u32_sequence_random, &sequence) == CREDENTIALS_OK);
+        CHECK(credentials_human_phrase_matches_policy(password, CREDENTIALS_WIFI_PASSWORD_WORD_COUNT));
+        CHECK(credentials_compact_human_phrase(password, CREDENTIALS_WIFI_PASSWORD_WORD_COUNT, compact, sizeof(compact)));
+    }
 }
 
 int main(void)
@@ -198,7 +211,7 @@ int main(void)
     test_human_password_rejects_out_of_range_random_values();
     test_human_password_random_failure_propagates();
     test_human_password_output_too_small_fails();
-    test_rotation_requires_local_display_and_allows_ephemeral_fallback();
-    test_rotation_policy_names_are_stable();
+    test_wordlist_only_has_lowercase_words();
+    test_every_word_yields_a_valid_compactable_phrase();
     return 0;
 }

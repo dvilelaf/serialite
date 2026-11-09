@@ -27,6 +27,7 @@ typedef struct {
 } event_log_status_t;
 
 void event_log_init(void);
+/* Messages are fixed firmware strings: never put secrets or request data in them. */
 void event_log_append(event_log_level_t level, uint64_t timestamp_ms, const char *message);
 size_t event_log_snapshot(event_log_entry_t *out_entries, size_t max_entries);
 event_log_status_t event_log_get_status(void);

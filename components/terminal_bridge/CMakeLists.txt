@@ -1,11 +1,11 @@
 idf_component_register(
     SRCS
         "src/terminal_bridge.c"
-        "src/terminal_bridge_ring.c"
         "src/terminal_scrollback.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
         freertos
+    PRIV_REQUIRES
         log
 )

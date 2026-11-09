@@ -3,6 +3,6 @@ idf_component_register(
         "src/event_log.c"
     INCLUDE_DIRS
         "include"
-    REQUIRES
+    PRIV_REQUIRES
         freertos
 )

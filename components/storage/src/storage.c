@@ -2,63 +2,61 @@
 
 #include <string.h>
 
+#include "esp_log.h"
 #include "nvs.h"
+#include "nvs_flash.h"
 #include "sdkconfig.h"
 
+static const char *TAG = "storage";
 static const char *NVS_NAMESPACE = "serialite";
+static const char *CONFIG_KEY = "config";
+
+#define STORAGE_RECORD_VERSION 2U
+
+/* One blob keeps the save atomic: NVS either sees the old record or the new one. */
+typedef struct {
+    uint8_t version;
+    uint8_t channel;
+    char ssid[STORAGE_SSID_MAX_LEN];
+    char password[STORAGE_PASSWORD_MAX_LEN];
+} storage_record_t;
+
+/* Keys written by earlier firmware, some of them plaintext secrets. */
+static const char *const LEGACY_KEYS[] = {
+    "ssid", "password", "channel", "max_clients", "web_salt", "web_hash", "brightness", "font_size",
+};
+
+static bool nvs_encryption_enabled(void)
+{
+#if CONFIG_NVS_ENCRYPTION
+    return true;
+#else
+    return false;
+#endif
+}
 
 static void storage_set_defaults(storage_config_t *config)
 {
     memset(config, 0, sizeof(*config));
-    config->wifi.channel = 6;
-    config->wifi.max_clients = 4;
-    config->brightness = 80;
-    config->font_size = 14;
+    config->wifi.channel = STORAGE_WIFI_CHANNEL_DEFAULT;
 }
 
-typedef struct {
-    nvs_handle_t handle;
-    esp_err_t err;
-} storage_nvs_scrub_ctx_t;
-
-static storage_secret_erase_result_t erase_secret_key(storage_secret_key_t key, void *ctx)
+static esp_err_t erase_legacy_keys(nvs_handle_t handle)
 {
-    storage_nvs_scrub_ctx_t *scrub = (storage_nvs_scrub_ctx_t *)ctx;
-    const char *nvs_key = key == STORAGE_SECRET_KEY_SSID ? "ssid" : "password";
-    const esp_err_t err = nvs_erase_key(scrub->handle, nvs_key);
-    if (err == ESP_OK) {
-        return STORAGE_SECRET_ERASED;
+    bool changed = false;
+    for (size_t i = 0; i < sizeof(LEGACY_KEYS) / sizeof(LEGACY_KEYS[0]); ++i) {
+        const esp_err_t err = nvs_erase_key(handle, LEGACY_KEYS[i]);
+        if (err == ESP_OK) {
+            changed = true;
+        } else if (err != ESP_ERR_NVS_NOT_FOUND) {
+            return err;
+        }
     }
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
-        return STORAGE_SECRET_NOT_FOUND;
+    if (changed) {
+        ESP_LOGW(TAG, "erased configuration keys left by older firmware");
+        return nvs_commit(handle);
     }
-    scrub->err = err;
-    return STORAGE_SECRET_ERASE_ERROR;
-}
-
-static bool commit_secret_scrub(void *ctx)
-{
-    storage_nvs_scrub_ctx_t *scrub = (storage_nvs_scrub_ctx_t *)ctx;
-    scrub->err = nvs_commit(scrub->handle);
-    return scrub->err == ESP_OK;
-}
-
-static esp_err_t scrub_legacy_plaintext_secrets(nvs_handle_t handle)
-{
-#if CONFIG_NVS_ENCRYPTION
-    const bool nvs_encryption_enabled = true;
-#else
-    const bool nvs_encryption_enabled = false;
-#endif
-    storage_nvs_scrub_ctx_t scrub = {
-        .handle = handle,
-        .err = ESP_OK,
-    };
-    return storage_config_scrub_legacy_plaintext_secrets(
-               nvs_encryption_enabled,
-               erase_secret_key,
-               commit_secret_scrub,
-               &scrub) ? ESP_OK : scrub.err;
+    return ESP_OK;
 }
 
 esp_err_t storage_init(void)
@@ -69,7 +67,11 @@ esp_err_t storage_init(void)
         return err;
     }
 
-    err = scrub_legacy_plaintext_secrets(handle);
+    err = erase_legacy_keys(handle);
+    if (err == ESP_OK && !storage_config_secret_persistence_allowed(nvs_encryption_enabled())) {
+        err = nvs_erase_key(handle, CONFIG_KEY);
+        err = err == ESP_ERR_NVS_NOT_FOUND ? ESP_OK : nvs_commit(handle);
+    }
     nvs_close(handle);
     return err;
 }
@@ -81,6 +83,9 @@ esp_err_t storage_load_config(storage_config_t *config)
     }
 
     storage_set_defaults(config);
+    if (!storage_config_secret_persistence_allowed(nvs_encryption_enabled())) {
+        return ESP_OK;
+    }
 
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
@@ -91,126 +96,68 @@ esp_err_t storage_load_config(storage_config_t *config)
         return err;
     }
 
-#if CONFIG_NVS_ENCRYPTION
-    size_t len = sizeof(config->wifi.ssid);
-    const esp_err_t ssid_err = nvs_get_str(handle, "ssid", config->wifi.ssid, &len);
-    len = sizeof(config->wifi.password);
-    const esp_err_t password_err = nvs_get_str(handle, "password", config->wifi.password, &len);
-    if ((ssid_err == ESP_OK && password_err != ESP_OK) ||
-        (ssid_err != ESP_OK && password_err == ESP_OK) ||
-        (ssid_err != ESP_OK && ssid_err != ESP_ERR_NVS_NOT_FOUND) ||
-        (password_err != ESP_OK && password_err != ESP_ERR_NVS_NOT_FOUND)) {
-        nvs_close(handle);
-        storage_set_defaults(config);
-        return ESP_ERR_STORAGE_CONFIG_CORRUPT;
-    }
-    len = sizeof(config->web_password_salt);
-    const esp_err_t web_salt_err = nvs_get_blob(handle, "web_salt", config->web_password_salt, &len);
-    const bool web_salt_ok = web_salt_err == ESP_OK && len == sizeof(config->web_password_salt);
-    len = sizeof(config->web_password_hash);
-    const esp_err_t web_hash_err = nvs_get_blob(handle, "web_hash", config->web_password_hash, &len);
-    const bool web_hash_ok = web_hash_err == ESP_OK && len == sizeof(config->web_password_hash);
-    if (web_salt_ok != web_hash_ok ||
-        (web_salt_err != ESP_OK && web_salt_err != ESP_ERR_NVS_NOT_FOUND) ||
-        (web_hash_err != ESP_OK && web_hash_err != ESP_ERR_NVS_NOT_FOUND)) {
-        nvs_close(handle);
-        storage_set_defaults(config);
-        return ESP_ERR_STORAGE_CONFIG_CORRUPT;
-    }
-    config->web_password_hash_configured = web_salt_ok && web_hash_ok;
-#endif
-    (void)nvs_get_u8(handle, "channel", &config->wifi.channel);
-    (void)nvs_get_u8(handle, "max_clients", &config->wifi.max_clients);
-    (void)nvs_get_u8(handle, "brightness", &config->brightness);
-    (void)nvs_get_u8(handle, "font_size", &config->font_size);
-
-    const storage_config_status_t status = storage_wifi_config_classify(&config->wifi);
-    if (status == STORAGE_CONFIG_STATUS_CORRUPT) {
-        nvs_close(handle);
-        storage_set_defaults(config);
-        return ESP_ERR_STORAGE_CONFIG_CORRUPT;
-    }
-    if (status == STORAGE_CONFIG_STATUS_MISSING) {
-        storage_wifi_config_apply_safe_ranges(&config->wifi);
-    }
-
+    storage_record_t record;
+    size_t len = sizeof(record);
+    err = nvs_get_blob(handle, CONFIG_KEY, &record, &len);
     nvs_close(handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return ESP_OK;
+    }
+    if (err != ESP_OK || len != sizeof(record) || record.version != STORAGE_RECORD_VERSION) {
+        storage_secure_zero(&record, sizeof(record));
+        return ESP_ERR_STORAGE_CONFIG_CORRUPT;
+    }
+
+    memcpy(config->wifi.ssid, record.ssid, sizeof(config->wifi.ssid));
+    memcpy(config->wifi.password, record.password, sizeof(config->wifi.password));
+    config->wifi.ssid[sizeof(config->wifi.ssid) - 1] = '\0';
+    config->wifi.password[sizeof(config->wifi.password) - 1] = '\0';
+    config->wifi.channel = record.channel;
+    storage_secure_zero(&record, sizeof(record));
+
+    if (storage_wifi_config_classify(&config->wifi) != STORAGE_CONFIG_STATUS_VALID) {
+        storage_secure_zero(config, sizeof(*config));
+        storage_set_defaults(config);
+        return ESP_ERR_STORAGE_CONFIG_CORRUPT;
+    }
     return ESP_OK;
 }
 
 esp_err_t storage_save_config(const storage_config_t *config)
 {
-    if (config == NULL) {
+    if (config == NULL || !storage_wifi_config_is_valid(&config->wifi)) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (!storage_wifi_config_is_valid(&config->wifi)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (config->web_password_hash_configured && !storage_web_auth_config_is_valid(config)) {
-        return ESP_ERR_INVALID_ARG;
+    if (!storage_config_secret_persistence_allowed(nvs_encryption_enabled())) {
+        return ESP_ERR_NOT_SUPPORTED;
     }
 
-#if CONFIG_NVS_ENCRYPTION
-    const bool nvs_encryption_enabled = true;
-#else
-    const bool nvs_encryption_enabled = false;
-#endif
-    if (!storage_config_secret_persistence_allowed(nvs_encryption_enabled)) {
-        return ESP_ERR_INVALID_STATE;
-    }
+    storage_record_t record = {
+        .version = STORAGE_RECORD_VERSION,
+        .channel = config->wifi.channel,
+    };
+    memcpy(record.ssid, config->wifi.ssid, sizeof(record.ssid));
+    memcpy(record.password, config->wifi.password, sizeof(record.password));
 
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    err = nvs_set_str(handle, "ssid", config->wifi.ssid);
     if (err == ESP_OK) {
-        err = nvs_set_str(handle, "password", config->wifi.password);
+        err = nvs_set_blob(handle, CONFIG_KEY, &record, sizeof(record));
+        if (err == ESP_OK) {
+            err = nvs_commit(handle);
+        }
+        nvs_close(handle);
     }
-    if (err == ESP_OK) {
-        err = nvs_set_u8(handle, "channel", config->wifi.channel);
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_u8(handle, "max_clients", config->wifi.max_clients);
-    }
-    if (err == ESP_OK && config->web_password_hash_configured) {
-        err = nvs_set_blob(handle, "web_salt", config->web_password_salt, sizeof(config->web_password_salt));
-    }
-    if (err == ESP_OK && config->web_password_hash_configured) {
-        err = nvs_set_blob(handle, "web_hash", config->web_password_hash, sizeof(config->web_password_hash));
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_u8(handle, "brightness", config->brightness);
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_u8(handle, "font_size", config->font_size);
-    }
-    if (err == ESP_OK) {
-        err = nvs_commit(handle);
-    }
-
-    nvs_close(handle);
+    storage_secure_zero(&record, sizeof(record));
     return err;
 }
 
 esp_err_t storage_factory_reset(void)
 {
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
-        return ESP_OK;
-    }
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    err = nvs_erase_all(handle);
-    if (err == ESP_OK) {
-        err = nvs_commit(handle);
-    }
-
-    nvs_close(handle);
-    return err;
+    /*
+     * Erase the whole partition, not just our namespace: older firmware let
+     * the WiFi driver keep the AP passphrase in its own namespace.
+     */
+    (void)nvs_flash_deinit();
+    return nvs_flash_erase();
 }

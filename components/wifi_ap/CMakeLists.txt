@@ -4,7 +4,7 @@ idf_component_register(
         "src/wifi_ap_status_policy.c"
     INCLUDE_DIRS
         "include"
-    REQUIRES
-        esp_wifi
+    PRIV_REQUIRES
         esp_netif
+        esp_wifi
 )

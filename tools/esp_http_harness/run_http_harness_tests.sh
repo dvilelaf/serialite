@@ -1,42 +1,27 @@
 #!/usr/bin/env bash
+# Builds the web server for the ESP-IDF linux target and tests it:
+# Playwright browser flows first, then the HTTP/WebSocket security checks.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HARNESS_DIR="$ROOT_DIR/tools/esp_http_harness"
-PORT="${SERIALITE_HTTP_HARNESS_PORT:-${ESP32_KVM_HTTP_HARNESS_PORT:-8080}}"
-ITERATIONS="${SERIALITE_HTTP_HARNESS_ITERATIONS:-${ESP32_KVM_HTTP_HARNESS_ITERATIONS:-20}}"
+PORT=8080
 
 cd "$HARNESS_DIR"
 
 if ! command -v idf.py >/dev/null 2>&1; then
-    if [ -n "${ESP_IDF_EXPORT:-}" ] && [ -f "$ESP_IDF_EXPORT" ]; then
-        # shellcheck disable=SC1091
-        source "$ESP_IDF_EXPORT" >/tmp/esp-idf-export.log 2>&1
-    elif [ -n "${IDF_PATH:-}" ] && [ -f "$IDF_PATH/export.sh" ]; then
-        # shellcheck disable=SC1091
-        source "$IDF_PATH/export.sh" >/tmp/esp-idf-export.log 2>&1
-    fi
-fi
-
-if ! command -v idf.py >/dev/null 2>&1; then
-    echo "idf.py not found. Source ESP-IDF export.sh first, or set ESP_IDF_EXPORT=/path/to/esp-idf/export.sh." >&2
+    echo "idf.py not found. Source ESP-IDF's export.sh first." >&2
     exit 127
 fi
 
-idf.py --preview build >/tmp/serialite-http-harness-build.log
+build_log="$(mktemp /tmp/serialite-http-harness-build.XXXXXX.log)"
+if ! idf.py --preview build >"$build_log" 2>&1; then
+    tail -40 "$build_log" >&2
+    exit 1
+fi
 
 log_file="$(mktemp /tmp/serialite-http-harness.XXXXXX.log)"
-cookie_file="$(mktemp /tmp/serialite-http-harness.XXXXXX.cookies)"
 pid=""
-
-cleanup() {
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-        kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
-    fi
-    rm -f "$cookie_file"
-}
-trap cleanup EXIT
 
 stop_harness() {
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
@@ -45,13 +30,12 @@ stop_harness() {
     fi
     pid=""
 }
+trap stop_harness EXIT
 
 start_harness() {
     : >"$log_file"
-    rm -f "$cookie_file"
     ./build/serialite_http_harness.elf >"$log_file" 2>&1 &
     pid=$!
-
     for _ in $(seq 1 100); do
         if curl -fsS --max-time 1 -o /dev/null "http://127.0.0.1:${PORT}/terminal" 2>/dev/null; then
             return
@@ -63,114 +47,23 @@ start_harness() {
         fi
         sleep 0.1
     done
+    echo "harness did not become ready" >&2
+    exit 1
 }
 
-start_harness
-
-if [ "${SERIALITE_SKIP_BROWSER_TEST:-${ESP32_KVM_SKIP_BROWSER_TEST:-0}}" != "1" ]; then
-    if command -v npm >/dev/null 2>&1; then
-        if [ ! -d node_modules/@playwright/test ]; then
-            npm install
-        fi
-        SERIALITE_HTTP_HARNESS_BASE_URL="http://127.0.0.1:${PORT}" npm run test:browser
-        sleep 1.1
-        stop_harness
-        start_harness
-    else
-        echo "npm not found; skipping browser functional test" >&2
+if [ "${SERIALITE_SKIP_BROWSER_TEST:-0}" != "1" ]; then
+    if ! command -v npm >/dev/null 2>&1; then
+        echo "npm not found; set SERIALITE_SKIP_BROWSER_TEST=1 to run only the security checks" >&2
+        exit 127
     fi
+    if [ ! -d node_modules/@playwright/test ]; then
+        npm ci
+    fi
+    start_harness
+    SERIALITE_HTTP_HARNESS_BASE_URL="http://127.0.0.1:${PORT}" npm run test:browser
+    stop_harness
 fi
 
-curl_status() {
-    local path="$1"
-    shift
-    curl -sS --max-time 2 -D - -o /dev/null "$@" "http://127.0.0.1:${PORT}${path}" | sed -n '1s/\r$//p'
-}
-
-expect_status() {
-    local name="$1"
-    local expected="$2"
-    shift 2
-    local actual
-    actual="$(curl_status "$@")"
-    if [ "$actual" != "$expected" ]; then
-        echo "${name}: expected '${expected}', got '${actual}'" >&2
-        cat "$log_file" >&2
-        exit 1
-    fi
-    if ! kill -0 "$pid" 2>/dev/null; then
-        echo "${name}: harness exited unexpectedly" >&2
-        cat "$log_file" >&2
-        exit 1
-    fi
-}
-
-expect_status_or_rate_limit() {
-    local name="$1"
-    local expected="$2"
-    shift 2
-    local actual
-    actual="$(curl_status "$@")"
-    case "$actual" in
-        "$expected"|"HTTP/1.1 429 Too Many Requests") ;;
-        *)
-            echo "${name}: expected '${expected}' or rate limit, got '${actual}'" >&2
-            cat "$log_file" >&2
-            exit 1
-            ;;
-    esac
-    if ! kill -0 "$pid" 2>/dev/null; then
-        echo "${name}: harness exited unexpectedly" >&2
-        cat "$log_file" >&2
-        exit 1
-    fi
-}
-
-for i in $(seq 1 "$ITERATIONS"); do
-    if [ "$i" = 1 ]; then
-        expect_status "root redirect" "HTTP/1.1 303 See Other" "/"
-        expect_status "favicon 404" "HTTP/1.1 404 Not Found" "/favicon.ico"
-        expect_status "terminal creates session" "HTTP/1.1 200 OK" "/terminal" -c "$cookie_file"
-    else
-        expect_status_or_rate_limit "root redirect" "HTTP/1.1 303 See Other" "/"
-        expect_status_or_rate_limit "favicon 404" "HTTP/1.1 404 Not Found" "/favicon.ico"
-        expect_status_or_rate_limit "terminal creates session" "HTTP/1.1 200 OK" "/terminal" -c "$cookie_file"
-    fi
-
-    root_status="$(curl_status "/" -b "$cookie_file")"
-    terminal_status="$(curl_status "/terminal" -b "$cookie_file")"
-    terminal_json_status="$(curl_status "/terminal-status.json" -b "$cookie_file")"
-
-    case "$root_status" in
-            "HTTP/1.1 303 See Other"|"HTTP/1.1 429 Too Many Requests") ;;
-        *)
-            echo "auth root: unexpected '${root_status}'" >&2
-            cat "$log_file" >&2
-            exit 1
-            ;;
-    esac
-    case "$terminal_status" in
-        "HTTP/1.1 200 OK"|"HTTP/1.1 429 Too Many Requests") ;;
-        *)
-            echo "terminal: unexpected '${terminal_status}'" >&2
-            cat "$log_file" >&2
-            exit 1
-            ;;
-    esac
-    case "$terminal_json_status" in
-        "HTTP/1.1 200 OK"|"HTTP/1.1 429 Too Many Requests") ;;
-        *)
-            echo "terminal status: unexpected '${terminal_json_status}'" >&2
-            cat "$log_file" >&2
-            exit 1
-            ;;
-    esac
-
-    kill -0 "$pid"
-    if [ $((i % 5)) -eq 0 ]; then
-        echo "harness iteration ${i}/${ITERATIONS}"
-    fi
-    sleep 0.25
-done
-
-echo "http harness ok (${ITERATIONS} iterations)"
+# The emergency lock check ends in a state only a device button can clear, so it gets a fresh harness.
+start_harness
+python3 "$HARNESS_DIR/security_checks.py" "$PORT" "$log_file"

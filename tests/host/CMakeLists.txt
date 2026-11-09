@@ -1,434 +1,132 @@
 cmake_minimum_required(VERSION 3.16)
 project(serialite_host_tests C)
 
+# Host tests for the hardware-independent modules. Each test links only the
+# sources it exercises, straight from the components.
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
-find_package(OpenSSL REQUIRED)
+add_compile_options(-Wall -Wextra -Wshadow -Werror)
+
+set(REPO_ROOT ${CMAKE_CURRENT_LIST_DIR}/../..)
+set(C ${REPO_ROOT}/components)
 
 enable_testing()
 
-add_executable(test_terminal_bridge_ring
-    test_terminal_bridge_ring.c
-    ../../components/terminal_bridge/src/terminal_bridge_ring.c
-)
+# serialite_test(<name> SOURCES <files> INCLUDES <dirs> [LIBS <libs>]) builds test_<name>.c.
+function(serialite_test name)
+    cmake_parse_arguments(T "" "" "SOURCES;INCLUDES;LIBS" ${ARGN})
+    add_executable(test_${name} test_${name}.c ${T_SOURCES})
+    target_include_directories(test_${name} PRIVATE ${T_INCLUDES})
+    if(T_LIBS)
+        target_link_libraries(test_${name} PRIVATE ${T_LIBS})
+    endif()
+    add_test(NAME ${name} COMMAND test_${name})
+endfunction()
 
-target_include_directories(test_terminal_bridge_ring PRIVATE
-    ../../components/terminal_bridge/include
-)
+serialite_test(button_gesture
+    SOURCES ${C}/buttons/src/button_gesture.c
+    INCLUDES ${C}/buttons/include)
 
-add_test(NAME terminal_bridge_ring COMMAND test_terminal_bridge_ring)
+serialite_test(credential_boot_policy
+    SOURCES ${REPO_ROOT}/main/credential_boot_policy.c
+    INCLUDES ${REPO_ROOT}/main)
 
-add_executable(test_terminal_scrollback
-    test_terminal_scrollback.c
-    ../../components/terminal_bridge/src/terminal_scrollback.c
-)
+serialite_test(ap_exposure_policy
+    SOURCES ${REPO_ROOT}/main/ap_exposure_policy.c
+    INCLUDES ${REPO_ROOT}/main)
 
-target_include_directories(test_terminal_scrollback PRIVATE
-    ../../components/terminal_bridge/include
-)
+serialite_test(credentials
+    SOURCES ${C}/credentials/src/credentials.c ${C}/credentials/src/credentials_wordlist.c
+    INCLUDES ${C}/credentials/include)
 
-add_test(NAME terminal_scrollback COMMAND test_terminal_scrollback)
+serialite_test(storage_config
+    SOURCES ${C}/storage/src/storage_config.c
+    INCLUDES ${C}/storage/include)
 
-add_executable(test_credentials
-    test_credentials.c
-    ../../components/credentials/src/credentials.c
-)
+serialite_test(config_transfer
+    SOURCES ${C}/config_transfer/src/config_transfer.c ${C}/storage/src/storage_config.c
+    INCLUDES ${C}/config_transfer/include ${C}/storage/include)
 
-target_include_directories(test_credentials PRIVATE
-    ../../components/credentials/include
-)
+serialite_test(https_fingerprint
+    SOURCES ${C}/https_fingerprint/src/https_fingerprint.c
+    INCLUDES ${C}/https_fingerprint/include)
 
-add_test(NAME credentials COMMAND test_credentials)
+serialite_test(json_writer
+    SOURCES ${C}/json_writer/src/json_writer.c
+    INCLUDES ${C}/json_writer/include)
 
-add_executable(test_local_pairing
-    test_local_pairing.c
-    ../../components/local_pairing/src/local_pairing.c
-)
+serialite_test(event_log
+    SOURCES ${C}/event_log/src/event_log.c
+    INCLUDES ${C}/event_log/include
+    LIBS Threads::Threads)
 
-target_include_directories(test_local_pairing PRIVATE
-    ../../components/local_pairing/include
-)
+serialite_test(diagnostics_export
+    SOURCES ${C}/diagnostics_export/src/diagnostics_export.c ${C}/json_writer/src/json_writer.c
+    INCLUDES ${C}/diagnostics_export/include ${C}/event_log/include ${C}/json_writer/include)
 
-add_test(NAME local_pairing COMMAND test_local_pairing)
+serialite_test(terminal_scrollback
+    SOURCES ${C}/terminal_bridge/src/terminal_scrollback.c
+    INCLUDES ${C}/terminal_bridge/include)
 
-add_executable(test_https_fingerprint
-    test_https_fingerprint.c
-    ../../components/https_fingerprint/src/https_fingerprint.c
-)
+serialite_test(ota_update_policy
+    SOURCES ${C}/ota_update/src/ota_update_policy.c
+    INCLUDES ${C}/ota_update/include)
 
-target_include_directories(test_https_fingerprint PRIVATE
-    ../../components/https_fingerprint/include
-)
+serialite_test(network_identity_policy
+    SOURCES ${C}/network_identity/src/network_identity_policy.c
+    INCLUDES ${C}/network_identity/include)
 
-add_test(NAME https_fingerprint COMMAND test_https_fingerprint)
+serialite_test(wifi_ap_status_policy
+    SOURCES ${C}/wifi_ap/src/wifi_ap_status_policy.c
+    INCLUDES ${C}/wifi_ap/include)
 
+serialite_test(secret_display
+    SOURCES ${C}/secret_display/src/secret_display.c
+    INCLUDES ${C}/secret_display/include)
+
+serialite_test(ui_status_format
+    SOURCES ${C}/lvgl_ui/src/ui_status_format.c
+    INCLUDES ${C}/lvgl_ui/include)
+
+serialite_test(web_request
+    SOURCES ${C}/web_server/src/web_request.c
+    INCLUDES ${C}/web_server/include)
+
+serialite_test(web_guard
+    SOURCES ${C}/web_server/src/web_guard.c
+    INCLUDES ${C}/web_server/include)
+
+serialite_test(web_security
+    SOURCES ${C}/web_server/src/web_security.c ${C}/web_server/src/web_request.c
+    INCLUDES ${C}/web_server/include)
+
+serialite_test(web_input_policy
+    SOURCES ${C}/web_server/src/web_input_policy.c
+    INCLUDES ${C}/web_server/include)
+
+serialite_test(web_terminal_ansi
+    SOURCES ${C}/web_server/src/web_terminal_ansi.c
+    INCLUDES ${C}/web_server/include)
+
+serialite_test(http_rate_limit
+    SOURCES ${C}/web_server/src/http_rate_limit.c
+    INCLUDES ${C}/web_server/include)
+
+# Needs the host mbedTLS 3.x development package (libmbedtls-dev); CI installs it.
 find_path(HOST_MBEDTLS_INCLUDE_DIR mbedtls/pk.h)
 find_library(HOST_MBEDTLS_LIB mbedtls)
 find_library(HOST_MBEDX509_LIB mbedx509)
 find_library(HOST_MBEDCRYPTO_LIB mbedcrypto)
 if(HOST_MBEDTLS_INCLUDE_DIR AND HOST_MBEDTLS_LIB AND HOST_MBEDX509_LIB AND HOST_MBEDCRYPTO_LIB)
-    add_executable(test_local_tls_identity
-        test_local_tls_identity.c
-        ../../components/local_tls_identity/src/local_tls_identity.c
-        ../../components/https_fingerprint/src/https_fingerprint.c
-    )
-
-    target_include_directories(test_local_tls_identity PRIVATE
-        ../../components/local_tls_identity/include
-        ../../components/https_fingerprint/include
-        ${HOST_MBEDTLS_INCLUDE_DIR}
-    )
-
-    target_link_libraries(test_local_tls_identity PRIVATE
-        ${HOST_MBEDTLS_LIB}
-        ${HOST_MBEDX509_LIB}
-        ${HOST_MBEDCRYPTO_LIB}
-    )
-
-    add_test(NAME local_tls_identity COMMAND test_local_tls_identity)
+    serialite_test(local_tls_identity
+        SOURCES ${C}/local_tls_identity/src/local_tls_identity.c ${C}/https_fingerprint/src/https_fingerprint.c
+        INCLUDES ${C}/local_tls_identity/include ${C}/https_fingerprint/include ${HOST_MBEDTLS_INCLUDE_DIR}
+        LIBS ${HOST_MBEDTLS_LIB} ${HOST_MBEDX509_LIB} ${HOST_MBEDCRYPTO_LIB})
+elseif(DEFINED ENV{CI})
+    message(FATAL_ERROR "CI must install mbedTLS development files to run the local_tls_identity test")
 else()
-    if(DEFINED ENV{CI})
-        message(FATAL_ERROR "CI must install mbedTLS development headers/libraries to run local_tls_identity host test")
-    endif()
-    message(STATUS "Skipping local_tls_identity host test: mbedTLS development headers/libraries not found")
+    message(WARNING "Skipping local_tls_identity: mbedTLS development files not found")
 endif()
-
-add_executable(test_config_transfer
-    test_config_transfer.c
-    ../../components/config_transfer/src/config_transfer.c
-)
-
-target_include_directories(test_config_transfer PRIVATE
-    ../../components/config_transfer/include
-    ../../components/storage/include
-)
-
-add_test(NAME config_transfer COMMAND test_config_transfer)
-
-add_executable(test_demo_serial
-    test_demo_serial.c
-    ../../components/demo_serial/src/demo_serial.c
-)
-
-target_include_directories(test_demo_serial PRIVATE
-    ../../components/demo_serial/include
-)
-
-add_test(NAME demo_serial COMMAND test_demo_serial)
-
-add_executable(test_storage_config
-    test_storage_config.c
-    ../../components/storage/src/storage_config.c
-)
-
-target_include_directories(test_storage_config PRIVATE
-    ../../components/storage/include
-)
-
-add_test(NAME storage_config COMMAND test_storage_config)
-
-add_executable(test_web_security
-    test_web_security.c
-    ../../components/credentials/src/credentials.c
-    ../../components/web_server/src/web_password_hash.c
-    ../../components/web_server/src/web_security.c
-)
-
-target_include_directories(test_web_security PRIVATE
-    ../../components/credentials/include
-    ../../components/web_server/include
-)
-
-target_link_libraries(test_web_security PRIVATE OpenSSL::Crypto)
-
-add_test(NAME web_security COMMAND test_web_security)
-
-add_executable(test_web_demo_policy
-    test_web_demo_policy.c
-    ../../components/web_server/src/web_demo_policy.c
-)
-
-target_include_directories(test_web_demo_policy PRIVATE
-    ../../components/web_server/include
-)
-
-add_test(NAME web_demo_policy COMMAND test_web_demo_policy)
-
-add_executable(test_web_macro_policy
-    test_web_macro_policy.c
-    ../../components/web_server/src/web_macro_policy.c
-)
-
-target_include_directories(test_web_macro_policy PRIVATE
-    ../../components/web_server/include
-)
-
-add_test(NAME web_macro_policy COMMAND test_web_macro_policy)
-
-add_executable(test_web_input_policy
-    test_web_input_policy.c
-    ../../components/web_server/src/web_input_policy.c
-)
-
-target_include_directories(test_web_input_policy PRIVATE
-    ../../components/web_server/include
-)
-
-add_test(NAME web_input_policy COMMAND test_web_input_policy)
-
-add_executable(test_web_terminal_contract
-    test_web_terminal_contract.c
-    ../../components/web_server/src/web_terminal_contract.c
-)
-
-target_include_directories(test_web_terminal_contract PRIVATE
-    ../../components/web_server/include
-)
-
-add_test(NAME web_terminal_contract COMMAND test_web_terminal_contract)
-
-add_executable(test_web_terminal_ansi
-    test_web_terminal_ansi.c
-    ../../components/web_server/src/web_terminal_ansi.c
-)
-
-target_include_directories(test_web_terminal_ansi PRIVATE
-    ../../components/web_server/include
-)
-
-add_test(NAME web_terminal_ansi COMMAND test_web_terminal_ansi)
-
-add_executable(test_web_transport_policy
-    test_web_transport_policy.c
-    ../../components/web_server/src/web_transport_policy.c
-)
-
-target_include_directories(test_web_transport_policy PRIVATE
-    ../../components/web_server/include
-)
-
-add_test(NAME web_transport_policy COMMAND test_web_transport_policy)
-
-add_executable(test_network_identity_policy
-    test_network_identity_policy.c
-    ../../components/network_identity/src/network_identity_policy.c
-)
-
-target_include_directories(test_network_identity_policy PRIVATE
-    ../../components/network_identity/include
-)
-
-add_test(NAME network_identity_policy COMMAND test_network_identity_policy)
-
-add_executable(test_wifi_client_policy
-    test_wifi_client_policy.c
-    ../../components/wifi_client/src/wifi_client_policy.c
-)
-
-target_include_directories(test_wifi_client_policy PRIVATE
-    ../../components/wifi_client/include
-)
-
-add_test(NAME wifi_client_policy COMMAND test_wifi_client_policy)
-
-add_executable(test_ble_provisioning_policy
-    test_ble_provisioning_policy.c
-    ../../components/ble_provisioning/src/ble_provisioning_policy.c
-)
-
-target_include_directories(test_ble_provisioning_policy PRIVATE
-    ../../components/ble_provisioning/include
-)
-
-add_test(NAME ble_provisioning_policy COMMAND test_ble_provisioning_policy)
-
-add_executable(test_ble_provisioning_runtime
-    test_ble_provisioning_runtime.c
-    ../../components/ble_provisioning/src/ble_provisioning_policy.c
-    ../../components/ble_provisioning/src/ble_provisioning_runtime.c
-)
-target_include_directories(test_ble_provisioning_runtime PRIVATE
-    ../../components/ble_provisioning/include
-)
-add_test(NAME ble_provisioning_runtime COMMAND test_ble_provisioning_runtime)
-
-add_executable(test_ap_exposure_policy
-    test_ap_exposure_policy.c
-    ../../components/web_server/src/ap_exposure_policy.c
-)
-
-target_include_directories(test_ap_exposure_policy PRIVATE
-    ../../components/web_server/include
-)
-
-add_test(NAME ap_exposure_policy COMMAND test_ap_exposure_policy)
-
-add_executable(test_http_route_policy
-    test_http_route_policy.c
-    ../../components/web_server/src/http_route_policy.c
-)
-
-target_include_directories(test_http_route_policy PRIVATE
-    ../../components/web_server/include
-    ../../components/ota_update/include
-)
-
-add_test(NAME http_route_policy COMMAND test_http_route_policy)
-
-add_executable(test_ota_update_policy
-    test_ota_update_policy.c
-    ../../components/ota_update/src/ota_update_policy.c
-)
-
-target_include_directories(test_ota_update_policy PRIVATE
-    ../../components/ota_update/include
-)
-
-add_test(NAME ota_update_policy COMMAND test_ota_update_policy)
-
-add_executable(test_http_rate_limit
-    test_http_rate_limit.c
-    ../../components/web_server/src/http_rate_limit.c
-)
-
-target_include_directories(test_http_rate_limit PRIVATE
-    ../../components/web_server/include
-)
-
-add_test(NAME http_rate_limit COMMAND test_http_rate_limit)
-
-add_executable(test_event_log
-    test_event_log.c
-    ../../components/event_log/src/event_log.c
-)
-
-target_include_directories(test_event_log PRIVATE
-    ../../components/event_log/include
-)
-
-target_link_libraries(test_event_log PRIVATE Threads::Threads)
-
-add_test(NAME event_log COMMAND test_event_log)
-
-add_executable(test_diagnostics_export
-    test_diagnostics_export.c
-    ../../components/diagnostics_export/src/diagnostics_export.c
-)
-
-target_include_directories(test_diagnostics_export PRIVATE
-    ../../components/diagnostics_export/include
-    ../../components/event_log/include
-)
-
-add_test(NAME diagnostics_export COMMAND test_diagnostics_export)
-
-add_executable(test_secret_display
-    test_secret_display.c
-    ../../components/secret_display/src/secret_display.c
-)
-
-target_include_directories(test_secret_display PRIVATE
-    ../../components/secret_display/include
-)
-
-add_test(NAME secret_display COMMAND test_secret_display)
-
-add_executable(test_ui_status_format
-    test_ui_status_format.c
-    ../../components/lvgl_ui/src/ui_status_format.c
-)
-
-target_include_directories(test_ui_status_format PRIVATE
-    ../../components/lvgl_ui/include
-)
-
-add_test(NAME ui_status_format COMMAND test_ui_status_format)
-
-add_executable(test_ui_web_url_policy
-    test_ui_web_url_policy.c
-    ../../components/lvgl_ui/src/ui_web_url_policy.c
-)
-
-target_include_directories(test_ui_web_url_policy PRIVATE
-    ../../components/lvgl_ui/include
-    ../../components/network_identity/include
-)
-
-add_test(NAME ui_web_url_policy COMMAND test_ui_web_url_policy)
-
-add_executable(test_wifi_ap_status_policy
-    test_wifi_ap_status_policy.c
-    ../../components/wifi_ap/src/wifi_ap_status_policy.c
-)
-
-target_include_directories(test_wifi_ap_status_policy PRIVATE
-    ../../components/wifi_ap/include
-)
-
-add_test(NAME wifi_ap_status_policy COMMAND test_wifi_ap_status_policy)
-
-add_executable(test_reset_gesture
-    test_reset_gesture.c
-    ../../components/reset_control/src/reset_gesture.c
-)
-
-target_include_directories(test_reset_gesture PRIVATE
-    ../../components/reset_control/include
-)
-
-add_test(NAME reset_gesture COMMAND test_reset_gesture)
-
-add_executable(test_emergency_lock_gesture
-    test_emergency_lock_gesture.c
-    ../../components/reset_control/src/emergency_lock_gesture.c
-)
-
-target_include_directories(test_emergency_lock_gesture PRIVATE
-    ../../components/reset_control/include
-)
-
-add_test(NAME emergency_lock_gesture COMMAND test_emergency_lock_gesture)
-
-add_executable(test_power_button_gesture
-    test_power_button_gesture.c
-    ../../components/reset_control/src/power_button_gesture.c
-)
-
-target_include_directories(test_power_button_gesture PRIVATE
-    ../../components/reset_control/include
-)
-
-add_test(NAME power_button_gesture COMMAND test_power_button_gesture)
-
-add_executable(test_strict_rescue_security_contract
-    test_strict_rescue_security_contract.c
-)
-
-target_compile_definitions(test_strict_rescue_security_contract PRIVATE
-    REPO_ROOT="${CMAKE_CURRENT_LIST_DIR}/../.."
-)
-
-add_test(NAME strict_rescue_security_contract COMMAND test_strict_rescue_security_contract)
-
-add_executable(test_startup_policy
-    test_startup_policy.c
-    ../../components/startup_policy/src/startup_policy.c
-)
-
-target_include_directories(test_startup_policy PRIVATE
-    ../../components/startup_policy/include
-)
-
-add_test(NAME startup_policy COMMAND test_startup_policy)
-
-add_executable(test_operational_label_doc
-    test_operational_label_doc.c
-)
-
-target_compile_definitions(test_operational_label_doc PRIVATE
-    REPO_ROOT="${CMAKE_CURRENT_LIST_DIR}/../.."
-)
-
-add_test(NAME operational_label_doc COMMAND test_operational_label_doc)

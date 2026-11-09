@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Serialite config</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<main>
+  <h1>Configuration</h1>
+  <nav><a href="/terminal">Terminal</a> <a href="/about">About</a> <a href="/ota">Firmware</a></nav>
+  <p class="warn">The export holds the SSID and channel only, never the WiFi password. Import checks the schema and checksum; changes apply after a reboot. Builds without NVS encryption cannot store settings.</p>
+  <textarea id="cfg" placeholder="Paste a Serialite config JSON here"></textarea>
+  <p>
+    <button id="load">Load current export</button>
+    <button id="import">Import config</button>
+    <button id="reboot" class="danger" disabled>Reboot to apply</button>
+  </p>
+  <pre id="out"></pre>
+</main>
+<script src="/assets/common.js"></script>
+<script src="/assets/config.js"></script>
+</body>
+</html>

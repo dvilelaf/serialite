@@ -15,7 +15,6 @@ static storage_wifi_config_t valid_config(void)
 {
     storage_wifi_config_t config = {
         .channel = 6,
-        .max_clients = 4,
     };
     strcpy(config.ssid, "Serialite-ABCDEF");
     strcpy(config.password, "anchor-bison-cobalt-delta");
@@ -54,36 +53,44 @@ static void test_rejects_empty_or_short_secrets(void)
     CHECK(storage_wifi_config_is_valid(&config));
 }
 
-static void test_rejects_out_of_range_network_values(void)
+static void test_rejects_unterminated_strings(void)
+{
+    storage_wifi_config_t config = valid_config();
+    memset(config.ssid, 'a', sizeof(config.ssid));
+    CHECK(!storage_wifi_config_is_valid(&config));
+    CHECK(storage_wifi_config_classify(&config) == STORAGE_CONFIG_STATUS_CORRUPT);
+
+    config = valid_config();
+    memset(config.password, 'a', sizeof(config.password));
+    CHECK(!storage_wifi_config_is_valid(&config));
+}
+
+static void test_rejects_out_of_range_channels(void)
 {
     storage_wifi_config_t config = valid_config();
 
     config.channel = 0;
     CHECK(!storage_wifi_config_is_valid(&config));
 
-    config = valid_config();
     config.channel = 14;
     CHECK(!storage_wifi_config_is_valid(&config));
 
-    config = valid_config();
-    config.max_clients = 0;
-    CHECK(!storage_wifi_config_is_valid(&config));
-
-    config = valid_config();
-    config.max_clients = 5;
-    CHECK(!storage_wifi_config_is_valid(&config));
+    CHECK(storage_wifi_channel_is_valid(1));
+    CHECK(storage_wifi_channel_is_valid(13));
+    CHECK(!storage_wifi_channel_is_valid(255));
 }
 
-static void test_safe_ranges_clamp_numeric_values(void)
+static void test_safe_ranges_clamp_channel(void)
 {
     storage_wifi_config_t config = valid_config();
     config.channel = 99;
-    config.max_clients = 99;
 
     storage_wifi_config_apply_safe_ranges(&config);
+    CHECK(config.channel == STORAGE_WIFI_CHANNEL_DEFAULT);
 
-    CHECK(config.channel == 6);
-    CHECK(config.max_clients == 4);
+    config.channel = 11;
+    storage_wifi_config_apply_safe_ranges(&config);
+    CHECK(config.channel == 11);
 }
 
 static void test_classifies_missing_valid_and_corrupt_configs(void)
@@ -110,106 +117,6 @@ static void test_secret_persistence_requires_encrypted_nvs(void)
     CHECK(storage_config_secret_persistence_allowed(true));
 }
 
-static void test_web_auth_hash_requires_salt_and_hash(void)
-{
-    storage_config_t config = {0};
-
-    CHECK(!storage_web_auth_config_is_valid(&config));
-    config.web_password_hash_configured = true;
-    CHECK(!storage_web_auth_config_is_valid(&config));
-    config.web_password_salt[0] = 1;
-    CHECK(!storage_web_auth_config_is_valid(&config));
-    config.web_password_hash[0] = 1;
-    CHECK(storage_web_auth_config_is_valid(&config));
-}
-
-static void test_plaintext_legacy_secrets_are_scrubbed_without_encrypted_nvs(void)
-{
-    CHECK(storage_config_should_scrub_legacy_plaintext_secrets(false));
-    CHECK(!storage_config_should_scrub_legacy_plaintext_secrets(true));
-}
-
-typedef struct {
-    unsigned ssid_erases;
-    unsigned password_erases;
-    unsigned commits;
-    storage_secret_erase_result_t erase_result;
-    bool commit_result;
-} scrub_test_ctx_t;
-
-static storage_secret_erase_result_t scrub_test_erase(storage_secret_key_t key, void *ctx)
-{
-    scrub_test_ctx_t *test = (scrub_test_ctx_t *)ctx;
-    if (key == STORAGE_SECRET_KEY_SSID) {
-        test->ssid_erases++;
-    } else if (key == STORAGE_SECRET_KEY_PASSWORD) {
-        test->password_erases++;
-    }
-    return test->erase_result;
-}
-
-static bool scrub_test_commit(void *ctx)
-{
-    scrub_test_ctx_t *test = (scrub_test_ctx_t *)ctx;
-    test->commits++;
-    return test->commit_result;
-}
-
-static void test_scrub_erases_legacy_plaintext_secret_keys_and_commits(void)
-{
-    scrub_test_ctx_t test = {
-        .erase_result = STORAGE_SECRET_ERASED,
-        .commit_result = true,
-    };
-
-    CHECK(storage_config_scrub_legacy_plaintext_secrets(false, scrub_test_erase, scrub_test_commit, &test));
-    CHECK(test.ssid_erases == 1);
-    CHECK(test.password_erases == 1);
-    CHECK(test.commits == 1);
-}
-
-static void test_scrub_skips_commit_when_legacy_secret_keys_are_missing(void)
-{
-    scrub_test_ctx_t test = {
-        .erase_result = STORAGE_SECRET_NOT_FOUND,
-        .commit_result = true,
-    };
-
-    CHECK(storage_config_scrub_legacy_plaintext_secrets(false, scrub_test_erase, scrub_test_commit, &test));
-    CHECK(test.ssid_erases == 1);
-    CHECK(test.password_erases == 1);
-    CHECK(test.commits == 0);
-}
-
-static void test_scrub_fails_closed_on_erase_or_commit_error(void)
-{
-    scrub_test_ctx_t erase_error = {
-        .erase_result = STORAGE_SECRET_ERASE_ERROR,
-        .commit_result = true,
-    };
-    CHECK(!storage_config_scrub_legacy_plaintext_secrets(false, scrub_test_erase, scrub_test_commit, &erase_error));
-
-    scrub_test_ctx_t commit_error = {
-        .erase_result = STORAGE_SECRET_ERASED,
-        .commit_result = false,
-    };
-    CHECK(!storage_config_scrub_legacy_plaintext_secrets(false, scrub_test_erase, scrub_test_commit, &commit_error));
-    CHECK(commit_error.commits == 1);
-}
-
-static void test_scrub_does_not_touch_keys_when_nvs_is_encrypted(void)
-{
-    scrub_test_ctx_t test = {
-        .erase_result = STORAGE_SECRET_ERASED,
-        .commit_result = true,
-    };
-
-    CHECK(storage_config_scrub_legacy_plaintext_secrets(true, scrub_test_erase, scrub_test_commit, &test));
-    CHECK(test.ssid_erases == 0);
-    CHECK(test.password_erases == 0);
-    CHECK(test.commits == 0);
-}
-
 static void test_secure_zero_clears_secret_buffers(void)
 {
     char secret[32];
@@ -226,16 +133,11 @@ int main(void)
 {
     test_accepts_valid_wpa2_ap_config();
     test_rejects_empty_or_short_secrets();
-    test_rejects_out_of_range_network_values();
-    test_safe_ranges_clamp_numeric_values();
+    test_rejects_unterminated_strings();
+    test_rejects_out_of_range_channels();
+    test_safe_ranges_clamp_channel();
     test_classifies_missing_valid_and_corrupt_configs();
     test_secret_persistence_requires_encrypted_nvs();
-    test_web_auth_hash_requires_salt_and_hash();
-    test_plaintext_legacy_secrets_are_scrubbed_without_encrypted_nvs();
-    test_scrub_erases_legacy_plaintext_secret_keys_and_commits();
-    test_scrub_skips_commit_when_legacy_secret_keys_are_missing();
-    test_scrub_fails_closed_on_erase_or_commit_error();
-    test_scrub_does_not_touch_keys_when_nvs_is_encrypted();
     test_secure_zero_clears_secret_buffers();
     return 0;
 }

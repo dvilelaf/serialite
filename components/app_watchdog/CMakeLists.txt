@@ -3,8 +3,7 @@ idf_component_register(
         "src/app_watchdog.c"
     INCLUDE_DIRS
         "include"
-    REQUIRES
-        event_log
+    PRIV_REQUIRES
         esp_system
-        log
+        event_log
 )

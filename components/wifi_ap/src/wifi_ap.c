@@ -14,14 +14,14 @@
 static const char *TAG = "wifi_ap";
 
 static wifi_ap_status_t s_status = {
-    .ip_addr = "192.168.4.1",
+    .ip_addr = WIFI_AP_IP_ADDR,
     .connected_clients = 0,
     .started = false,
 };
 static esp_netif_t *s_ap_netif;
 static esp_event_handler_instance_t s_wifi_event_instance;
 
-static bool wifi_ap_config_is_valid(const kvm_wifi_ap_config_t *config)
+static bool wifi_ap_settings_valid(const wifi_ap_settings_t *config)
 {
     if (config == NULL) {
         return false;
@@ -39,7 +39,7 @@ static bool wifi_ap_config_is_valid(const kvm_wifi_ap_config_t *config)
     if (config->channel < 1 || config->channel > 13) {
         return false;
     }
-    if (config->max_clients < 1 || config->max_clients > 4) {
+    if (config->max_clients < 1 || config->max_clients > WIFI_AP_MAX_CLIENTS_LIMIT) {
         return false;
     }
 
@@ -66,9 +66,9 @@ static void wifi_ap_event_handler(
     (void)event_data;
 }
 
-esp_err_t wifi_ap_start(const kvm_wifi_ap_config_t *config)
+esp_err_t wifi_ap_start(const wifi_ap_settings_t *config)
 {
-    if (!wifi_ap_config_is_valid(config)) {
+    if (!wifi_ap_settings_valid(config)) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -108,27 +108,33 @@ esp_err_t wifi_ap_start(const kvm_wifi_ap_config_t *config)
     }
 
     wifi_config_t wifi_config = {0};
-    strncpy((char *)wifi_config.ap.ssid, config->ssid, sizeof(wifi_config.ap.ssid) - 1);
-    strncpy((char *)wifi_config.ap.password, config->password, sizeof(wifi_config.ap.password) - 1);
-    wifi_config.ap.ssid_len = strlen(config->ssid);
+    memcpy(wifi_config.ap.ssid, config->ssid, strnlen(config->ssid, sizeof(wifi_config.ap.ssid)));
+    memcpy(wifi_config.ap.password, config->password, strnlen(config->password, sizeof(wifi_config.ap.password) - 1));
+    wifi_config.ap.ssid_len = (uint8_t)strnlen(config->ssid, sizeof(wifi_config.ap.ssid));
     wifi_config.ap.channel = config->channel;
     wifi_config.ap.max_connection = config->max_clients;
-    wifi_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
     /*
-     * This is a rescue path: client compatibility is more important than
-     * requiring PMF. WPA2 remains mandatory, while PMF-capable clients can
-     * still negotiate protected management frames.
+     * WPA3 clients get SAE with protected management frames, which stops
+     * deauth-and-replace attacks on the single client slot. WPA2 stays
+     * available because this is a rescue path and old phones must still join.
      */
+    wifi_config.ap.authmode = WIFI_AUTH_WPA2_WPA3_PSK;
+    wifi_config.ap.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
     wifi_config.ap.pmf_cfg.capable = true;
     wifi_config.ap.pmf_cfg.required = false;
 
-    err = esp_wifi_set_mode(WIFI_MODE_AP);
+    /* Keep the passphrase out of the driver's own NVS namespace. */
+    err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    if (err == ESP_OK) {
+        err = esp_wifi_set_mode(WIFI_MODE_AP);
+    }
     if (err == ESP_OK) {
         err = esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
     }
     if (err == ESP_OK) {
         err = esp_wifi_start();
     }
+    memset(&wifi_config, 0, sizeof(wifi_config));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "AP startup failed: %s", esp_err_to_name(err));
         esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_wifi_event_instance);

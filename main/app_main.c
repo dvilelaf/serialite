@@ -1,539 +1,347 @@
-#include "esp_err.h"
-#include "esp_attr.h"
+/*
+ * Serialite boot sequence. Every step degrades instead of aborting: the USB
+ * serial bridge must keep running even when storage, the display or WiFi
+ * fail, because this is the device people reach for when things are broken.
+ */
+
+#include <string.h>
+
+#include "ap_guard.h"
+#include "app_credentials.h"
+#include "board.h"
+#include "bootloader_random.h"
+#include "buttons.h"
+#include "credential_boot_policy.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_system.h"
-#include "nvs_flash.h"
-#include "sdkconfig.h"
-#include <inttypes.h>
-#include <stdio.h>
-#include <string.h>
-
-#include "ble_provisioning_runtime.h"
-#include "config_transfer.h"
-#include "credentials.h"
+#include "esp_timer.h"
+#include "event_log.h"
+#include "https_fingerprint.h"
 #include "local_tls_identity.h"
 #include "lvgl_ui.h"
 #include "network_identity.h"
+#include "nvs_flash.h"
 #include "ota_update.h"
-#include "reset_control.h"
+#include "sdkconfig.h"
 #include "storage.h"
-#include "startup_policy.h"
 #include "terminal_bridge.h"
-#include "ui_web_url_policy.h"
 #include "usb_console.h"
 #include "web_server.h"
-#include "web_transport_policy.h"
 #include "wifi_ap.h"
 
 static const char *TAG = "serialite";
 
-#define EPHEMERAL_RTC_MAGIC 0x4b564d45U
-#define EPHEMERAL_RTC_VERSION 1U
-#define STRICT_WIFI_AP_MAX_CLIENTS 1U
+/* One phone at a time: a second client cannot join and race the operator for the session. */
+#define AP_MAX_CLIENTS 1
+#define WEB_FQDN CONFIG_SERIALITE_HOSTNAME ".local"
+#define MDNS_TTL_SECONDS 120
 
-typedef struct {
-    storage_config_t config;
-    bool ui_ready;
-} app_credentials_context_t;
+#if CONFIG_SERIALITE_UART_SHOW_PASSWORD
+#define UART_REVEAL true
+#else
+#define UART_REVEAL false
+#endif
 
-typedef struct {
-    uint32_t magic;
-    uint32_t version;
-    uint32_t checksum;
-    kvm_wifi_ap_config_t wifi;
-} ephemeral_rtc_cache_t;
+static const char *const ALLOWED_HOSTS[] = {WIFI_AP_IP_ADDR, WEB_FQDN};
 
-static app_credentials_context_t s_credentials_ctx;
-static RTC_NOINIT_ATTR ephemeral_rtc_cache_t s_ephemeral_rtc_cache;
-#if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
+static app_credentials_t s_credentials;
+static char s_fingerprint[HTTPS_FINGERPRINT_TEXT_LEN];
+#if CONFIG_SERIALITE_HTTPS
 static local_tls_identity_t s_tls_identity;
 #endif
 
-static uint32_t fnv1a_update(uint32_t hash, const void *data, size_t len)
-{
-    const uint8_t *bytes = (const uint8_t *)data;
-    for (size_t i = 0; i < len; ++i) {
-        hash ^= bytes[i];
-        hash *= 16777619U;
-    }
-    return hash;
-}
-
-static uint32_t ephemeral_cache_checksum(const ephemeral_rtc_cache_t *cache)
-{
-    uint32_t hash = 2166136261U;
-    hash = fnv1a_update(hash, &cache->magic, sizeof(cache->magic));
-    hash = fnv1a_update(hash, &cache->version, sizeof(cache->version));
-    hash = fnv1a_update(hash, &cache->wifi, sizeof(cache->wifi));
-    return hash;
-}
-
-static bool runtime_wifi_config_is_valid(const kvm_wifi_ap_config_t *config)
-{
-    if (config == NULL || config->channel == 0 || config->max_clients == 0) {
-        return false;
-    }
-
-    const size_t ssid_len = strnlen(config->ssid, sizeof(config->ssid));
-    const size_t password_len = strnlen(config->password, sizeof(config->password));
-    return ssid_len > 0 && ssid_len < sizeof(config->ssid) &&
-           password_len >= 8 && password_len < sizeof(config->password) &&
-           credentials_human_phrase_matches_policy(config->password, CREDENTIALS_WIFI_PASSWORD_WORD_COUNT);
-}
-
-static bool ephemeral_cache_valid(void)
-{
-    return s_ephemeral_rtc_cache.magic == EPHEMERAL_RTC_MAGIC &&
-           s_ephemeral_rtc_cache.version == EPHEMERAL_RTC_VERSION &&
-           s_ephemeral_rtc_cache.checksum == ephemeral_cache_checksum(&s_ephemeral_rtc_cache) &&
-           runtime_wifi_config_is_valid(&s_ephemeral_rtc_cache.wifi);
-}
-
-static void ephemeral_cache_store_wifi(const kvm_wifi_ap_config_t *wifi)
-{
-    if (wifi == NULL) {
-        return;
-    }
-
-    s_ephemeral_rtc_cache.magic = EPHEMERAL_RTC_MAGIC;
-    s_ephemeral_rtc_cache.version = EPHEMERAL_RTC_VERSION;
-    s_ephemeral_rtc_cache.wifi = *wifi;
-    s_ephemeral_rtc_cache.checksum = ephemeral_cache_checksum(&s_ephemeral_rtc_cache);
-}
-
-static bool credentials_random(uint8_t *buf, size_t len, void *ctx)
-{
-    (void)ctx;
-    if (buf == NULL) {
-        return false;
-    }
-    esp_fill_random(buf, len);
-    return true;
-}
-
-static void apply_strict_runtime_wifi_policy(kvm_wifi_ap_config_t *config)
-{
-    if (config != NULL) {
-        config->max_clients = STRICT_WIFI_AP_MAX_CLIENTS;
-    }
-}
-
-static void apply_strict_stored_wifi_policy(storage_wifi_config_t *config)
-{
-    if (config != NULL) {
-        config->max_clients = STRICT_WIFI_AP_MAX_CLIENTS;
-    }
-}
-
-static void log_init_result(const char *name, esp_err_t err)
+static void log_result(const char *name, esp_err_t err)
 {
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "%s ready", name);
-        return;
+    } else {
+        ESP_LOGE(TAG, "%s failed: %s", name, esp_err_to_name(err));
     }
-
-    ESP_LOGE(TAG, "%s failed: %s", name, esp_err_to_name(err));
 }
 
-static esp_err_t init_nvs(bool *recovered)
+static uint64_t now_ms(void)
 {
-    if (recovered == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
+    return (uint64_t)(esp_timer_get_time() / 1000LL);
+}
 
-    *recovered = false;
+#if CONFIG_SERIALITE_HTTPS
+static bool hardware_random(uint8_t *buf, size_t len, void *ctx)
+{
+    (void)ctx;
+    esp_fill_random(buf, len);
+    return true;
+}
+#endif
 
+static esp_err_t init_nvs(void)
+{
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        *recovered = true;
-        err = nvs_flash_init();
+        ESP_LOGW(TAG, "NVS layout unusable (%s); erasing it", esp_err_to_name(err));
+        err = nvs_flash_erase();
+        if (err == ESP_OK) {
+            err = nvs_flash_init();
+        }
     }
-
     return err;
 }
 
-static esp_err_t generate_human_password(char *out, size_t out_size)
+/* ---- local display -------------------------------------------------------- */
+
+static lvgl_ui_credentials_t ui_credentials(void)
 {
-    const credentials_result_t result = credentials_generate_human_password(out, out_size, credentials_random, NULL);
-    if (result == CREDENTIALS_OK) {
+    return (lvgl_ui_credentials_t){
+        .ssid = s_credentials.ssid,
+        .password = s_credentials.phrase,
+        .web_host = WIFI_AP_IP_ADDR,
+        .https_fingerprint = s_fingerprint[0] != '\0' ? s_fingerprint : NULL,
+    };
+}
+
+static void fill_ui_status(ui_status_format_input_t *out, void *ctx)
+{
+    (void)ctx;
+    const wifi_ap_status_t wifi = wifi_ap_get_status();
+    const usb_console_status_t usb = usb_console_get_status();
+    const terminal_bridge_status_t bridge = terminal_bridge_get_status();
+    const web_server_status_t web = web_server_get_status();
+    *out = (ui_status_format_input_t){
+        .ap_started = wifi.started,
+        .wifi_clients = wifi.connected_clients,
+        .web_clients = web.ws_client_count,
+        .web_writer_active = web.ws_client_count > 0 && !web.locked,
+        .web_locked = web.locked,
+        .usb_connected = usb.connected,
+        .usb_rx_bytes = usb.bytes_received,
+        .usb_tx_bytes = usb.bytes_sent,
+        .bridge_drops = bridge.dropped_from_usb + bridge.dropped_to_usb + bridge.scrollback_dropped_oldest,
+    };
+}
+
+/* Shows the current credentials to whoever is physically at the device. */
+static esp_err_t reveal_credentials(void)
+{
+    if (lvgl_ui_is_running()) {
+        const lvgl_ui_credentials_t ui = ui_credentials();
+        return lvgl_ui_set_credentials(&ui, true);
+    }
+    if (UART_REVEAL) {
+        ESP_LOGW(TAG, "WiFi %s password: %s", s_credentials.ssid, s_credentials.phrase);
         return ESP_OK;
     }
-    if (result == CREDENTIALS_ERR_OUTPUT_TOO_SMALL) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-    return result == CREDENTIALS_ERR_RANDOM_FAILED ? ESP_FAIL : ESP_ERR_INVALID_ARG;
+    return ESP_ERR_INVALID_STATE;
 }
 
-static esp_err_t make_operational_wifi_config(
-    const kvm_wifi_ap_config_t *display_config,
-    kvm_wifi_ap_config_t *operational_config)
-{
-    if (display_config == NULL || operational_config == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
+/* ---- buttons -------------------------------------------------------------- */
 
-    *operational_config = *display_config;
-    operational_config->max_clients = STRICT_WIFI_AP_MAX_CLIENTS;
-    if (!credentials_compact_human_phrase(
-            display_config->password,
-            CREDENTIALS_WIFI_PASSWORD_WORD_COUNT,
-            operational_config->password,
-            sizeof(operational_config->password))) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    return ESP_OK;
-}
-
-#if CONFIG_ESP32_KVM_BLE_PROVISIONING_ENABLE
-static bool ble_radio_not_implemented_start(uint32_t advertising_window_seconds, void *ctx)
+static void on_primary_press(void *ctx)
 {
     (void)ctx;
-    ESP_LOGE(TAG, "BLE provisioning radio backend is not implemented; requested window=%" PRIu32 "s", advertising_window_seconds);
-    return false;
+    if (ap_guard_stopped_ap()) {
+        /* The password survives a software restart, so this just brings the AP back. */
+        esp_restart();
+    }
+    lvgl_ui_notify_primary_press();
 }
 
-static void ble_radio_not_implemented_stop(void *ctx)
+static void on_primary_hold(uint32_t held_ms, void *ctx)
 {
     (void)ctx;
+    lvgl_ui_notify_primary_hold(held_ms, BUTTONS_FACTORY_RESET_HOLD_MS);
 }
 
-static void maybe_start_ble_provisioning_runtime(bool offline_ap_available)
+static void on_factory_reset(void *ctx)
 {
-#if CONFIG_NVS_ENCRYPTION
-    const bool nvs_encryption_enabled = true;
-#else
-    const bool nvs_encryption_enabled = false;
-#endif
-    static ble_provisioning_runtime_t runtime;
-    ble_provisioning_runtime_init(&runtime);
+    (void)ctx;
+    ESP_LOGW(TAG, "factory reset: erasing NVS and forgetting the cached password");
+    event_log_append(EVENT_LOG_SECURITY, now_ms(), "factory reset");
+    (void)wifi_ap_stop();
+    app_credentials_forget_cached();
+    const esp_err_t err = storage_factory_reset();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS erase failed: %s; restarting with a new password anyway", esp_err_to_name(err));
+    }
+    esp_restart();
+}
 
-    const ble_provisioning_runtime_config_t runtime_config = {
-        .policy = {
-            .requested = true,
-            .physical_presence = false,
-            .local_pairing_passed = false,
-            .nvs_encrypted = nvs_encryption_enabled,
-            .offline_ap_flow_available = offline_ap_available,
-            .advertising_window_seconds = BLE_PROVISIONING_POLICY_ADV_WINDOW_MAX_SECONDS,
-            .session_budget_seconds = BLE_PROVISIONING_POLICY_SESSION_MAX_SECONDS,
-        },
-        .start_radio = ble_radio_not_implemented_start,
-        .stop_radio = ble_radio_not_implemented_stop,
-        .radio_ctx = NULL,
-    };
-
-    const ble_provisioning_runtime_result_t result = ble_provisioning_runtime_start(&runtime, &runtime_config);
-    if (result == BLE_PROVISIONING_RUNTIME_STARTED) {
-        ESP_LOGW(TAG, "BLE provisioning advertising started");
-    } else {
-        ESP_LOGW(TAG, "BLE provisioning not started: %s", ble_provisioning_runtime_last_reason(&runtime));
+static void on_secondary_press(void *ctx)
+{
+    (void)ctx;
+    if (web_server_get_status().started) {
+        log_result("emergency lock toggle", web_server_toggle_lock());
     }
 }
-#else
-static void maybe_start_ble_provisioning_runtime(bool offline_ap_available)
+
+static void on_secondary_hold(void *ctx)
 {
-    (void)offline_ap_available;
+    (void)ctx;
+    ESP_LOGW(TAG, "power off requested");
+    log_result("power off", board_power_off());
 }
-#endif
 
-static esp_err_t rotate_credentials_cb(const web_server_credential_rotation_t *rotation, void *ctx)
+/* ---- web callbacks (httpd task) ------------------------------------------- */
+
+static esp_err_t rotate_credentials(void *ctx)
 {
-    app_credentials_context_t *state = (app_credentials_context_t *)ctx;
-    if (rotation == NULL || state == NULL || rotation->wifi_password == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-#if CONFIG_NVS_ENCRYPTION
-    const bool nvs_encryption_enabled = true;
-#else
-    const bool nvs_encryption_enabled = false;
-#endif
-    const credential_rotation_policy_result_t policy = credential_rotation_policy_evaluate(
-        state->ui_ready,
-        storage_config_secret_persistence_allowed(nvs_encryption_enabled));
-    if (policy != CREDENTIAL_ROTATION_ACCEPT) {
-        ESP_LOGW(TAG, "credential rotation rejected: %s", credential_rotation_policy_result_name(policy));
+    (void)ctx;
+    if (!lvgl_ui_is_running() && !UART_REVEAL) {
         return ESP_ERR_INVALID_STATE;
     }
-
-    storage_config_t next = state->config;
-    strlcpy(next.wifi.ssid, "KVM", sizeof(next.wifi.ssid));
-    strlcpy(next.wifi.password, rotation->wifi_password, sizeof(next.wifi.password));
-    apply_strict_stored_wifi_policy(&next.wifi);
-    memset(next.web_password_salt, 0, sizeof(next.web_password_salt));
-    memset(next.web_password_hash, 0, sizeof(next.web_password_hash));
-    next.web_password_hash_configured = false;
-    storage_wifi_config_apply_safe_ranges(&next.wifi);
-    if (!storage_wifi_config_is_valid(&next.wifi)) {
-        storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
-        return ESP_ERR_INVALID_ARG;
+    ESP_RETURN_ON_ERROR(app_credentials_rotate(&s_credentials), TAG, "rotation failed");
+    const esp_err_t err = reveal_credentials();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "new password stored but not shown yet: %s", esp_err_to_name(err));
     }
+    return ESP_OK;
+}
 
-    const lvgl_ui_boot_status_t ui_status = {
-        .ssid = next.wifi.ssid,
-        .password = rotation->wifi_password,
-        .ip_addr = "192.168.4.1",
-        .usb_connected = usb_console_get_status().connected,
+static esp_err_t export_config(char *out, size_t out_size, void *ctx)
+{
+    (void)ctx;
+    return app_credentials_export(&s_credentials, out, out_size);
+}
+
+static esp_err_t import_config(const char *json, void *ctx)
+{
+    (void)ctx;
+    return app_credentials_import(&s_credentials, json);
+}
+
+/* ---- boot ----------------------------------------------------------------- */
+
+static void advertise_mdns(bool https)
+{
+    const network_identity_config_t config = {
+        .hostname = CONFIG_SERIALITE_HOSTNAME,
+        .instance_name = "Serialite",
+        .service_type = https ? "_https" : "_http",
+        .port = https ? 443 : 80,
+        .ttl_seconds = MDNS_TTL_SECONDS,
     };
-    ESP_RETURN_ON_ERROR(lvgl_ui_update_credentials(&ui_status, false), TAG, "local credential display staging failed");
-
-    const esp_err_t save_err = storage_save_config(&next);
-    if (save_err != ESP_OK) {
-        if (save_err == ESP_ERR_INVALID_STATE) {
-            kvm_wifi_ap_config_t runtime_wifi = {
-                .channel = next.wifi.channel,
-                .max_clients = next.wifi.max_clients,
-            };
-            strlcpy(runtime_wifi.ssid, next.wifi.ssid, sizeof(runtime_wifi.ssid));
-            strlcpy(runtime_wifi.password, next.wifi.password, sizeof(runtime_wifi.password));
-            ephemeral_cache_store_wifi(&runtime_wifi);
-            storage_secure_zero(state->config.wifi.password, sizeof(state->config.wifi.password));
-            state->config = next;
-            storage_secure_zero(runtime_wifi.password, sizeof(runtime_wifi.password));
-            storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
-            ESP_LOGW(TAG, "credential rotation stored in RTC only because NVS Encryption is disabled");
-            return ESP_OK;
-        }
-        const lvgl_ui_boot_status_t rollback_ui_status = {
-            .ssid = state->config.wifi.ssid,
-            .password = state->config.wifi.password,
-            .ip_addr = "192.168.4.1",
-            .usb_connected = usb_console_get_status().connected,
-        };
-        (void)lvgl_ui_update_credentials(&rollback_ui_status, false);
-        storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
-        return save_err;
+    const esp_err_t err = network_identity_start(&config);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mDNS unavailable (%s); use %s://" WIFI_AP_IP_ADDR, esp_err_to_name(err), https ? "https" : "http");
     }
-
-    const esp_err_t reveal_err = lvgl_ui_update_credentials(&ui_status, rotation->reveal_on_local_display);
-    if (reveal_err != ESP_OK) {
-        ESP_LOGW(TAG, "rotated credentials stored but immediate reveal failed: %s", esp_err_to_name(reveal_err));
-    }
-
-    storage_secure_zero(state->config.wifi.password, sizeof(state->config.wifi.password));
-    state->config = next;
-    storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
-    return ESP_OK;
 }
 
-static esp_err_t export_config_cb(char *out, size_t out_size, void *ctx)
+static void forget_secrets(void)
 {
-    app_credentials_context_t *state = (app_credentials_context_t *)ctx;
-    if (state == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    const config_transfer_result_t result = config_transfer_export_json(&state->config, out, out_size);
-    return result == CONFIG_TRANSFER_OK ? ESP_OK : ESP_ERR_INVALID_STATE;
-}
-
-static esp_err_t import_config_cb(const char *json, void *ctx)
-{
-    app_credentials_context_t *state = (app_credentials_context_t *)ctx;
-    if (state == NULL || json == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    storage_config_t next = state->config;
-    const config_transfer_result_t import_result = config_transfer_import_json(json, &next);
-    if (import_result != CONFIG_TRANSFER_OK) {
-        ESP_LOGW(TAG, "config import rejected: %s", config_transfer_result_name(import_result));
-        return ESP_ERR_INVALID_ARG;
-    }
-    apply_strict_stored_wifi_policy(&next.wifi);
-    storage_wifi_config_apply_safe_ranges(&next.wifi);
-    if (!storage_wifi_config_is_valid(&next.wifi)) {
-        storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    const esp_err_t save_err = storage_save_config(&next);
-    if (save_err != ESP_OK) {
-        storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
-        return save_err;
-    }
-
-    storage_secure_zero(state->config.wifi.password, sizeof(state->config.wifi.password));
-    state->config = next;
-    storage_secure_zero(next.wifi.password, sizeof(next.wifi.password));
-    return ESP_OK;
-}
-
-static esp_err_t generate_ephemeral_wifi_config(kvm_wifi_ap_config_t *config)
-{
-    if (config == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    strlcpy(config->ssid, "KVM", sizeof(config->ssid));
-
-    ESP_RETURN_ON_ERROR(generate_human_password(config->password, sizeof(config->password)), TAG, "AP password generation failed");
-    config->channel = 6;
-    config->max_clients = STRICT_WIFI_AP_MAX_CLIENTS;
-
-    ESP_LOGW(TAG, "generated ephemeral AP credentials for ssid=%s", config->ssid);
-    ESP_LOGW(TAG, "AP password is not logged; local display flow will expose it during provisioning");
-    return ESP_OK;
+    app_credentials_wipe(&s_credentials);
+#if CONFIG_SERIALITE_HTTPS
+    local_tls_identity_zeroize(&s_tls_identity);
+#endif
 }
 
 void app_main(void)
 {
-    bool nvs_recovered = false;
-    ESP_ERROR_CHECK(init_nvs(&nvs_recovered));
-
-    storage_config_t config;
-    const esp_err_t storage_err = storage_init();
-    log_init_result("storage", storage_err);
-    ESP_ERROR_CHECK(storage_err);
+    event_log_init();
+    const esp_err_t nvs_err = init_nvs();
+    log_result("nvs", nvs_err);
+    esp_err_t storage_err = nvs_err;
+    if (nvs_err == ESP_OK) {
+        storage_err = storage_init();
+        log_result("storage", storage_err);
+    }
     const esp_err_t bridge_err = terminal_bridge_start();
-    log_init_result("terminal_bridge", bridge_err);
-    const esp_err_t config_err = storage_load_config(&config);
-    if (config_err != ESP_OK && config_err != ESP_ERR_STORAGE_CONFIG_CORRUPT) {
-        ESP_ERROR_CHECK(config_err);
-    }
+    log_result("terminal_bridge", bridge_err);
+    const esp_err_t board_err = board_init();
+    log_result(board_get_info()->name, board_err);
 
-    kvm_wifi_ap_config_t mapped_wifi_config = {
-        .channel = config.wifi.channel,
-        .max_clients = config.wifi.max_clients,
-    };
-    strlcpy(mapped_wifi_config.ssid, config.wifi.ssid, sizeof(mapped_wifi_config.ssid));
-    strlcpy(mapped_wifi_config.password, config.wifi.password, sizeof(mapped_wifi_config.password));
-
-    bool ephemeral_credentials = false;
-    const storage_config_status_t config_status = storage_wifi_config_classify(&config.wifi);
-    if (nvs_recovered ||
-        config_err == ESP_ERR_STORAGE_CONFIG_CORRUPT ||
-        config_status != STORAGE_CONFIG_STATUS_VALID ||
-        !runtime_wifi_config_is_valid(&mapped_wifi_config)) {
-        if (config_err == ESP_ERR_STORAGE_CONFIG_CORRUPT) {
-            ESP_LOGE(TAG, "stored AP config is corrupt; entering physical setup flow with regenerated credentials");
-        }
-        if (ephemeral_cache_valid()) {
-            mapped_wifi_config = s_ephemeral_rtc_cache.wifi;
-            ESP_LOGW(TAG, "reusing ephemeral AP credentials from RTC after software reboot");
-        } else {
-            ESP_ERROR_CHECK(generate_ephemeral_wifi_config(&mapped_wifi_config));
-            ephemeral_cache_store_wifi(&mapped_wifi_config);
-        }
-        ephemeral_credentials = true;
-    }
-    apply_strict_runtime_wifi_policy(&mapped_wifi_config);
-    storage_secure_zero(config.wifi.password, sizeof(config.wifi.password));
-
-    if (!ephemeral_cache_valid()) {
-        ephemeral_cache_store_wifi(&mapped_wifi_config);
-    }
-
+    /*
+     * Secrets are generated before WiFi is up, when the RNG only has a true
+     * entropy source if one is switched on explicitly.
+     */
+    bootloader_random_enable();
+    const esp_err_t cred_err = app_credentials_load(&s_credentials, storage_err == ESP_OK);
     bool tls_ready = false;
-#if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
-    const local_tls_identity_result_t tls_result = local_tls_identity_generate(
-        &s_tls_identity,
-        credentials_random,
-        NULL,
-        "kvm.local");
-    tls_ready = tls_result == LOCAL_TLS_IDENTITY_OK;
-    if (!tls_ready) {
-        ESP_LOGW(TAG, "HTTPS identity unavailable despite HTTPS opt-in: %s; falling back to HTTP", local_tls_identity_result_name(tls_result));
+#if CONFIG_SERIALITE_HTTPS
+    if (cred_err == ESP_OK) {
+        const local_tls_identity_result_t tls = local_tls_identity_generate(&s_tls_identity, hardware_random, NULL, WEB_FQDN);
+        tls_ready = tls == LOCAL_TLS_IDENTITY_OK;
+        if (tls_ready) {
+            strlcpy(s_fingerprint, s_tls_identity.fingerprint_text, sizeof(s_fingerprint));
+        } else {
+            ESP_LOGE(TAG, "TLS identity failed: %s", local_tls_identity_result_name(tls));
+        }
     }
 #endif
+    bootloader_random_disable();
+    log_result("credentials", cred_err);
 
-    const lvgl_ui_boot_status_t ui_status = {
-        .ssid = mapped_wifi_config.ssid,
-        .password = mapped_wifi_config.password,
-        .https_fingerprint =
-#if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
-            tls_ready ? s_tls_identity.fingerprint_text : NULL,
-#else
-            NULL,
-#endif
-        .web_url = ui_web_url_for_transport(tls_ready),
-        .ip_addr = "192.168.4.1",
-        .usb_connected = false,
-    };
-    const esp_err_t ui_err = lvgl_ui_start(&ui_status);
-    log_init_result("lvgl_ui", ui_err);
-    s_credentials_ctx.config = config;
-    s_credentials_ctx.ui_ready = ui_err == ESP_OK;
-    strlcpy(s_credentials_ctx.config.wifi.ssid, mapped_wifi_config.ssid, sizeof(s_credentials_ctx.config.wifi.ssid));
-    strlcpy(s_credentials_ctx.config.wifi.password, mapped_wifi_config.password, sizeof(s_credentials_ctx.config.wifi.password));
-    s_credentials_ctx.config.wifi.channel = mapped_wifi_config.channel;
-    s_credentials_ctx.config.wifi.max_clients = mapped_wifi_config.max_clients;
-    if (ui_err == ESP_OK) {
-        log_init_result("reset_control", reset_control_start());
+    esp_err_t ui_err = ESP_ERR_NOT_SUPPORTED;
+    if (board_err == ESP_OK && board_get_info()->has_display && cred_err == ESP_OK) {
+        const lvgl_ui_config_t ui = {
+            .credentials = ui_credentials(),
+            .status_fn = fill_ui_status,
+        };
+        ui_err = lvgl_ui_start(&ui);
+        log_result("display", ui_err);
     }
-    if (startup_policy_after_ui(ui_err == ESP_OK, ephemeral_credentials) == STARTUP_POLICY_SKIP_AP) {
-        ESP_LOGE(TAG, "AP skipped: ephemeral password cannot be safely exposed without local display");
-        storage_secure_zero(mapped_wifi_config.password, sizeof(mapped_wifi_config.password));
-#if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
-        local_tls_identity_zeroize(&s_tls_identity);
-#endif
-        const esp_err_t usb_err = usb_console_start();
-        log_init_result("usb_console", usb_err);
+    if (board_err == ESP_OK) {
+        const buttons_config_t buttons = {
+            .on_primary_press = on_primary_press,
+            .on_primary_hold = on_primary_hold,
+            .on_factory_reset = on_factory_reset,
+            .on_secondary_press = on_secondary_press,
+            .on_secondary_hold = on_secondary_hold,
+        };
+        log_result("buttons", buttons_start(&buttons));
+    }
+    /* The serial bridge is useful on its own, so it starts whatever happens to WiFi. */
+    log_result("usb_console", usb_console_start());
+
+    if (cred_err != ESP_OK || !credential_boot_policy_can_start_ap(s_credentials.source, ui_err == ESP_OK, UART_REVEAL)) {
+        ESP_LOGE(TAG, "AP not started: %s", cred_err != ESP_OK ? "no credentials" : "a new password cannot be shown on this board");
+        forget_secrets();
         return;
     }
+    if (ui_err != ESP_OK && UART_REVEAL) {
+        (void)reveal_credentials();
+    }
+    if (tls_ready && ui_err != ESP_OK && !UART_REVEAL) {
+        ESP_LOGW(TAG, "HTTPS needs its fingerprint on screen to be verifiable; serving HTTP");
+        tls_ready = false;
+        s_fingerprint[0] = '\0';
+    }
 
-    kvm_wifi_ap_config_t operational_wifi_config = {0};
-    ESP_ERROR_CHECK(make_operational_wifi_config(&mapped_wifi_config, &operational_wifi_config));
-    esp_err_t wifi_err = wifi_ap_start(&operational_wifi_config);
-    log_init_result("wifi_ap", wifi_err);
-    maybe_start_ble_provisioning_runtime(wifi_err == ESP_OK);
-    storage_secure_zero(operational_wifi_config.password, sizeof(operational_wifi_config.password));
-    storage_secure_zero(mapped_wifi_config.password, sizeof(mapped_wifi_config.password));
-    const esp_err_t usb_err = usb_console_start();
-    log_init_result("usb_console", usb_err);
+    wifi_ap_settings_t ap;
+    esp_err_t wifi_err = app_credentials_ap_config(&s_credentials, AP_MAX_CLIENTS, &ap);
     if (wifi_err == ESP_OK) {
-        const web_server_config_t web_config = {
-            .tls_identity =
-#if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
-                tls_ready ? &s_tls_identity : NULL,
-#else
-                NULL,
+        wifi_err = wifi_ap_start(&ap);
+    }
+    memset(&ap, 0, sizeof(ap));
+    log_result("wifi_ap", wifi_err);
+
+    esp_err_t web_err = ESP_ERR_INVALID_STATE;
+    if (wifi_err == ESP_OK) {
+        const web_server_config_t web = {
+#if CONFIG_SERIALITE_HTTPS
+            .tls_identity = tls_ready ? &s_tls_identity : NULL,
 #endif
-            .tls_fingerprint_displayed_locally = tls_ready && s_credentials_ctx.ui_ready,
-            .rotate_credentials = rotate_credentials_cb,
-            .rotate_credentials_ctx = &s_credentials_ctx,
-            .export_config = export_config_cb,
-            .import_config = import_config_cb,
-            .config_ctx = &s_credentials_ctx,
+            .allowed_hosts = ALLOWED_HOSTS,
+            .allowed_host_count = sizeof(ALLOWED_HOSTS) / sizeof(ALLOWED_HOSTS[0]),
+            .rotate_credentials = rotate_credentials,
+            .export_config = export_config,
+            .import_config = import_config,
         };
-        const esp_err_t web_err = web_server_start(&web_config);
-#if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
-        local_tls_identity_zeroize(&s_tls_identity);
+        web_err = web_server_start(&web);
+        log_result("web_server", web_err);
+        if (web_err == ESP_OK) {
+            advertise_mdns(tls_ready);
+        }
+        log_result("ap_guard", ap_guard_start());
+    }
+#if CONFIG_SERIALITE_HTTPS
+    /* esp_https_server keeps its own copies of the certificate and key. */
+    local_tls_identity_zeroize(&s_tls_identity);
 #endif
-        log_init_result("web_server", web_err);
-        const web_server_status_t web_status = web_server_get_status();
-        const web_transport_t web_transport = web_transport_from_status(web_err == ESP_OK && web_status.started, web_status.tls_active);
-        if (web_transport_should_advertise_mdns(web_transport)) {
-            const network_identity_config_t network_identity_config = {
-                .hostname = NETWORK_IDENTITY_HOSTNAME,
-                .instance_name = NETWORK_IDENTITY_SERVICE_NAME,
-                .service_type = web_transport == WEB_TRANSPORT_HTTPS ? NETWORK_IDENTITY_HTTPS_SERVICE : NETWORK_IDENTITY_HTTP_SERVICE,
-                .port = web_transport == WEB_TRANSPORT_HTTPS ? 443 : 80,
-                .ttl_seconds = 120,
-            };
-            const esp_err_t identity_err = network_identity_start(&network_identity_config);
-            if (identity_err != ESP_OK) {
-                if (web_transport == WEB_TRANSPORT_HTTPS) {
-                    ESP_LOGW(TAG, "mDNS unavailable for trusted HTTPS name %s: %s", NETWORK_IDENTITY_LOCAL_HTTPS_URL, esp_err_to_name(identity_err));
-                } else {
-                    ESP_LOGW(TAG, "mDNS unavailable; use %s://192.168.4.1: %s", web_transport_scheme(web_transport), esp_err_to_name(identity_err));
-                }
-            }
-        }
-        if (bridge_err == ESP_OK && wifi_err == ESP_OK) {
-            log_init_result("ota_valid", ota_update_mark_running_app_valid());
-        } else {
-            ESP_LOGW(TAG, "running app not marked valid for OTA rollback because AP/bridge rescue services are not ready");
-        }
-        if (startup_policy_after_web(true, web_err == ESP_OK) == STARTUP_POLICY_CONTINUE && web_err != ESP_OK) {
-            ESP_LOGE(TAG, "web/auth service failed after WiFi startup; keeping AP alive for rescue diagnostics");
-        }
+
+    /* An OTA image only becomes permanent once every way to update it again works. */
+    if (bridge_err == ESP_OK && wifi_err == ESP_OK && web_err == ESP_OK) {
+        log_result("ota_valid", ota_update_mark_running_app_valid());
     } else {
-#if CONFIG_ESP32_KVM_HTTPS_LOCAL_ENABLE
-        local_tls_identity_zeroize(&s_tls_identity);
-#endif
-        ESP_LOGE(TAG, "web_server skipped because AP did not start");
+        ESP_LOGW(TAG, "running image not confirmed: a pending OTA rollback stays armed");
     }
 }

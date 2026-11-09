@@ -106,9 +106,8 @@ size_t terminal_bridge_publish_usb_output(const uint8_t *data, size_t len)
     return len;
 }
 
-size_t terminal_bridge_submit_input(terminal_bridge_source_t source, const uint8_t *data, size_t len)
+size_t terminal_bridge_submit_input(const uint8_t *data, size_t len)
 {
-    (void)source;
     if (data == NULL || len == 0 || terminal_bridge_start() != ESP_OK) {
         return 0;
     }

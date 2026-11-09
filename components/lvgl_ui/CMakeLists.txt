@@ -1,22 +1,19 @@
+set(srcs "src/ui_status_format.c")
+if(CONFIG_SERIALITE_BOARD_HAS_DISPLAY)
+    list(APPEND srcs "src/lvgl_ui.c")
+else()
+    list(APPEND srcs "src/lvgl_ui_headless.c")
+endif()
+
 idf_component_register(
-    SRCS
-        "src/lvgl_ui.c"
-        "src/ui_status_format.c"
-        "src/ui_web_url_policy.c"
+    SRCS ${srcs}
     INCLUDE_DIRS
         "include"
-    REQUIRES
-        app_watchdog
+    PRIV_REQUIRES
         board
         credentials
-        esp_timer
         esp_lcd
+        esp_timer
         lvgl
-        network_identity
-        power_status
         secret_display
-        terminal_bridge
-        usb_console
-        web_server
-        wifi_ap
 )

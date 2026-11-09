@@ -1,7 +1,5 @@
 #pragma once
 
-#include "network_identity_constants.h"
-
 #include "esp_err.h"
 #include <stdint.h>
 

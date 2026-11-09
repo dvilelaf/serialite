@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/button_gesture.c"
+        "src/buttons.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_REQUIRES
+        app_watchdog
+        board
+        esp_timer
+)

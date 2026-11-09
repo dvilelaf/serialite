@@ -5,5 +5,6 @@ idf_component_register(
         "include"
     REQUIRES
         https_fingerprint
+    PRIV_REQUIRES
         mbedtls
 )
