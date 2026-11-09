@@ -16,7 +16,9 @@ import pathlib
 import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-SOURCE = REPO_ROOT / "components" / "credentials" / "wordlist" / "eff_large_wordlist.txt"
+SOURCE = (
+    REPO_ROOT / "components" / "credentials" / "wordlist" / "eff_large_wordlist.txt"
+)
 OUTPUT = REPO_ROOT / "components" / "credentials" / "src" / "credentials_wordlist.c"
 SOURCE_SHA256 = "addd35536511597a02fa0a9ff1e5284677b8883b83e986e43f15a3db996b903e"
 WORDS_PER_LINE = 8
@@ -62,13 +64,20 @@ def render(words: list[str]) -> str:
 def main() -> int:
     words = load_words()
     rendered = render(words)
-    header = (REPO_ROOT / "components" / "credentials" / "include" / "credentials_wordlist.h").read_text()
+    header = (
+        REPO_ROOT / "components" / "credentials" / "include" / "credentials_wordlist.h"
+    ).read_text()
     if f"#define CREDENTIALS_WORDLIST_COUNT {len(words)}U" not in header:
-        raise SystemExit(f"credentials_wordlist.h must define CREDENTIALS_WORDLIST_COUNT {len(words)}U")
+        raise SystemExit(
+            f"credentials_wordlist.h must define CREDENTIALS_WORDLIST_COUNT {len(words)}U"
+        )
 
     if "--check" in sys.argv[1:]:
         if OUTPUT.read_text() != rendered:
-            print(f"{OUTPUT.relative_to(REPO_ROOT)} is stale; run scripts/gen_wordlist.py", file=sys.stderr)
+            print(
+                f"{OUTPUT.relative_to(REPO_ROOT)} is stale; run scripts/gen_wordlist.py",
+                file=sys.stderr,
+            )
             return 1
         return 0
 

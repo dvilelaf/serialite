@@ -46,7 +46,12 @@ class FlashLatestFirmwareTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def publish(self, files: dict[str, bytes] | None = None, extra_member: str | None = None, profile: str = "lab") -> None:
+    def publish(
+        self,
+        files: dict[str, bytes] | None = None,
+        extra_member: str | None = None,
+        profile: str = "lab",
+    ) -> None:
         files = files or {
             "bootloader.bin": b"boot",
             "partition-table.bin": b"part",
@@ -56,7 +61,9 @@ class FlashLatestFirmwareTest(unittest.TestCase):
             "manifest.txt": f"Serialite {VERSION}\nProfile: {profile}\n".encode(),
         }
         files = dict(files)
-        files["SHA256SUMS"] = "".join(f"{sha256(data)}  {name}\n" for name, data in sorted(files.items())).encode()
+        files["SHA256SUMS"] = "".join(
+            f"{sha256(data)}  {name}\n" for name, data in sorted(files.items())
+        ).encode()
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as archive:
             for name, data in files.items():
@@ -69,18 +76,29 @@ class FlashLatestFirmwareTest(unittest.TestCase):
                 archive.addfile(info, io.BytesIO(b"x"))
         tarball = buf.getvalue()
         (self.assets / f"{NAME}.tar.gz").write_bytes(tarball)
-        (self.assets / f"{NAME}.tar.gz.sha256").write_text(f"{sha256(tarball)}  {NAME}.tar.gz\n")
+        (self.assets / f"{NAME}.tar.gz.sha256").write_text(
+            f"{sha256(tarball)}  {NAME}.tar.gz\n"
+        )
 
     def add_device(self, name: str) -> pathlib.Path:
         tty = self.dev / name
         tty.write_text("tty")
-        (self.dev / "serial" / "by-id" / f"usb-Espressif_USB_JTAG_serial_debug_unit_{name}-if00").symlink_to(f"../../{name}")
+        (
+            self.dev
+            / "serial"
+            / "by-id"
+            / f"usb-Espressif_USB_JTAG_serial_debug_unit_{name}-if00"
+        ).symlink_to(f"../../{name}")
         return tty
 
     def run_script(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [str(SCRIPT), "--version", VERSION, *args],
-            cwd=REPO_ROOT, env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            cwd=REPO_ROOT,
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
         )
 
     def test_dry_run_verifies_and_flashes_with_the_bundle_flash_args(self) -> None:
@@ -119,7 +137,10 @@ class FlashLatestFirmwareTest(unittest.TestCase):
         self.publish()
         # Re-pack with a file changed after SHA256SUMS was computed.
         buf = io.BytesIO()
-        with tarfile.open(self.assets / f"{NAME}.tar.gz") as source, tarfile.open(fileobj=buf, mode="w:gz") as target:
+        with (
+            tarfile.open(self.assets / f"{NAME}.tar.gz") as source,
+            tarfile.open(fileobj=buf, mode="w:gz") as target,
+        ):
             for member in source.getmembers():
                 data = source.extractfile(member).read()
                 if member.name.endswith("serialite.bin"):
@@ -127,7 +148,9 @@ class FlashLatestFirmwareTest(unittest.TestCase):
                     member.size = len(data)
                 target.addfile(member, io.BytesIO(data))
         (self.assets / f"{NAME}.tar.gz").write_bytes(buf.getvalue())
-        (self.assets / f"{NAME}.tar.gz.sha256").write_text(f"{sha256(buf.getvalue())}  {NAME}.tar.gz\n")
+        (self.assets / f"{NAME}.tar.gz.sha256").write_text(
+            f"{sha256(buf.getvalue())}  {NAME}.tar.gz\n"
+        )
         result = self.run_script("--port", str(self.add_device("ttyACM1")), "--dry-run")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("SHA256SUMS", result.stderr)

@@ -10,7 +10,6 @@ import tempfile
 import textwrap
 import unittest
 
-
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "tools" / "host" / "setup-linux-serial-console.sh"
 
@@ -31,12 +30,30 @@ class HostSetupScriptTest(unittest.TestCase):
             cwd=REPO_ROOT,
             env=merged_env,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
 
-    def make_fake_host(self) -> tuple[tempfile.TemporaryDirectory[str], dict[str, str], pathlib.Path]:
+    def install_udevadm(self, root: pathlib.Path, serial_short: str) -> None:
+        """Replaces udevadm with one that reports this serial and never adds a symlink."""
+        udevadm = root / "bin" / "udevadm"
+        udevadm.write_text(
+            "#!/usr/bin/env sh\n"
+            'if [ "$1" = "info" ]; then\n'
+            "    cat <<'EOF'\n"
+            "ID_VENDOR_ID=303a\n"
+            "ID_MODEL_ID=1001\n"
+            f"ID_SERIAL_SHORT={serial_short}\n"
+            "ID_MODEL=USB_JTAG_serial_debug_unit\n"
+            "EOF\n"
+            "fi\n"
+            "exit 0\n"
+        )
+        udevadm.chmod(0o755)
+
+    def make_fake_host(
+        self,
+    ) -> tuple[tempfile.TemporaryDirectory[str], dict[str, str], pathlib.Path]:
         tmp = tempfile.TemporaryDirectory(prefix="serialite-host-setup-")
         root = pathlib.Path(tmp.name)
         fake_bin = root / "bin"
@@ -104,16 +121,22 @@ EOF
             self.assertIn('ATTRS{idProduct}=="1001"', rule.read_text())
             self.assertIn('ATTRS{serial}=="ABC123"', rule.read_text())
             self.assertIn('SYMLINK+="serialite-console"', rule.read_text())
-            self.assertEqual((root / "dev" / "serialite-console").resolve(), root / "dev" / "ttyACM7")
+            self.assertEqual(
+                (root / "dev" / "serialite-console").resolve(), root / "dev" / "ttyACM7"
+            )
 
-            service = root / "etc" / "systemd" / "system" / "serialite-serial-console.service"
+            service = (
+                root / "etc" / "systemd" / "system" / "serialite-serial-console.service"
+            )
             self.assertIn("agetty", service.read_text())
             self.assertIn("/dev/serialite-console", service.read_text())
             self.assertIn("serialite-console vt220", service.read_text())
             self.assertNotIn("/dev/serialite-console vt220", service.read_text())
 
             systemctl_log = (root / "state" / "systemctl.log").read_text()
-            self.assertIn("enable --now serialite-serial-console.service", systemctl_log)
+            self.assertIn(
+                "enable --now serialite-serial-console.service", systemctl_log
+            )
             self.assertNotIn("serial-getty@ttyACM7.service", systemctl_log)
 
     def test_generic_ttyacm_is_not_auto_selected(self) -> None:
@@ -150,7 +173,9 @@ EOF
             result = self.run_script(env=env)
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("anyone on that WiFi network gets this login prompt", result.stdout)
+            self.assertIn(
+                "anyone on that WiFi network gets this login prompt", result.stdout
+            )
 
     def test_uninstall_removes_managed_files_and_unit(self) -> None:
         tmp, env, root = self.make_fake_host()
@@ -160,61 +185,43 @@ EOF
             result = self.run_script("--uninstall", env=env)
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse((root / "etc" / "udev" / "rules.d" / "99-serialite.rules").exists())
-            self.assertFalse((root / "etc" / "systemd" / "system" / "serialite-serial-console.service").exists())
+            self.assertFalse(
+                (root / "etc" / "udev" / "rules.d" / "99-serialite.rules").exists()
+            )
+            self.assertFalse(
+                (
+                    root
+                    / "etc"
+                    / "systemd"
+                    / "system"
+                    / "serialite-serial-console.service"
+                ).exists()
+            )
             self.assertFalse((root / "dev" / "serialite-console").exists())
             systemctl_log = (root / "state" / "systemctl.log").read_text()
-            self.assertIn("disable --now serialite-serial-console.service", systemctl_log)
+            self.assertIn(
+                "disable --now serialite-serial-console.service", systemctl_log
+            )
 
-    def test_refuses_usb_identity_that_cannot_be_written_safely_to_udev_rule(self) -> None:
+    def test_refuses_usb_identity_that_cannot_be_written_safely_to_udev_rule(
+        self,
+    ) -> None:
         tmp, env, root = self.make_fake_host()
         with tmp:
-            fake_udevadm = root / "bin" / "udevadm"
-            fake_udevadm.write_text(
-                textwrap.dedent(
-                    """\
-                    #!/usr/bin/env sh
-                    if [ "$1" = "info" ]; then
-                        cat <<'EOF'
-ID_VENDOR_ID=303a
-ID_MODEL_ID=1001
-ID_SERIAL_SHORT=ABC123", RUN+="/bin/sh
-ID_MODEL=USB_JTAG_serial_debug_unit
-EOF
-                    fi
-                    exit 0
-                    """
-                )
-            )
-            fake_udevadm.chmod(0o755)
+            self.install_udevadm(root, 'ABC123", RUN+="/bin/sh')
 
             result = self.run_script(env=env)
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("unsafe USB identity", result.stderr)
-            self.assertFalse((root / "etc" / "udev" / "rules.d" / "99-serialite.rules").exists())
+            self.assertFalse(
+                (root / "etc" / "udev" / "rules.d" / "99-serialite.rules").exists()
+            )
 
     def test_fails_if_udev_does_not_create_stable_symlink(self) -> None:
         tmp, env, root = self.make_fake_host()
         with tmp:
-            fake_udevadm = root / "bin" / "udevadm"
-            fake_udevadm.write_text(
-                textwrap.dedent(
-                    """\
-                    #!/usr/bin/env sh
-                    if [ "$1" = "info" ]; then
-                        cat <<'EOF'
-ID_VENDOR_ID=303a
-ID_MODEL_ID=1001
-ID_SERIAL_SHORT=ABC123
-ID_MODEL=USB_JTAG_serial_debug_unit
-EOF
-                    fi
-                    exit 0
-                    """
-                )
-            )
-            fake_udevadm.chmod(0o755)
+            self.install_udevadm(root, "ABC123")
 
             result = self.run_script(env=env)
 

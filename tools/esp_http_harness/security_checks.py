@@ -28,12 +28,19 @@ failures: list[str] = []
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
-    print(f"{'ok  ' if condition else 'FAIL'} {name}{': ' + detail if detail and not condition else ''}")
+    print(
+        f"{'ok  ' if condition else 'FAIL'} {name}{': ' + detail if detail and not condition else ''}"
+    )
     if not condition:
         failures.append(name)
 
 
-def request(method: str, path: str, headers: dict[str, str] | None = None, body: bytes | None = None):
+def request(
+    method: str,
+    path: str,
+    headers: dict[str, str] | None = None,
+    body: bytes | None = None,
+):
     conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=5)
     conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
     headers = {"Host": HOST, **(headers or {})}
@@ -65,11 +72,15 @@ def new_session() -> tuple[str, str]:
     status, headers, body = request("POST", "/api/session", {"Origin": ORIGIN})
     if status != 200:
         raise SystemExit(f"cannot open a session: {status} {body!r}")
-    cookie = re.search(r"serialite_session=([0-9a-f]{32})", headers.get("Set-Cookie", "")).group(1)
+    cookie = re.search(
+        r"serialite_session=([0-9a-f]{32})", headers.get("Set-Cookie", "")
+    ).group(1)
     return cookie, json.loads(body)["csrf"]
 
 
-def authed(cookie: str, csrf: str | None = None, origin: str | None = ORIGIN) -> dict[str, str]:
+def authed(
+    cookie: str, csrf: str | None = None, origin: str | None = ORIGIN
+) -> dict[str, str]:
     headers = {"Cookie": f"serialite_session={cookie}"}
     if csrf is not None:
         headers["X-CSRF-Token"] = csrf
@@ -111,7 +122,7 @@ def websocket_first_frame(headers: dict[str, str]) -> bytes | None:
                 return None
             rest += chunk
         return rest[2 : 2 + length]
-    except (socket.timeout, ConnectionResetError):
+    except (TimeoutError, ConnectionResetError):
         return None
     finally:
         sock.close()
@@ -120,12 +131,25 @@ def websocket_first_frame(headers: dict[str, str]) -> bytes | None:
 # ---- static pages and headers ------------------------------------------------
 
 status, headers, _ = request("GET", "/")
-check("root redirects to the terminal", status == 303 and headers.get("Location") == "/terminal")
+check(
+    "root redirects to the terminal",
+    status == 303 and headers.get("Location") == "/terminal",
+)
 status, headers, body = request("GET", "/terminal")
 csp = headers.get("Content-Security-Policy", "")
-check("terminal page is public static HTML", status == 200 and b"<div id=\"terminal\"" in body)
-check("terminal page carries no secrets", b"csrf" not in body.lower() and "Set-Cookie" not in headers)
-check("CSP forbids inline scripts", "script-src 'self';" in csp and "frame-ancestors 'none'" in csp, csp)
+check(
+    "terminal page is public static HTML",
+    status == 200 and b'<div id="terminal"' in body,
+)
+check(
+    "terminal page carries no secrets",
+    b"csrf" not in body.lower() and "Set-Cookie" not in headers,
+)
+check(
+    "CSP forbids inline scripts",
+    "script-src 'self';" in csp and "frame-ancestors 'none'" in csp,
+    csp,
+)
 check("pages refuse framing", headers.get("X-Frame-Options") == "DENY")
 status, _, _ = request("GET", "/nope")
 check("unknown path is 404", status == 404)
@@ -136,7 +160,11 @@ check("wrong method is 405", status == 405)
 
 status, _, _ = request("GET", "/terminal", {"Host": f"evil.example:{PORT}"})
 check("foreign Host is refused", status == 421)
-status, _, _ = request("POST", "/api/session", {"Host": f"evil.example:{PORT}", "Origin": f"http://evil.example:{PORT}"})
+status, _, _ = request(
+    "POST",
+    "/api/session",
+    {"Host": f"evil.example:{PORT}", "Origin": f"http://evil.example:{PORT}"},
+)
 check("rebound origin cannot open a session", status == 421)
 
 # ---- session creation ------------------------------------------------------------
@@ -147,52 +175,102 @@ status, _, _ = request("POST", "/api/session", {"Origin": "http://evil.example"}
 check("session refuses foreign Origin", status == 403)
 status, headers, body = request("POST", "/api/session", {"Origin": ORIGIN})
 cookie_header = headers.get("Set-Cookie", "")
-check("same-origin POST opens a session", status == 200 and "HttpOnly" in cookie_header and "SameSite=Strict" in cookie_header)
-check("session response carries a CSRF token", status == 200 and re.fullmatch(r"[0-9a-f]{32}", json.loads(body)["csrf"]) is not None)
+check(
+    "same-origin POST opens a session",
+    status == 200
+    and "HttpOnly" in cookie_header
+    and "SameSite=Strict" in cookie_header,
+)
+check(
+    "session response carries a CSRF token",
+    status == 200
+    and re.fullmatch(r"[0-9a-f]{32}", json.loads(body)["csrf"]) is not None,
+)
 
 cookie, csrf = new_session()
 status, _, _ = request("GET", "/api/status")
 check("API needs a session", status == 401)
 status, _, body = request("GET", "/api/status", authed(cookie, origin=None))
-check("API answers with a session", status == 200 and json.loads(body)["locked"] is False)
+check(
+    "API answers with a session", status == 200 and json.loads(body)["locked"] is False
+)
 
 # ---- the fail-open regression: rejected requests never reach handlers -------------
 
 upload = bytes([0xE9]) + bytes(4095)
 before = marker_count("ota_update_begin")
-status, _, _ = request("POST", "/api/ota", {"Origin": "http://evil.example", "Content-Type": "application/octet-stream"}, upload)
+status, _, _ = request(
+    "POST",
+    "/api/ota",
+    {"Origin": "http://evil.example", "Content-Type": "application/octet-stream"},
+    upload,
+)
 check("OTA without session or CSRF is refused", status in (401, 403))
 status, _, _ = request("POST", "/api/ota", authed(cookie), upload)
 check("OTA without CSRF token is refused", status == 403)
 status, _, _ = request("POST", "/api/ota", authed(cookie, "0" * 32), upload)
 check("OTA with a wrong CSRF token is refused", status == 403)
-status, _, _ = request("POST", "/api/ota", authed(cookie, csrf, origin="http://evil.example"), upload)
+status, _, _ = request(
+    "POST", "/api/ota", authed(cookie, csrf, origin="http://evil.example"), upload
+)
 check("OTA from a foreign Origin is refused", status == 403)
-status, _, _ = request("POST", "/api/ota", {**authed(cookie, csrf), "Host": f"evil.example:{PORT}"}, upload)
+status, _, _ = request(
+    "POST", "/api/ota", {**authed(cookie, csrf), "Host": f"evil.example:{PORT}"}, upload
+)
 check("OTA through a foreign Host is refused", status == 421)
 check("no rejected OTA reached the updater", marker_count("ota_update_begin") == before)
 
 status, _, _ = request("POST", "/api/ota", authed(cookie, csrf), upload)
-check("authorised OTA reaches the updater", marker_count("ota_update_begin") == before + 1, f"status {status}")
+check(
+    "authorised OTA reaches the updater",
+    marker_count("ota_update_begin") == before + 1,
+    f"status {status}",
+)
 
 before = marker_count("import_config")
-status, _, _ = request("POST", "/api/config", authed(cookie, csrf), b"{" + b" " * 600 + b"}")
+status, _, _ = request(
+    "POST", "/api/config", authed(cookie, csrf), b"{" + b" " * 600 + b"}"
+)
 check("oversized config body is refused", status == 413)
-check("oversized body never reached the importer", marker_count("import_config") == before)
-status, _, _ = request("POST", "/api/config", authed(cookie, csrf), b'{"schema":"harness"}')
-check("valid config import is accepted", status == 200 and marker_count("import_config") == before + 1)
+check(
+    "oversized body never reached the importer", marker_count("import_config") == before
+)
+status, _, _ = request(
+    "POST", "/api/config", authed(cookie, csrf), b'{"schema":"harness"}'
+)
+check(
+    "valid config import is accepted",
+    status == 200 and marker_count("import_config") == before + 1,
+)
 
 before = marker_count("rotate_credentials")
 status, _, _ = request("POST", "/api/credentials/rotate", authed(cookie))
-check("rotation without CSRF never reaches the callback", status == 403 and marker_count("rotate_credentials") == before)
+check(
+    "rotation without CSRF never reaches the callback",
+    status == 403 and marker_count("rotate_credentials") == before,
+)
 
 # ---- WebSocket ----------------------------------------------------------------------
 
-frame = websocket_first_frame({"Cookie": f"serialite_session={cookie}", "Origin": ORIGIN})
-check("terminal WebSocket streams scrollback", frame is not None and b"harness login" in frame, repr(frame))
-check("WebSocket from a foreign Origin is dropped",
-      websocket_first_frame({"Cookie": f"serialite_session={cookie}", "Origin": "http://evil.example"}) is None)
-check("WebSocket without a session is dropped", websocket_first_frame({"Origin": ORIGIN}) is None)
+frame = websocket_first_frame(
+    {"Cookie": f"serialite_session={cookie}", "Origin": ORIGIN}
+)
+check(
+    "terminal WebSocket streams scrollback",
+    frame is not None and b"harness login" in frame,
+    repr(frame),
+)
+check(
+    "WebSocket from a foreign Origin is dropped",
+    websocket_first_frame(
+        {"Cookie": f"serialite_session={cookie}", "Origin": "http://evil.example"}
+    )
+    is None,
+)
+check(
+    "WebSocket without a session is dropped",
+    websocket_first_frame({"Origin": ORIGIN}) is None,
+)
 
 # ---- one operator at a time ---------------------------------------------------------
 

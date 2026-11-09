@@ -32,7 +32,11 @@ class PackageReleaseTest(unittest.TestCase):
         (self.build / "ota_data_initial.bin").write_bytes(b"ota")
         (self.build / "serialite.bin").write_bytes(b"app")
         (self.build / "flash_args").write_text(FLASH_ARGS)
-        self.env = {**os.environ, "SERIALITE_BUILD_DIR": str(self.build), "SERIALITE_DIST_DIR": str(self.dist)}
+        self.env = {
+            **os.environ,
+            "SERIALITE_BUILD_DIR": str(self.build),
+            "SERIALITE_DIST_DIR": str(self.dist),
+        }
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -40,7 +44,11 @@ class PackageReleaseTest(unittest.TestCase):
     def package(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [str(SCRIPT), "--no-build", "--allow-dirty", *args],
-            cwd=REPO_ROOT, env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            cwd=REPO_ROOT,
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
         )
 
     def test_bundle_has_flattened_flash_args_manifest_and_checksums(self) -> None:
@@ -56,7 +64,13 @@ class PackageReleaseTest(unittest.TestCase):
         self.assertIn("Profile: lab", manifest)
         self.assertIn("0xf000 ota_data_initial.bin", manifest)
         self.assertNotIn("0xd000", manifest)
-        for name in ("serialite.bin", "flash_args", "LICENSE", "THIRD_PARTY_NOTICES.md", "INSTALL.md"):
+        for name in (
+            "serialite.bin",
+            "flash_args",
+            "LICENSE",
+            "THIRD_PARTY_NOTICES.md",
+            "INSTALL.md",
+        ):
             self.assertTrue((bundle / name).is_file(), name)
         sums = (bundle / "SHA256SUMS").read_text()
         self.assertIn("serialite.bin", sums)
@@ -66,7 +80,10 @@ class PackageReleaseTest(unittest.TestCase):
         self.assertEqual(self.package("--version", "vtest").returncode, 0)
         tarball = self.dist / "serialite-vtest.tar.gz"
         expected = hashlib.sha256(tarball.read_bytes()).hexdigest()
-        self.assertEqual((self.dist / "serialite-vtest.tar.gz.sha256").read_text(), f"{expected}  serialite-vtest.tar.gz\n")
+        self.assertEqual(
+            (self.dist / "serialite-vtest.tar.gz.sha256").read_text(),
+            f"{expected}  serialite-vtest.tar.gz\n",
+        )
         self.assertTrue((self.dist / "flash-latest-firmware.sh").is_file())
         self.assertTrue((self.dist / "setup-linux-serial-console.sh").is_file())
 
@@ -80,7 +97,9 @@ class PackageReleaseTest(unittest.TestCase):
         result = self.package("--version", "../bad")
         self.assertEqual(result.returncode, 2)
         self.assertIn("invalid release version", result.stderr)
-        self.assertEqual(self.package("--version", "vtest", "--profile", "debug").returncode, 2)
+        self.assertEqual(
+            self.package("--version", "vtest", "--profile", "debug").returncode, 2
+        )
 
 
 if __name__ == "__main__":
